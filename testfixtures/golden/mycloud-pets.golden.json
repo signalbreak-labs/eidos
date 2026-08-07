@@ -1,0 +1,138 @@
+[
+  {
+    "path": ".github/workflows/release.yml",
+    "reason": "GitHub Actions release workflow"
+  },
+  {
+    "path": ".goreleaser.yml",
+    "reason": "GoReleaser release configuration"
+  },
+  {
+    "path": "GNUmakefile",
+    "reason": "build and test automation"
+  },
+  {
+    "path": "README.md",
+    "reason": "provider overview and usage guide"
+  },
+  {
+    "path": "docs/data-sources/list_pets.md",
+    "reason": "documentation for data source list_pets"
+  },
+  {
+    "path": "docs/index.md",
+    "reason": "provider overview and authentication guide"
+  },
+  {
+    "path": "docs/list-resources/list_pets.md",
+    "reason": "documentation for list resource list_pets"
+  },
+  {
+    "path": "docs/resources/pet.md",
+    "reason": "documentation for resource pet"
+  },
+  {
+    "path": "examples/data-sources/list_pets/data-source.tf",
+    "reason": "example for data source list_pets"
+  },
+  {
+    "path": "examples/resources/pet/resource.tf",
+    "reason": "example for resource pet"
+  },
+  {
+    "path": "generator.yaml",
+    "reason": "generated generator configuration"
+  },
+  {
+    "path": "go.mod",
+    "reason": "Go module definition"
+  },
+  {
+    "path": "internal/client/auth.go",
+    "reason": "authentication middleware"
+  },
+  {
+    "path": "internal/client/client.go",
+    "reason": "generated HTTP client"
+  },
+  {
+    "path": "internal/client/errors.go",
+    "reason": "typed API error helpers"
+  },
+  {
+    "path": "internal/client/logging.go",
+    "reason": "request/response trace logging"
+  },
+  {
+    "path": "internal/client/models.go",
+    "reason": "request/response model structs"
+  },
+  {
+    "path": "internal/client/pagination.go",
+    "reason": "pagination helpers"
+  },
+  {
+    "path": "internal/client/retry.go",
+    "reason": "retry logic with exponential backoff"
+  },
+  {
+    "path": "internal/protocol/value_mappers.go",
+    "reason": "tftypes.Value to Go struct converters"
+  },
+  {
+    "path": "internal/protocol/value_mappers_test.go",
+    "reason": "value mapper round-trip tests"
+  },
+  {
+    "path": "internal/provider/data_source_list_pets.go",
+    "reason": "data source mycloud_pets_list_pets"
+  },
+  {
+    "path": "internal/provider/data_source_list_pets_test.go",
+    "reason": "unit tests for data source list_pets"
+  },
+  {
+    "path": "internal/provider/json_convert.go",
+    "reason": "JSON/model conversion helpers for wired CRUD bodies"
+  },
+  {
+    "path": "internal/provider/list_list_pets.go",
+    "reason": "list resource mycloud_pets_list_pets"
+  },
+  {
+    "path": "internal/provider/model_pet.go",
+    "reason": "API model for resource pet"
+  },
+  {
+    "path": "internal/provider/provider.go",
+    "reason": "provider schema and registration"
+  },
+  {
+    "path": "internal/provider/provider_test.go",
+    "reason": "provider-level unit tests"
+  },
+  {
+    "path": "internal/provider/resource_pet.go",
+    "reason": "resource mycloud_pets_pet"
+  },
+  {
+    "path": "internal/provider/resource_pet_acceptance_test.go",
+    "reason": "acceptance tests for resource pet"
+  },
+  {
+    "path": "internal/provider/resource_pet_test.go",
+    "reason": "unit tests for resource pet"
+  },
+  {
+    "path": "internal/provider/validators.go",
+    "reason": "custom schema validators"
+  },
+  {
+    "path": "main.go",
+    "reason": "provider server entrypoint"
+  },
+  {
+    "path": "terraform-registry-manifest.json",
+    "reason": "Terraform Registry manifest"
+  }
+]

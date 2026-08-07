@@ -1,0 +1,114 @@
+openapi: "3.0.1"
+info:
+  title: Mycloud Data
+  version: "1.0.0"
+  description: Sample API for the fictional MyCloud provider, exposing data sets, fields, and record search.
+servers:
+  - url: https://api.mycloud.example/v1
+paths:
+  /:
+    get:
+      operationId: listDataSets
+      summary: List available data sets
+      responses:
+        "200":
+          description: Returns a list of data sets
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DataSetList"
+  /{dataset}/{version}/fields:
+    get:
+      operationId: listFields
+      summary: List fields for a data set version
+      parameters:
+        - name: dataset
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: version
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Returns a list of fields
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DataSetFields"
+  /{dataset}/{version}/records:
+    post:
+      operationId: searchRecords
+      summary: Search records in a data set
+      parameters:
+        - name: dataset
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: version
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SearchRequest"
+      responses:
+        "200":
+          description: Returns search results
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SearchResponse"
+components:
+  schemas:
+    DataSetList:
+      type: object
+      properties:
+        total:
+          type: integer
+        apis:
+          type: array
+          items:
+            type: object
+            properties:
+              apiKey:
+                type: string
+              apiVersionNumber:
+                type: string
+              apiUrl:
+                type: string
+              apiDocumentationUrl:
+                type: string
+    DataSetFields:
+      type: object
+      properties:
+        fields:
+          type: array
+          items:
+            type: string
+    SearchRequest:
+      type: object
+      properties:
+        criteria:
+          type: string
+        start:
+          type: integer
+        rows:
+          type: integer
+    SearchResponse:
+      type: object
+      properties:
+        count:
+          type: integer
+        results:
+          type: array
+          items:
+            type: object

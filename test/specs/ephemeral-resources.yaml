@@ -1,0 +1,61 @@
+openapi: "3.0.3"
+info:
+  title: Token API
+  version: "1.0.0"
+  description: Reference spec exercising ephemeral-resource inference and wiring: the credentials collection POST is an ephemeral Open, and the sibling /renew and /close lifecycle operations become its Renew/Close mappings (PROJECT_DESIGN §23).
+servers:
+  - url: https://token.example.com
+security:
+  - bearerAuth: []
+paths:
+  /credentials:
+    post:
+      operationId: issueCredentials
+      summary: Issue temporary credentials
+      responses:
+        "200":
+          description: Credentials
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Credentials"
+  /credentials/renew:
+    post:
+      operationId: renewCredentials
+      summary: Renew temporary credentials
+      responses:
+        "200":
+          description: Credentials
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Credentials"
+  /credentials/close:
+    delete:
+      operationId: closeCredentials
+      summary: Close temporary credentials
+      responses:
+        "204":
+          description: Closed
+components:
+  schemas:
+    Credentials:
+      type: object
+      required:
+        - access_key
+        - secret_key
+      properties:
+        access_key:
+          type: string
+        secret_key:
+          type: string
+          format: password
+        session_token:
+          type: string
+        expires_at:
+          type: string
+          format: date-time
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer

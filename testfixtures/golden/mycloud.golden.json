@@ -1,0 +1,722 @@
+[
+  {
+    "path": ".github/workflows/release.yml",
+    "reason": "GitHub Actions release workflow"
+  },
+  {
+    "path": ".goreleaser.yml",
+    "reason": "GoReleaser release configuration"
+  },
+  {
+    "path": "GNUmakefile",
+    "reason": "build and test automation"
+  },
+  {
+    "path": "README.md",
+    "reason": "provider overview and usage guide"
+  },
+  {
+    "path": "docs/data-sources/get_branch.md",
+    "reason": "documentation for data source get_branch"
+  },
+  {
+    "path": "docs/data-sources/get_commit.md",
+    "reason": "documentation for data source get_commit"
+  },
+  {
+    "path": "docs/data-sources/get_member.md",
+    "reason": "documentation for data source get_member"
+  },
+  {
+    "path": "docs/data-sources/get_pull_request.md",
+    "reason": "documentation for data source get_pull_request"
+  },
+  {
+    "path": "docs/data-sources/get_task.md",
+    "reason": "documentation for data source get_task"
+  },
+  {
+    "path": "docs/data-sources/list_branches.md",
+    "reason": "documentation for data source list_branches"
+  },
+  {
+    "path": "docs/data-sources/list_commits.md",
+    "reason": "documentation for data source list_commits"
+  },
+  {
+    "path": "docs/data-sources/list_configs.md",
+    "reason": "documentation for data source list_configs"
+  },
+  {
+    "path": "docs/data-sources/list_instances.md",
+    "reason": "documentation for data source list_instances"
+  },
+  {
+    "path": "docs/data-sources/list_members.md",
+    "reason": "documentation for data source list_members"
+  },
+  {
+    "path": "docs/data-sources/list_networks.md",
+    "reason": "documentation for data source list_networks"
+  },
+  {
+    "path": "docs/data-sources/list_projects_for_organization.md",
+    "reason": "documentation for data source list_projects_for_organization"
+  },
+  {
+    "path": "docs/data-sources/list_pull_requests.md",
+    "reason": "documentation for data source list_pull_requests"
+  },
+  {
+    "path": "docs/data-sources/list_secrets.md",
+    "reason": "documentation for data source list_secrets"
+  },
+  {
+    "path": "docs/data-sources/list_stacks.md",
+    "reason": "documentation for data source list_stacks"
+  },
+  {
+    "path": "docs/data-sources/list_tasks.md",
+    "reason": "documentation for data source list_tasks"
+  },
+  {
+    "path": "docs/data-sources/list_workspaces.md",
+    "reason": "documentation for data source list_workspaces"
+  },
+  {
+    "path": "docs/index.md",
+    "reason": "provider overview and authentication guide"
+  },
+  {
+    "path": "docs/list-resources/list_branches.md",
+    "reason": "documentation for list resource list_branches"
+  },
+  {
+    "path": "docs/list-resources/list_commits.md",
+    "reason": "documentation for list resource list_commits"
+  },
+  {
+    "path": "docs/list-resources/list_configs.md",
+    "reason": "documentation for list resource list_configs"
+  },
+  {
+    "path": "docs/list-resources/list_instances.md",
+    "reason": "documentation for list resource list_instances"
+  },
+  {
+    "path": "docs/list-resources/list_members.md",
+    "reason": "documentation for list resource list_members"
+  },
+  {
+    "path": "docs/list-resources/list_networks.md",
+    "reason": "documentation for list resource list_networks"
+  },
+  {
+    "path": "docs/list-resources/list_projects_for_organization.md",
+    "reason": "documentation for list resource list_projects_for_organization"
+  },
+  {
+    "path": "docs/list-resources/list_pull_requests.md",
+    "reason": "documentation for list resource list_pull_requests"
+  },
+  {
+    "path": "docs/list-resources/list_secrets.md",
+    "reason": "documentation for list resource list_secrets"
+  },
+  {
+    "path": "docs/list-resources/list_stacks.md",
+    "reason": "documentation for list resource list_stacks"
+  },
+  {
+    "path": "docs/list-resources/list_tasks.md",
+    "reason": "documentation for list resource list_tasks"
+  },
+  {
+    "path": "docs/list-resources/list_workspaces.md",
+    "reason": "documentation for list resource list_workspaces"
+  },
+  {
+    "path": "docs/resources/config.md",
+    "reason": "documentation for resource config"
+  },
+  {
+    "path": "docs/resources/create_pull_request.md",
+    "reason": "documentation for resource create_pull_request"
+  },
+  {
+    "path": "docs/resources/create_task.md",
+    "reason": "documentation for resource create_task"
+  },
+  {
+    "path": "docs/resources/instance.md",
+    "reason": "documentation for resource instance"
+  },
+  {
+    "path": "docs/resources/network.md",
+    "reason": "documentation for resource network"
+  },
+  {
+    "path": "docs/resources/project.md",
+    "reason": "documentation for resource project"
+  },
+  {
+    "path": "docs/resources/secret.md",
+    "reason": "documentation for resource secret"
+  },
+  {
+    "path": "docs/resources/stack.md",
+    "reason": "documentation for resource stack"
+  },
+  {
+    "path": "docs/resources/update_pull_request.md",
+    "reason": "documentation for resource update_pull_request"
+  },
+  {
+    "path": "docs/resources/update_task.md",
+    "reason": "documentation for resource update_task"
+  },
+  {
+    "path": "docs/resources/workspace.md",
+    "reason": "documentation for resource workspace"
+  },
+  {
+    "path": "examples/data-sources/get_branch/data-source.tf",
+    "reason": "example for data source get_branch"
+  },
+  {
+    "path": "examples/data-sources/get_commit/data-source.tf",
+    "reason": "example for data source get_commit"
+  },
+  {
+    "path": "examples/data-sources/get_member/data-source.tf",
+    "reason": "example for data source get_member"
+  },
+  {
+    "path": "examples/data-sources/get_pull_request/data-source.tf",
+    "reason": "example for data source get_pull_request"
+  },
+  {
+    "path": "examples/data-sources/get_task/data-source.tf",
+    "reason": "example for data source get_task"
+  },
+  {
+    "path": "examples/data-sources/list_branches/data-source.tf",
+    "reason": "example for data source list_branches"
+  },
+  {
+    "path": "examples/data-sources/list_commits/data-source.tf",
+    "reason": "example for data source list_commits"
+  },
+  {
+    "path": "examples/data-sources/list_configs/data-source.tf",
+    "reason": "example for data source list_configs"
+  },
+  {
+    "path": "examples/data-sources/list_instances/data-source.tf",
+    "reason": "example for data source list_instances"
+  },
+  {
+    "path": "examples/data-sources/list_members/data-source.tf",
+    "reason": "example for data source list_members"
+  },
+  {
+    "path": "examples/data-sources/list_networks/data-source.tf",
+    "reason": "example for data source list_networks"
+  },
+  {
+    "path": "examples/data-sources/list_projects_for_organization/data-source.tf",
+    "reason": "example for data source list_projects_for_organization"
+  },
+  {
+    "path": "examples/data-sources/list_pull_requests/data-source.tf",
+    "reason": "example for data source list_pull_requests"
+  },
+  {
+    "path": "examples/data-sources/list_secrets/data-source.tf",
+    "reason": "example for data source list_secrets"
+  },
+  {
+    "path": "examples/data-sources/list_stacks/data-source.tf",
+    "reason": "example for data source list_stacks"
+  },
+  {
+    "path": "examples/data-sources/list_tasks/data-source.tf",
+    "reason": "example for data source list_tasks"
+  },
+  {
+    "path": "examples/data-sources/list_workspaces/data-source.tf",
+    "reason": "example for data source list_workspaces"
+  },
+  {
+    "path": "examples/resources/config/resource.tf",
+    "reason": "example for resource config"
+  },
+  {
+    "path": "examples/resources/create_pull_request/resource.tf",
+    "reason": "example for resource create_pull_request"
+  },
+  {
+    "path": "examples/resources/create_task/resource.tf",
+    "reason": "example for resource create_task"
+  },
+  {
+    "path": "examples/resources/instance/resource.tf",
+    "reason": "example for resource instance"
+  },
+  {
+    "path": "examples/resources/network/resource.tf",
+    "reason": "example for resource network"
+  },
+  {
+    "path": "examples/resources/project/resource.tf",
+    "reason": "example for resource project"
+  },
+  {
+    "path": "examples/resources/secret/resource.tf",
+    "reason": "example for resource secret"
+  },
+  {
+    "path": "examples/resources/stack/resource.tf",
+    "reason": "example for resource stack"
+  },
+  {
+    "path": "examples/resources/update_pull_request/resource.tf",
+    "reason": "example for resource update_pull_request"
+  },
+  {
+    "path": "examples/resources/update_task/resource.tf",
+    "reason": "example for resource update_task"
+  },
+  {
+    "path": "examples/resources/workspace/resource.tf",
+    "reason": "example for resource workspace"
+  },
+  {
+    "path": "generator.yaml",
+    "reason": "generated generator configuration"
+  },
+  {
+    "path": "go.mod",
+    "reason": "Go module definition"
+  },
+  {
+    "path": "internal/client/auth.go",
+    "reason": "authentication middleware"
+  },
+  {
+    "path": "internal/client/client.go",
+    "reason": "generated HTTP client"
+  },
+  {
+    "path": "internal/client/errors.go",
+    "reason": "typed API error helpers"
+  },
+  {
+    "path": "internal/client/logging.go",
+    "reason": "request/response trace logging"
+  },
+  {
+    "path": "internal/client/models.go",
+    "reason": "request/response model structs"
+  },
+  {
+    "path": "internal/client/pagination.go",
+    "reason": "pagination helpers"
+  },
+  {
+    "path": "internal/client/retry.go",
+    "reason": "retry logic with exponential backoff"
+  },
+  {
+    "path": "internal/protocol/value_mappers.go",
+    "reason": "tftypes.Value to Go struct converters"
+  },
+  {
+    "path": "internal/protocol/value_mappers_test.go",
+    "reason": "value mapper round-trip tests"
+  },
+  {
+    "path": "internal/provider/data_source_get_branch.go",
+    "reason": "data source mycloud_get_branch"
+  },
+  {
+    "path": "internal/provider/data_source_get_branch_test.go",
+    "reason": "unit tests for data source get_branch"
+  },
+  {
+    "path": "internal/provider/data_source_get_commit.go",
+    "reason": "data source mycloud_get_commit"
+  },
+  {
+    "path": "internal/provider/data_source_get_commit_test.go",
+    "reason": "unit tests for data source get_commit"
+  },
+  {
+    "path": "internal/provider/data_source_get_member.go",
+    "reason": "data source mycloud_get_member"
+  },
+  {
+    "path": "internal/provider/data_source_get_member_test.go",
+    "reason": "unit tests for data source get_member"
+  },
+  {
+    "path": "internal/provider/data_source_get_pull_request.go",
+    "reason": "data source mycloud_get_pull_request"
+  },
+  {
+    "path": "internal/provider/data_source_get_pull_request_test.go",
+    "reason": "unit tests for data source get_pull_request"
+  },
+  {
+    "path": "internal/provider/data_source_get_task.go",
+    "reason": "data source mycloud_get_task"
+  },
+  {
+    "path": "internal/provider/data_source_get_task_test.go",
+    "reason": "unit tests for data source get_task"
+  },
+  {
+    "path": "internal/provider/data_source_list_branches.go",
+    "reason": "data source mycloud_list_branches"
+  },
+  {
+    "path": "internal/provider/data_source_list_branches_test.go",
+    "reason": "unit tests for data source list_branches"
+  },
+  {
+    "path": "internal/provider/data_source_list_commits.go",
+    "reason": "data source mycloud_list_commits"
+  },
+  {
+    "path": "internal/provider/data_source_list_commits_test.go",
+    "reason": "unit tests for data source list_commits"
+  },
+  {
+    "path": "internal/provider/data_source_list_configs.go",
+    "reason": "data source mycloud_list_configs"
+  },
+  {
+    "path": "internal/provider/data_source_list_configs_test.go",
+    "reason": "unit tests for data source list_configs"
+  },
+  {
+    "path": "internal/provider/data_source_list_instances.go",
+    "reason": "data source mycloud_list_instances"
+  },
+  {
+    "path": "internal/provider/data_source_list_instances_test.go",
+    "reason": "unit tests for data source list_instances"
+  },
+  {
+    "path": "internal/provider/data_source_list_members.go",
+    "reason": "data source mycloud_list_members"
+  },
+  {
+    "path": "internal/provider/data_source_list_members_test.go",
+    "reason": "unit tests for data source list_members"
+  },
+  {
+    "path": "internal/provider/data_source_list_networks.go",
+    "reason": "data source mycloud_list_networks"
+  },
+  {
+    "path": "internal/provider/data_source_list_networks_test.go",
+    "reason": "unit tests for data source list_networks"
+  },
+  {
+    "path": "internal/provider/data_source_list_projects_for_organization.go",
+    "reason": "data source mycloud_list_projects_for_organization"
+  },
+  {
+    "path": "internal/provider/data_source_list_projects_for_organization_test.go",
+    "reason": "unit tests for data source list_projects_for_organization"
+  },
+  {
+    "path": "internal/provider/data_source_list_pull_requests.go",
+    "reason": "data source mycloud_list_pull_requests"
+  },
+  {
+    "path": "internal/provider/data_source_list_pull_requests_test.go",
+    "reason": "unit tests for data source list_pull_requests"
+  },
+  {
+    "path": "internal/provider/data_source_list_secrets.go",
+    "reason": "data source mycloud_list_secrets"
+  },
+  {
+    "path": "internal/provider/data_source_list_secrets_test.go",
+    "reason": "unit tests for data source list_secrets"
+  },
+  {
+    "path": "internal/provider/data_source_list_stacks.go",
+    "reason": "data source mycloud_list_stacks"
+  },
+  {
+    "path": "internal/provider/data_source_list_stacks_test.go",
+    "reason": "unit tests for data source list_stacks"
+  },
+  {
+    "path": "internal/provider/data_source_list_tasks.go",
+    "reason": "data source mycloud_list_tasks"
+  },
+  {
+    "path": "internal/provider/data_source_list_tasks_test.go",
+    "reason": "unit tests for data source list_tasks"
+  },
+  {
+    "path": "internal/provider/data_source_list_workspaces.go",
+    "reason": "data source mycloud_list_workspaces"
+  },
+  {
+    "path": "internal/provider/data_source_list_workspaces_test.go",
+    "reason": "unit tests for data source list_workspaces"
+  },
+  {
+    "path": "internal/provider/json_convert.go",
+    "reason": "JSON/model conversion helpers for wired CRUD bodies"
+  },
+  {
+    "path": "internal/provider/list_list_branches.go",
+    "reason": "list resource mycloud_list_branches"
+  },
+  {
+    "path": "internal/provider/list_list_commits.go",
+    "reason": "list resource mycloud_list_commits"
+  },
+  {
+    "path": "internal/provider/list_list_configs.go",
+    "reason": "list resource mycloud_list_configs"
+  },
+  {
+    "path": "internal/provider/list_list_instances.go",
+    "reason": "list resource mycloud_list_instances"
+  },
+  {
+    "path": "internal/provider/list_list_members.go",
+    "reason": "list resource mycloud_list_members"
+  },
+  {
+    "path": "internal/provider/list_list_networks.go",
+    "reason": "list resource mycloud_list_networks"
+  },
+  {
+    "path": "internal/provider/list_list_projects_for_organization.go",
+    "reason": "list resource mycloud_list_projects_for_organization"
+  },
+  {
+    "path": "internal/provider/list_list_pull_requests.go",
+    "reason": "list resource mycloud_list_pull_requests"
+  },
+  {
+    "path": "internal/provider/list_list_secrets.go",
+    "reason": "list resource mycloud_list_secrets"
+  },
+  {
+    "path": "internal/provider/list_list_stacks.go",
+    "reason": "list resource mycloud_list_stacks"
+  },
+  {
+    "path": "internal/provider/list_list_tasks.go",
+    "reason": "list resource mycloud_list_tasks"
+  },
+  {
+    "path": "internal/provider/list_list_workspaces.go",
+    "reason": "list resource mycloud_list_workspaces"
+  },
+  {
+    "path": "internal/provider/model_config.go",
+    "reason": "API model for resource config"
+  },
+  {
+    "path": "internal/provider/model_create_pull_request.go",
+    "reason": "API model for resource create_pull_request"
+  },
+  {
+    "path": "internal/provider/model_create_task.go",
+    "reason": "API model for resource create_task"
+  },
+  {
+    "path": "internal/provider/model_instance.go",
+    "reason": "API model for resource instance"
+  },
+  {
+    "path": "internal/provider/model_network.go",
+    "reason": "API model for resource network"
+  },
+  {
+    "path": "internal/provider/model_project.go",
+    "reason": "API model for resource project"
+  },
+  {
+    "path": "internal/provider/model_secret.go",
+    "reason": "API model for resource secret"
+  },
+  {
+    "path": "internal/provider/model_stack.go",
+    "reason": "API model for resource stack"
+  },
+  {
+    "path": "internal/provider/model_update_pull_request.go",
+    "reason": "API model for resource update_pull_request"
+  },
+  {
+    "path": "internal/provider/model_update_task.go",
+    "reason": "API model for resource update_task"
+  },
+  {
+    "path": "internal/provider/model_workspace.go",
+    "reason": "API model for resource workspace"
+  },
+  {
+    "path": "internal/provider/provider.go",
+    "reason": "provider schema and registration"
+  },
+  {
+    "path": "internal/provider/provider_test.go",
+    "reason": "provider-level unit tests"
+  },
+  {
+    "path": "internal/provider/resource_config.go",
+    "reason": "resource mycloud_config"
+  },
+  {
+    "path": "internal/provider/resource_config_acceptance_test.go",
+    "reason": "acceptance tests for resource config"
+  },
+  {
+    "path": "internal/provider/resource_config_test.go",
+    "reason": "unit tests for resource config"
+  },
+  {
+    "path": "internal/provider/resource_create_pull_request.go",
+    "reason": "resource mycloud_create_pull_request"
+  },
+  {
+    "path": "internal/provider/resource_create_pull_request_acceptance_test.go",
+    "reason": "acceptance tests for resource create_pull_request"
+  },
+  {
+    "path": "internal/provider/resource_create_pull_request_test.go",
+    "reason": "unit tests for resource create_pull_request"
+  },
+  {
+    "path": "internal/provider/resource_create_task.go",
+    "reason": "resource mycloud_create_task"
+  },
+  {
+    "path": "internal/provider/resource_create_task_acceptance_test.go",
+    "reason": "acceptance tests for resource create_task"
+  },
+  {
+    "path": "internal/provider/resource_create_task_test.go",
+    "reason": "unit tests for resource create_task"
+  },
+  {
+    "path": "internal/provider/resource_instance.go",
+    "reason": "resource mycloud_instance"
+  },
+  {
+    "path": "internal/provider/resource_instance_acceptance_test.go",
+    "reason": "acceptance tests for resource instance"
+  },
+  {
+    "path": "internal/provider/resource_instance_test.go",
+    "reason": "unit tests for resource instance"
+  },
+  {
+    "path": "internal/provider/resource_network.go",
+    "reason": "resource mycloud_network"
+  },
+  {
+    "path": "internal/provider/resource_network_acceptance_test.go",
+    "reason": "acceptance tests for resource network"
+  },
+  {
+    "path": "internal/provider/resource_network_test.go",
+    "reason": "unit tests for resource network"
+  },
+  {
+    "path": "internal/provider/resource_project.go",
+    "reason": "resource mycloud_project"
+  },
+  {
+    "path": "internal/provider/resource_project_acceptance_test.go",
+    "reason": "acceptance tests for resource project"
+  },
+  {
+    "path": "internal/provider/resource_project_test.go",
+    "reason": "unit tests for resource project"
+  },
+  {
+    "path": "internal/provider/resource_secret.go",
+    "reason": "resource mycloud_secret"
+  },
+  {
+    "path": "internal/provider/resource_secret_acceptance_test.go",
+    "reason": "acceptance tests for resource secret"
+  },
+  {
+    "path": "internal/provider/resource_secret_test.go",
+    "reason": "unit tests for resource secret"
+  },
+  {
+    "path": "internal/provider/resource_stack.go",
+    "reason": "resource mycloud_stack"
+  },
+  {
+    "path": "internal/provider/resource_stack_acceptance_test.go",
+    "reason": "acceptance tests for resource stack"
+  },
+  {
+    "path": "internal/provider/resource_stack_test.go",
+    "reason": "unit tests for resource stack"
+  },
+  {
+    "path": "internal/provider/resource_update_pull_request.go",
+    "reason": "resource mycloud_update_pull_request"
+  },
+  {
+    "path": "internal/provider/resource_update_pull_request_acceptance_test.go",
+    "reason": "acceptance tests for resource update_pull_request"
+  },
+  {
+    "path": "internal/provider/resource_update_pull_request_test.go",
+    "reason": "unit tests for resource update_pull_request"
+  },
+  {
+    "path": "internal/provider/resource_update_task.go",
+    "reason": "resource mycloud_update_task"
+  },
+  {
+    "path": "internal/provider/resource_update_task_acceptance_test.go",
+    "reason": "acceptance tests for resource update_task"
+  },
+  {
+    "path": "internal/provider/resource_update_task_test.go",
+    "reason": "unit tests for resource update_task"
+  },
+  {
+    "path": "internal/provider/resource_workspace.go",
+    "reason": "resource mycloud_workspace"
+  },
+  {
+    "path": "internal/provider/resource_workspace_acceptance_test.go",
+    "reason": "acceptance tests for resource workspace"
+  },
+  {
+    "path": "internal/provider/resource_workspace_test.go",
+    "reason": "unit tests for resource workspace"
+  },
+  {
+    "path": "internal/provider/validators.go",
+    "reason": "custom schema validators"
+  },
+  {
+    "path": "main.go",
+    "reason": "provider server entrypoint"
+  },
+  {
+    "path": "terraform-registry-manifest.json",
+    "reason": "Terraform Registry manifest"
+  }
+]

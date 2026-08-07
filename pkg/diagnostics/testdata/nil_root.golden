@@ -1,0 +1,1 @@
+<input>:1: error: Missing OpenAPI version: The document root is empty. It must contain either 'swagger: "2.0"' or 'openapi: "3.0.x" / "3.1.x"'.

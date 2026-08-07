@@ -1,0 +1,169 @@
+version: "2"
+
+run:
+  timeout: 5m
+  go: "1.26"
+  issues-exit-code: 1
+  tests: true
+  build-tags: []
+
+output:
+  formats:
+    text:
+      path: stdout
+      print-linter-name: true
+      print-issued-lines: true
+
+linters:
+  default: standard
+  enable:
+    - bodyclose
+    - copyloopvar
+    - errname
+    - errorlint
+    - gocheckcompilerdirectives
+    - gochecksumtype
+    - gocognit
+    - gocritic
+    - goprintffuncname
+    - gosec
+    - makezero
+    - misspell
+    - noctx
+    - nolintlint
+    - prealloc
+    - predeclared
+    - reassign
+    - revive
+    - unconvert
+    - unparam
+    - usestdlibvars
+    - whitespace
+  settings:
+    errcheck:
+      check-type-assertions: true
+      check-blank: true
+    gosec:
+      excludes: []
+    gocritic:
+      enabled-tags:
+        - diagnostic
+        - experimental
+        - opinionated
+        - performance
+        - style
+      disabled-checks:
+        # The IR structs are large value objects; passing them by value in the
+        # generator is intentional and safer than pointer aliasing. Converting the
+        # whole generator surface to pointers would be a risky, low-value refactor.
+        - hugeParam
+        - rangeValCopy
+        - unnamedResult
+        - whyNoLint
+        - wrapperFunc
+    misspell:
+      locale: US
+    nolintlint:
+      allow-unused: false
+      require-explanation: true
+      require-specific: true
+    revive:
+      rules:
+        - name: blank-imports
+        - name: context-as-argument
+        - name: context-keys-type
+        - name: dot-imports
+        - name: error-return
+        - name: error-strings
+        - name: error-naming
+        - name: exported
+        - name: if-return
+        - name: increment-decrement
+        - name: var-naming
+        - name: var-declaration
+        - name: package-comments
+        - name: range
+        - name: receiver-naming
+        - name: time-naming
+        - name: unexported-return
+        - name: indent-error-flow
+        - name: errorf
+        - name: empty-block
+        - name: superfluous-else
+        - name: unused-parameter
+        - name: unreachable-code
+        - name: redefines-builtin-id
+  exclusions:
+    paths:
+      - vendor
+      - ".*\\.pb\\.go$"
+      - ".*\\.gen\\.go$"
+    rules:
+      # errcheck is NOT blanket-excluded for *_test.go. The previous exclusion
+      # used `text: "Error return value.*is not checked"` whose `.*` matched
+      # errcheck's message for every finding (both unchecked function calls and
+      # unchecked type assertions), silently disabling errcheck for all test
+      # files (M-60). The narrowed pattern below excludes only unchecked type
+      # assertions — a wrong type panics as a loud test failure, so it is not a
+      # silent issue — while keeping errcheck active for unchecked function calls,
+      # which fail silently. Test code that intentionally ignores a function's
+      # error must use an explicit `//nolint:errcheck // <reason>`.
+      - path: ".*_test\\.go$"
+        linters:
+          - errcheck
+        text: "Error return value is not checked"
+
+      - path: ".*_test\\.go$"
+        linters:
+          - gosec
+        text: "unhandled"
+
+      - path: ".*_test\\.go$"
+        linters:
+          - revive
+        text: "seems to be unused"
+
+      # Test functions are verbose integration/golden tests; refactoring them for
+      # lower cognitive complexity would split assertions arbitrarily and hurt
+      # readability. Keep gocognit enabled for production code.
+      - path: ".*_test\\.go$"
+        linters:
+          - gocognit
+        text: "cognitive complexity"
+
+      # Validate is a pre-existing high-complexity function that needs dedicated
+      # refactoring; exclude it from gocognit until then.
+      - path: "pkg/config/config\\.go$"
+        linters:
+          - gocognit
+        text: "cognitive complexity"
+
+      # gosec findings in tests are test-only noise: fixture file paths, external
+      # tool invocations, placeholder OAuth token URLs, and WalkDir callbacks are
+      # not production security risks.
+      - path: ".*_test\\.go$"
+        linters:
+          - gosec
+        text: "G101|G204|G304|G602|G122"
+
+      # doc.go files may have intentionally minimal package comments.
+      - path: "(^|/)doc\\.go$"
+        linters:
+          - revive
+        text: "package-comments"
+
+formatters:
+  enable:
+    - gofmt
+    - goimports
+  settings:
+    gofmt:
+      simplify: true
+    goimports:
+      local-prefixes:
+        - github.com/signalbreak-labs/eidos
+
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0
+  uniq-by-line: true

@@ -1,0 +1,42 @@
+openapi: "3.0.3"
+info:
+  title: Callback Example API
+  version: "1.0.0"
+  description: Demonstrates OpenAPI callback definitions.
+servers:
+  - url: https://example.com
+paths:
+  /streams:
+    post:
+      operationId: subscribeToStream
+      summary: Subscribe to a callback stream
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                callbackUrl:
+                  type: string
+                  format: uri
+      responses:
+        "201":
+          description: Subscription created
+      callbacks:
+        onData:
+          '{$request.body#/callbackUrl}':
+            post:
+              summary: Callback payload
+              requestBody:
+                required: true
+                content:
+                  application/json:
+                    schema:
+                      type: object
+                      properties:
+                        message:
+                          type: string
+              responses:
+                "200":
+                  description: Callback received

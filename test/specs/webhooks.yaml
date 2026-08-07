@@ -1,0 +1,38 @@
+openapi: "3.1.0"
+info:
+  title: Webhooks API
+  version: "1.0.0"
+  description: Spec exercising OpenAPI 3.1 webhooks.
+servers:
+  - url: https://example.com
+webhooks:
+  newPet:
+    post:
+      operationId: receiveNewPet
+      summary: Receive a new pet event
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/Pet"
+      responses:
+        "200":
+          description: Received
+paths:
+  /pets:
+    get:
+      operationId: listPets
+      summary: List pets
+      responses:
+        "200":
+          description: Pets
+components:
+  schemas:
+    Pet:
+      type: object
+      properties:
+        id:
+          type: integer
+        name:
+          type: string

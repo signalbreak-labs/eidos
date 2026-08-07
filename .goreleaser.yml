@@ -1,0 +1,76 @@
+# GoReleaser configuration for the eidos CLI itself.
+#
+# This is distinct from the .goreleaser.yml that eidos *generates* into
+# downstream Terraform provider repos (see pkg/generator/build_files.go,
+# Goreleaser()). That generated config targets the Terraform Registry's
+# archive/binary naming conventions; this one targets GitHub Releases for the
+# eidos tool. Keep the two separate.
+version: 2
+
+project_name: eidos
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: eidos
+    main: ./cmd/eidos
+    binary: eidos
+    env:
+      - CGO_ENABLED=0
+    flags:
+      - -trimpath
+    # main.version is declared in cmd/eidos/root.go and surfaced via
+    # `eidos --version`. Inject the release tag so the binary reports it.
+    ldflags:
+      - -s -w -X main.version={{ .Version }}
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    ignore:
+      - goos: windows
+        goarch: arm64
+
+archives:
+  - formats:
+      - tar.gz
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    format_overrides:
+      - goos: windows
+        formats:
+          - zip
+
+checksum:
+  name_template: "{{ .ProjectName }}_{{ .Version }}_checksums.txt"
+  algorithm: sha256
+
+# Source archive so users can build from the released tag without a clone.
+source:
+  enabled: true
+
+snapshot:
+  version_template: "{{ incpatch .Version }}-dev"
+
+release:
+  draft: false
+  # auto marks tags like v1.2.3-rc1 as prerelease automatically.
+  prerelease: auto
+  # .Tag carries the leading v (v2.1.5) so the release title displays proper
+  # Semantic Versioning; .Version (2.1.5) is used for asset names and the
+  # injected main.version. Homebrew formulas reference the v-prefixed tag.
+  name_template: "{{ .ProjectName }} {{ .Tag }}"
+
+changelog:
+  use: github
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^chore:"
+      - "^Merge (pull request|branch)"

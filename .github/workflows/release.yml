@@ -1,0 +1,49 @@
+name: Release
+
+# Ships the eidos CLI to end users as a GitHub Release with cross-compiled
+# binaries, archives, and checksums. This is the distribution path for the
+# eidos tool itself; it does NOT publish to the Terraform Registry (eidos is a
+# generator, not a provider). The .goreleaser.yml at the repo root drives the
+# build. This is distinct from the release.yml eidos *generates* into
+# downstream provider repos (see pkg/generator/build_files.go ReleaseWorkflow).
+#
+# This workflow fires on a HUMAN-pushed v* tag (manual/explicit releases).
+# Routine releases are handled by release-please.yml (Google's release-please),
+# which versions from Conventional Commits, maintains the release PR, and runs
+# GoReleaser itself when it creates the release. Tags pushed by the GITHUB_TOKEN
+# from release-please do not trigger this workflow (GitHub suppresses
+# GITHUB_TOKEN-triggered workflow runs), so there is no double-release. If a PAT
+# is configured for release-please, its tag push would re-trigger this workflow
+# too, which is fine — GoReleaser is idempotent on an existing release.
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      # Pin the GoReleaser version so release artifacts are reproducible.
+      - name: Run GoReleaser
+        uses: goreleaser/goreleaser-action@e435ccd777264be153ace6237001ef4d979d3a7a # v6
+        with:
+          version: v2.17.0
+          args: release --clean
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

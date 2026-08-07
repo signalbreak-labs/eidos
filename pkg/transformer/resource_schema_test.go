@@ -1,0 +1,355 @@
+package transformer
+
+import (
+	"testing"
+
+	"github.com/signalbreak-labs/eidos/pkg/ir"
+)
+
+// petStateSpec mirrors the mycloud-pets Pet response schema: id (int64, required),
+// name (string, required), tag (string, optional).
+func petStateSpec() *SchemaSpec {
+	return &SchemaSpec{
+		Type:     "object",
+		Required: []string{"id", "name"},
+		Properties: map[string]SchemaSpec{
+			"id":   {Type: "integer", Format: "int64"},
+			"name": {Type: "string"},
+			"tag":  {Type: "string"},
+		},
+	}
+}
+
+// petRequestSpec mirrors the mycloud-pets NewPet request schema: name (required),
+// tag (optional); no id.
+func petRequestSpec() *SchemaSpec {
+	return &SchemaSpec{
+		Type:     "object",
+		Required: []string{"name"},
+		Properties: map[string]SchemaSpec{
+			"name": {Type: "string"},
+			"tag":  {Type: "string"},
+		},
+	}
+}
+
+func findAttr(attrs []ir.AttributeIR, name string) (ir.AttributeIR, bool) {
+	for _, a := range attrs {
+		if a.Name == name {
+			return a, true
+		}
+	}
+	return ir.AttributeIR{}, false
+}
+
+func TestManagedResourceSchema_MyCloudPetsReconciliation(t *testing.T) {
+	c := ResourceCRUD{
+		Name:           "pet",
+		CollectionPath: "/pets",
+		InstancePath:   "/pets/{petId}",
+		Create: &Operation{
+			Method:         MethodPost,
+			Path:           "/pets",
+			RequestSchema:  petRequestSpec(),
+			ResponseSchema: nil, // 201 with no body
+		},
+		Read: &Operation{
+			Method:         MethodGet,
+			Path:           "/pets/{petId}",
+			ResponseSchema: petStateSpec(),
+		},
+		Delete: &Operation{Method: MethodDelete, Path: "/pets/{petId}"},
+		ID:     IDInfo{Kind: IDSimple, ParameterNames: []string{"petId"}, AttributeName: "pet_id", ImportFormat: "%s"},
+	}
+
+	schema, idAttr := ManagedResourceSchema(c)
+
+	// The state shape has an "id" property, so the ID attribute defaults to "id"
+	// rather than the path-derived "pet_id" (which would not match the response
+	// field and would disable wiring).
+	if idAttr != "" {
+		t.Errorf("idAttribute = %q, want \"\" (default to id)", idAttr)
+	}
+
+	id, ok := findAttr(schema.Attributes, "id")
+	if !ok {
+		t.Fatalf("no id attribute in schema: %+v", schema.Attributes)
+	}
+	if id.Schema.Type != ir.TypeInt {
+		t.Errorf("id schema type = %q, want %q (integer from Pet response)", id.Schema.Type, ir.TypeInt)
+	}
+	if !id.Computed || id.Required || id.Optional {
+		t.Errorf("id must be Computed only (server-assigned): got Required=%v Optional=%v Computed=%v", id.Required, id.Optional, id.Computed)
+	}
+
+	name, ok := findAttr(schema.Attributes, "name")
+	if !ok {
+		t.Fatalf("no name attribute in schema")
+	}
+	if !name.Required || name.Computed || name.Optional {
+		t.Errorf("name must be Required (in NewPet required): got Required=%v Optional=%v Computed=%v", name.Required, name.Optional, name.Computed)
+	}
+
+	tag, ok := findAttr(schema.Attributes, "tag")
+	if !ok {
+		t.Fatalf("no tag attribute in schema")
+	}
+	if !tag.Optional || tag.Required || !tag.Computed {
+		t.Errorf("tag must be Optional+Computed (an optional request input the response also returns): got Required=%v Optional=%v Computed=%v", tag.Required, tag.Optional, tag.Computed)
+	}
+}
+
+func TestManagedResourceSchema_SyntheticIDWhenResponseHasNoID(t *testing.T) {
+	// A response with no "id" property but a path param of {id}: a synthetic
+	// Computed string "id" attribute is added so path substitution resolves
+	// against an identifier populated via the create request or a Location
+	// header (REMAINING_GAPS §2).
+	c := ResourceCRUD{
+		Name:           "widget",
+		CollectionPath: "/widgets",
+		InstancePath:   "/widgets/{id}",
+		Create:         &Operation{Method: MethodPost, Path: "/widgets"},
+		Read: &Operation{
+			Method: MethodGet,
+			Path:   "/widgets/{id}",
+			ResponseSchema: &SchemaSpec{
+				Type:     "object",
+				Required: []string{"label"},
+				Properties: map[string]SchemaSpec{
+					"label": {Type: "string"},
+				},
+			},
+		},
+		Delete: &Operation{Method: MethodDelete, Path: "/widgets/{id}"},
+		ID:     IDInfo{Kind: IDSimple, ParameterNames: []string{"id"}, AttributeName: "id", ImportFormat: "%s"},
+	}
+
+	schema, idAttr := ManagedResourceSchema(c)
+	if idAttr != "id" {
+		t.Errorf("idAttribute = %q, want \"id\"", idAttr)
+	}
+	id, ok := findAttr(schema.Attributes, "id")
+	if !ok {
+		t.Fatalf("no synthetic id attribute: %+v", schema.Attributes)
+	}
+	if id.Schema.Type != ir.TypeString {
+		t.Errorf("synthetic id type = %q, want string", id.Schema.Type)
+	}
+	if !id.Computed {
+		t.Errorf("synthetic id must be Computed")
+	}
+}
+
+// TestManagedResourceSchema_PractitionerSetID locks in the §3/#11 fix: an "id"
+// property that the create request body declares as required is practitioner-set
+// on create, so it must be Required (not forced Computed). Only an id absent from
+// the create request is treated as server-assigned (Computed).
+func TestManagedResourceSchema_PractitionerSetID(t *testing.T) {
+	c := ResourceCRUD{
+		Name:           "user",
+		CollectionPath: "/users",
+		InstancePath:   "/users/{id}",
+		Create: &Operation{
+			Method:        MethodPost,
+			Path:          "/users",
+			RequestSchema: &SchemaSpec{Type: "object", Required: []string{"id", "name"}, Properties: map[string]SchemaSpec{"id": {Type: "string"}, "name": {Type: "string"}}},
+		},
+		Read: &Operation{
+			Method: MethodGet,
+			Path:   "/users/{id}",
+			ResponseSchema: &SchemaSpec{
+				Type:     "object",
+				Required: []string{"id", "name"},
+				Properties: map[string]SchemaSpec{
+					"id":   {Type: "string"},
+					"name": {Type: "string"},
+				},
+			},
+		},
+		Delete: &Operation{Method: MethodDelete, Path: "/users/{id}"},
+		ID:     IDInfo{Kind: IDSimple, ParameterNames: []string{"id"}, AttributeName: "id", ImportFormat: "%s"},
+	}
+
+	schema, _ := ManagedResourceSchema(c)
+	id, ok := findAttr(schema.Attributes, "id")
+	if !ok {
+		t.Fatalf("no id attribute: %+v", schema.Attributes)
+	}
+	if !id.Required || id.Computed {
+		t.Errorf("practitioner-set id must be Required (not Computed): got Required=%v Computed=%v", id.Required, id.Computed)
+	}
+}
+
+// TestManagedResourceSchema_BodylessResourceNoSyntheticID locks in the §3/#12
+// fix: a resource with no response or request body anywhere returns an empty
+// schema with no identifier, so it stays honestly scaffolded rather than wiring
+// with an unpopulated synthetic id (the mycloud workspace case).
+func TestManagedResourceSchema_BodylessResourceNoSyntheticID(t *testing.T) {
+	c := ResourceCRUD{
+		Name:           "namespace",
+		CollectionPath: "/api/v1/namespaces",
+		InstancePath:   "/api/v1/namespaces/{name}",
+		Create:         &Operation{Method: MethodPost, Path: "/api/v1/namespaces"},
+		Read:           &Operation{Method: MethodGet, Path: "/api/v1/namespaces/{name}"},
+		Delete:         &Operation{Method: MethodDelete, Path: "/api/v1/namespaces/{name}"},
+		ID:             IDInfo{Kind: IDSimple, ParameterNames: []string{"name"}, AttributeName: "name", ImportFormat: "%s"},
+	}
+	schema, idAttr := ManagedResourceSchema(c)
+	if idAttr != "" {
+		t.Errorf("idAttribute = %q, want \"\" for a bodyless resource", idAttr)
+	}
+	if len(schema.Attributes) != 0 {
+		t.Errorf("bodyless resource must have an empty schema (no synthetic id), got %+v", schema.Attributes)
+	}
+}
+
+// TestManagedResourceSchema_NoDuplicateSyntheticID locks in the dup fix: when
+// the path-parameter name is itself a top-level response property (e.g.
+// /users/{username} with a response exposing username), the real attribute is
+// kept and no duplicate synthetic attribute is added.
+func TestManagedResourceSchema_NoDuplicateSyntheticID(t *testing.T) {
+	c := ResourceCRUD{
+		Name:           "user",
+		CollectionPath: "/users",
+		InstancePath:   "/users/{username}",
+		Create: &Operation{
+			Method:        MethodPost,
+			Path:          "/users",
+			RequestSchema: &SchemaSpec{Type: "object", Required: []string{"username"}, Properties: map[string]SchemaSpec{"username": {Type: "string"}}},
+		},
+		Read: &Operation{
+			Method: MethodGet,
+			Path:   "/users/{username}",
+			ResponseSchema: &SchemaSpec{
+				Type:       "object",
+				Required:   []string{"username"},
+				Properties: map[string]SchemaSpec{"username": {Type: "string"}, "email": {Type: "string"}},
+			},
+		},
+		Delete: &Operation{Method: MethodDelete, Path: "/users/{username}"},
+		ID:     IDInfo{Kind: IDSimple, ParameterNames: []string{"username"}, AttributeName: "username", ImportFormat: "%s"},
+	}
+	schema, idAttr := ManagedResourceSchema(c)
+	if idAttr != "username" {
+		t.Errorf("idAttribute = %q, want \"username\"", idAttr)
+	}
+	count := 0
+	for _, a := range schema.Attributes {
+		if a.Name == "username" {
+			count++
+		}
+	}
+	if count != 1 {
+		t.Errorf("expected exactly one username attribute, got %d: %+v", count, schema.Attributes)
+	}
+}
+
+func TestSchemaIRFromSpecRecursive_ArrayOfObjects(t *testing.T) {
+	spec := SchemaSpec{
+		Type: "array",
+		Items: &SchemaSpec{
+			Type: "object",
+			Properties: map[string]SchemaSpec{
+				"name": {Type: "string"},
+			},
+		},
+	}
+	got := schemaIRFromSpecRecursive(spec)
+	if got.Collection == nil || got.Collection.Kind != ir.List {
+		t.Fatalf("expected List collection, got %+v", got)
+	}
+	if len(got.Collection.ElementType.Attributes) != 1 {
+		t.Fatalf("expected 1 nested attr, got %+v", got.Collection.ElementType.Attributes)
+	}
+	if got.Collection.ElementType.Attributes[0].Name != "name" {
+		t.Errorf("nested attr name = %q, want name", got.Collection.ElementType.Attributes[0].Name)
+	}
+}
+
+func TestSchemaIRFromSpecRecursive_UniqueItemsIsSet(t *testing.T) {
+	spec := SchemaSpec{Type: "array", UniqueItems: true, Items: &SchemaSpec{Type: "string"}}
+	got := schemaIRFromSpecRecursive(spec)
+	if got.Collection == nil || got.Collection.Kind != ir.Set {
+		t.Fatalf("expected Set collection for uniqueItems, got %+v", got)
+	}
+}
+
+// TestDataSourceSchema_UniqueItemsIsSet covers the data-source array-response
+// branch (resource_schema.go:341): an array response with uniqueItems: true
+// yields a Computed `items` Set attribute rather than a List (A1).
+func TestDataSourceSchema_UniqueItemsIsSet(t *testing.T) {
+	op := Operation{
+		Method:         MethodGet,
+		Path:           "/pets",
+		ResponseSchema: &SchemaSpec{Type: "array", UniqueItems: true, Items: &SchemaSpec{Type: "string"}},
+	}
+	schema := DataSourceSchema(op)
+
+	var items *ir.AttributeIR
+	for i := range schema.Attributes {
+		if schema.Attributes[i].Name == "items" {
+			items = &schema.Attributes[i]
+		}
+	}
+	if items == nil {
+		t.Fatalf("expected an items attribute, got %+v", schema.Attributes)
+	}
+	if items.Schema.Collection == nil || items.Schema.Collection.Kind != ir.Set {
+		t.Fatalf("expected items Set collection, got %+v", items.Schema)
+	}
+	if !items.Computed {
+		t.Errorf("expected items attribute to be Computed")
+	}
+}
+
+func TestSchemaIRFromSpecRecursive_AdditionalPropertiesMap(t *testing.T) {
+	spec := SchemaSpec{AdditionalProperties: &SchemaSpec{Type: "string"}}
+	got := schemaIRFromSpecRecursive(spec)
+	if got.Collection == nil || got.Collection.Kind != ir.Map {
+		t.Fatalf("expected Map collection, got %+v", got)
+	}
+	if got.Collection.ElementType.Type != ir.TypeString {
+		t.Errorf("map element type = %q, want string", got.Collection.ElementType.Type)
+	}
+}
+
+// TestManagedResourceSchema_RequestOnlyInputs verifies G9: create request-body
+// inputs the read response does not echo are added as Optional attributes, so a
+// resource whose response wraps its payload (e.g. library elements
+// {result: {...}}) still exposes its writable inputs.
+func TestManagedResourceSchema_RequestOnlyInputs(t *testing.T) {
+	c := ResourceCRUD{
+		Name: "library_element",
+		Create: &Operation{
+			Method: MethodPost, Path: "/library-elements", OperationID: "createLibraryElement",
+			RequestSchema: &SchemaSpec{Properties: map[string]SchemaSpec{
+				"name":  {Type: "string"},
+				"kind":  {Type: "integer"},
+				"model": {Type: "object"},
+			}},
+		},
+		Read: &Operation{
+			Method: MethodGet, Path: "/library-elements/{uid}", OperationID: "getLibraryElement",
+			ResponseSchema: &SchemaSpec{Properties: map[string]SchemaSpec{
+				"result": {Type: "object", Properties: map[string]SchemaSpec{"id": {Type: "integer"}}},
+			}},
+		},
+		Delete: &Operation{Method: MethodDelete, Path: "/library-elements/{uid}", OperationID: "deleteLibraryElement"},
+	}
+
+	schema, _ := ManagedResourceSchema(c)
+	names := map[string]ir.AttributeIR{}
+	for _, a := range schema.Attributes {
+		names[a.Name] = a
+	}
+	for _, want := range []string{"name", "kind", "model"} {
+		a, ok := names[want]
+		if !ok {
+			t.Errorf("expected request-only input %q in schema, got %+v", want, schema.Attributes)
+			continue
+		}
+		if !a.Optional || a.Computed || a.Required {
+			t.Errorf("request-only input %q must be Optional (not Computed/Required), got %+v", want, a)
+		}
+	}
+}

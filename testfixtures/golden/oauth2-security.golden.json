@@ -1,0 +1,106 @@
+[
+  {
+    "path": ".github/workflows/release.yml",
+    "reason": "GitHub Actions release workflow"
+  },
+  {
+    "path": ".goreleaser.yml",
+    "reason": "GoReleaser release configuration"
+  },
+  {
+    "path": "GNUmakefile",
+    "reason": "build and test automation"
+  },
+  {
+    "path": "README.md",
+    "reason": "provider overview and usage guide"
+  },
+  {
+    "path": "docs/actions/create_protected.md",
+    "reason": "documentation for action create_protected"
+  },
+  {
+    "path": "docs/data-sources/get_protected.md",
+    "reason": "documentation for data source get_protected"
+  },
+  {
+    "path": "docs/index.md",
+    "reason": "provider overview and authentication guide"
+  },
+  {
+    "path": "examples/actions/create_protected/action.tf",
+    "reason": "example for action create_protected"
+  },
+  {
+    "path": "examples/data-sources/get_protected/data-source.tf",
+    "reason": "example for data source get_protected"
+  },
+  {
+    "path": "generator.yaml",
+    "reason": "generated generator configuration"
+  },
+  {
+    "path": "go.mod",
+    "reason": "Go module definition"
+  },
+  {
+    "path": "internal/client/auth.go",
+    "reason": "authentication middleware"
+  },
+  {
+    "path": "internal/client/client.go",
+    "reason": "generated HTTP client"
+  },
+  {
+    "path": "internal/client/errors.go",
+    "reason": "typed API error helpers"
+  },
+  {
+    "path": "internal/client/logging.go",
+    "reason": "request/response trace logging"
+  },
+  {
+    "path": "internal/client/models.go",
+    "reason": "request/response model structs"
+  },
+  {
+    "path": "internal/client/pagination.go",
+    "reason": "pagination helpers"
+  },
+  {
+    "path": "internal/client/retry.go",
+    "reason": "retry logic with exponential backoff"
+  },
+  {
+    "path": "internal/provider/action_create_protected.go",
+    "reason": "action o_auth2_security_api_create_protected"
+  },
+  {
+    "path": "internal/provider/data_source_get_protected.go",
+    "reason": "data source o_auth2_security_api_get_protected"
+  },
+  {
+    "path": "internal/provider/data_source_get_protected_test.go",
+    "reason": "unit tests for data source get_protected"
+  },
+  {
+    "path": "internal/provider/provider.go",
+    "reason": "provider schema and registration"
+  },
+  {
+    "path": "internal/provider/provider_test.go",
+    "reason": "provider-level unit tests"
+  },
+  {
+    "path": "internal/provider/validators.go",
+    "reason": "custom schema validators"
+  },
+  {
+    "path": "main.go",
+    "reason": "provider server entrypoint"
+  },
+  {
+    "path": "terraform-registry-manifest.json",
+    "reason": "Terraform Registry manifest"
+  }
+]

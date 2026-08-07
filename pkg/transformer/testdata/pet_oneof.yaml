@@ -1,0 +1,23 @@
+type: object
+oneOf:
+  - type: object
+    properties:
+      name:
+        type: string
+      meows:
+        type: boolean
+    required:
+      - name
+  - type: object
+    properties:
+      name:
+        type: string
+      barks:
+        type: boolean
+    required:
+      - name
+discriminator:
+  propertyName: petType
+  mapping:
+    cat: Cat
+    dog: Dog

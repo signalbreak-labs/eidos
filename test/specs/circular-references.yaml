@@ -1,0 +1,55 @@
+openapi: "3.0.3"
+info:
+  title: Circular References API
+  version: "1.0.0"
+  description: Spec with mutually referencing schemas to exercise circular reference handling.
+servers:
+  - url: https://example.com
+paths:
+  /departments:
+    get:
+      operationId: listDepartments
+      summary: List departments
+      responses:
+        "200":
+          description: Departments
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Department"
+    post:
+      operationId: createDepartment
+      summary: Create a department
+      responses:
+        "201":
+          description: Created
+components:
+  schemas:
+    Department:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        manager:
+          $ref: "#/components/schemas/Employee"
+        subDepartments:
+          type: array
+          items:
+            $ref: "#/components/schemas/Department"
+    Employee:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        department:
+          $ref: "#/components/schemas/Department"
+        reports:
+          type: array
+          items:
+            $ref: "#/components/schemas/Employee"

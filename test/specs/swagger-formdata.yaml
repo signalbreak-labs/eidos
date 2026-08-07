@@ -1,0 +1,120 @@
+swagger: "2.0"
+info:
+  title: Form Data API
+  version: "1.0.0"
+  description: Swagger 2.0 reference spec exercising formData end-to-end (PROJECT_DESIGN §23). The note resource sends primitive formData fields as application/x-www-form-urlencoded; the upload resource sends primitive + binary formData as multipart/form-data. Both grouped resources wire their create/read/delete bodies.
+host: formdata.example.com
+basePath: /v1
+schemes:
+  - https
+produces:
+  - application/json
+paths:
+  /notes:
+    post:
+      operationId: createNote
+      consumes:
+        - application/x-www-form-urlencoded
+      parameters:
+        - name: title
+          in: formData
+          required: true
+          type: string
+        - name: body
+          in: formData
+          type: string
+      responses:
+        "201":
+          description: Note
+          schema:
+            $ref: "#/definitions/Note"
+  /notes/{noteId}:
+    get:
+      operationId: getNote
+      parameters:
+        - name: noteId
+          in: path
+          required: true
+          type: string
+      responses:
+        "200":
+          description: Note
+          schema:
+            $ref: "#/definitions/Note"
+    delete:
+      operationId: deleteNote
+      parameters:
+        - name: noteId
+          in: path
+          required: true
+          type: string
+      responses:
+        "204":
+          description: Deleted
+  /uploads:
+    post:
+      operationId: createUpload
+      consumes:
+        - multipart/form-data
+      parameters:
+        - name: title
+          in: formData
+          required: true
+          type: string
+        - name: description
+          in: formData
+          type: string
+        - name: file
+          in: formData
+          required: true
+          type: string
+          format: binary
+      responses:
+        "201":
+          description: Upload
+          schema:
+            $ref: "#/definitions/Upload"
+  /uploads/{uploadId}:
+    get:
+      operationId: getUpload
+      parameters:
+        - name: uploadId
+          in: path
+          required: true
+          type: string
+      responses:
+        "200":
+          description: Upload
+          schema:
+            $ref: "#/definitions/Upload"
+    delete:
+      operationId: deleteUpload
+      parameters:
+        - name: uploadId
+          in: path
+          required: true
+          type: string
+      responses:
+        "204":
+          description: Deleted
+definitions:
+  Note:
+    type: object
+    properties:
+      noteId:
+        type: string
+      title:
+        type: string
+      body:
+        type: string
+  Upload:
+    type: object
+    properties:
+      uploadId:
+        type: string
+      title:
+        type: string
+      description:
+        type: string
+      url:
+        type: string

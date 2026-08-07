@@ -1,0 +1,122 @@
+[
+  {
+    "path": ".github/workflows/release.yml",
+    "reason": "GitHub Actions release workflow"
+  },
+  {
+    "path": ".goreleaser.yml",
+    "reason": "GoReleaser release configuration"
+  },
+  {
+    "path": "GNUmakefile",
+    "reason": "build and test automation"
+  },
+  {
+    "path": "README.md",
+    "reason": "provider overview and usage guide"
+  },
+  {
+    "path": "docs/actions/create_polymorphic_pet.md",
+    "reason": "documentation for action create_polymorphic_pet"
+  },
+  {
+    "path": "docs/data-sources/get_polymorphic_pet.md",
+    "reason": "documentation for data source get_polymorphic_pet"
+  },
+  {
+    "path": "docs/data-sources/list_animals.md",
+    "reason": "documentation for data source list_animals"
+  },
+  {
+    "path": "docs/index.md",
+    "reason": "provider overview and authentication guide"
+  },
+  {
+    "path": "examples/actions/create_polymorphic_pet/action.tf",
+    "reason": "example for action create_polymorphic_pet"
+  },
+  {
+    "path": "examples/data-sources/get_polymorphic_pet/data-source.tf",
+    "reason": "example for data source get_polymorphic_pet"
+  },
+  {
+    "path": "examples/data-sources/list_animals/data-source.tf",
+    "reason": "example for data source list_animals"
+  },
+  {
+    "path": "generator.yaml",
+    "reason": "generated generator configuration"
+  },
+  {
+    "path": "go.mod",
+    "reason": "Go module definition"
+  },
+  {
+    "path": "internal/client/auth.go",
+    "reason": "authentication middleware"
+  },
+  {
+    "path": "internal/client/client.go",
+    "reason": "generated HTTP client"
+  },
+  {
+    "path": "internal/client/errors.go",
+    "reason": "typed API error helpers"
+  },
+  {
+    "path": "internal/client/logging.go",
+    "reason": "request/response trace logging"
+  },
+  {
+    "path": "internal/client/models.go",
+    "reason": "request/response model structs"
+  },
+  {
+    "path": "internal/client/pagination.go",
+    "reason": "pagination helpers"
+  },
+  {
+    "path": "internal/client/retry.go",
+    "reason": "retry logic with exponential backoff"
+  },
+  {
+    "path": "internal/provider/action_create_polymorphic_pet.go",
+    "reason": "action complex_polymorphism_api_create_polymorphic_pet"
+  },
+  {
+    "path": "internal/provider/data_source_get_polymorphic_pet.go",
+    "reason": "data source complex_polymorphism_api_get_polymorphic_pet"
+  },
+  {
+    "path": "internal/provider/data_source_get_polymorphic_pet_test.go",
+    "reason": "unit tests for data source get_polymorphic_pet"
+  },
+  {
+    "path": "internal/provider/data_source_list_animals.go",
+    "reason": "data source complex_polymorphism_api_list_animals"
+  },
+  {
+    "path": "internal/provider/data_source_list_animals_test.go",
+    "reason": "unit tests for data source list_animals"
+  },
+  {
+    "path": "internal/provider/provider.go",
+    "reason": "provider schema and registration"
+  },
+  {
+    "path": "internal/provider/provider_test.go",
+    "reason": "provider-level unit tests"
+  },
+  {
+    "path": "internal/provider/validators.go",
+    "reason": "custom schema validators"
+  },
+  {
+    "path": "main.go",
+    "reason": "provider server entrypoint"
+  },
+  {
+    "path": "terraform-registry-manifest.json",
+    "reason": "Terraform Registry manifest"
+  }
+]

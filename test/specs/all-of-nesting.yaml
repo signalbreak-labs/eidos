@@ -1,0 +1,73 @@
+openapi: "3.0.3"
+info:
+  title: AllOf Nesting API
+  version: "1.0.0"
+  description: Spec with deeply nested allOf composition.
+servers:
+  - url: https://example.com
+paths:
+  /shipment:
+    get:
+      operationId: getShipment
+      summary: Get a shipment
+      responses:
+        "200":
+          description: Shipment
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Shipment"
+    post:
+      operationId: createShipment
+      summary: Create a shipment
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/Shipment"
+      responses:
+        "201":
+          description: Created
+components:
+  schemas:
+    Shipment:
+      allOf:
+        - $ref: "#/components/schemas/BaseEntity"
+        - type: object
+          properties:
+            origin:
+              $ref: "#/components/schemas/Address"
+            destination:
+              $ref: "#/components/schemas/Address"
+            items:
+              type: array
+              items:
+                $ref: "#/components/schemas/Item"
+    BaseEntity:
+      type: object
+      properties:
+        id:
+          type: string
+          readOnly: true
+        createdAt:
+          type: string
+          format: date-time
+    Address:
+      allOf:
+        - $ref: "#/components/schemas/BaseEntity"
+        - type: object
+          properties:
+            street:
+              type: string
+            city:
+              type: string
+    Item:
+      allOf:
+        - $ref: "#/components/schemas/BaseEntity"
+        - type: object
+          properties:
+            name:
+              type: string
+            weight:
+              type: number

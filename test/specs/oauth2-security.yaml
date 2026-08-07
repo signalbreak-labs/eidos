@@ -1,0 +1,48 @@
+openapi: "3.0.3"
+info:
+  title: OAuth2 Security API
+  version: "1.0.0"
+  description: Spec covering multiple OAuth2 flows and an optional API key.
+servers:
+  - url: https://api.example.com
+security:
+  - oauth2_clientCredentials: []
+paths:
+  /protected:
+    get:
+      operationId: getProtected
+      summary: Access a protected resource
+      responses:
+        "200":
+          description: OK
+    post:
+      operationId: createProtected
+      summary: Modify a protected resource
+      security:
+        - oauth2_authorizationCode: [write]
+      responses:
+        "201":
+          description: Created
+components:
+  securitySchemes:
+    oauth2_clientCredentials:
+      type: oauth2
+      flows:
+        clientCredentials:
+          tokenUrl: https://api.example.com/oauth/token
+          scopes:
+            read: Read access
+            write: Write access
+    oauth2_authorizationCode:
+      type: oauth2
+      flows:
+        authorizationCode:
+          authorizationUrl: https://api.example.com/oauth/authorize
+          tokenUrl: https://api.example.com/oauth/token
+          scopes:
+            read: Read access
+            write: Write access
+    apiKey:
+      type: apiKey
+      in: header
+      name: X-API-Key

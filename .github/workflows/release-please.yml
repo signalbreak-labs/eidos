@@ -1,0 +1,93 @@
+name: Release Please
+
+# Maintains a running release PR (`release-please-release` branch) that
+# aggregates Conventional Commits and proposes the next version plus a
+# generated CHANGELOG.md. On merge of the release PR, release-please creates a
+# v* tag and a GitHub Release, and this workflow then runs GoReleaser to attach
+# cross-compiled binaries to the Release.
+#
+# This workflow replaces auto-release.yml (the in-repo Conventional-Commits
+# detector and hand-rolled tag pusher). release.yml remains for human-pushed
+# v* tags (manual/explicit releases).
+#
+# Conventional Commit discipline is required for correct version bumps:
+#   BREAKING CHANGE footer / <type>!  -> major  (X.0.0)
+#   feat(...)                         -> minor  (X.Y.0)
+#   fix / perf / chore                -> patch  (X.Y.Z)
+#   docs / test / style / refactor / build / ci / <untyped>
+#                                    -> no release (skipped)
+# The highest bump across the new commits wins. This is the same mapping the
+# retired auto-release.yml documented; release-please enforces it directly.
+#
+# GoReleaser runs HERE rather than in a separate tag-triggered workflow because
+# the tag release-please pushes with GITHUB_TOKEN does not re-trigger other
+# workflows (GitHub suppresses GITHUB_TOKEN-triggered runs). If a PAT
+# (`RELEASE_PLEASE_TOKEN`) is configured, release-please could instead push the
+# tag with the PAT and release.yml would serve both paths — see the `token`
+# input below.
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: write
+  pull-requests: write
+
+# Serialize so two rapid main pushes don't race on the release PR / tag.
+concurrency:
+  group: release-please
+  cancel-in-progress: false
+
+jobs:
+  release-please:
+    name: Release Please
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+
+      # Versioning + CHANGELOG ownership. `release-type: go` derives the module
+      # version from go.mod; the v* tag prefix is the default for `go`. Config
+      # and version history live in release-please-config.json and
+      # .release-please-manifest.json at the repo root.
+      - name: Run release-please
+        id: release
+        uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7 # v5.0.0
+        with:
+          # Use a PAT (e.g. `RELEASE_PLEASE_TOKEN`) instead of GITHUB_TOKEN if
+          # you want the tag pushed here to re-trigger release.yml's tag-push
+          # event; with GITHUB_TOKEN that event is suppressed, which is why
+          # GoReleaser runs in this workflow instead.
+          token: ${{ secrets.GITHUB_TOKEN }}
+          # ONE-TIME BOOTSTRAP: force the first release to be exactly v0.1.0
+          # (the manifest baseline has no tag yet, so release-please would
+          # otherwise bump to 0.2.0 on a feat). REMOVE THIS LINE after the
+          # v0.1.0 release lands so subsequent releases bump normally.
+          release-as: 0.1.0
+
+      - name: Checkout (release commit)
+        if: ${{ steps.release.outputs.releases_created }}
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ steps.release.outputs.tag_name }}
+          fetch-depth: 0
+
+      - name: Set up Go
+        if: ${{ steps.release.outputs.releases_created }}
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      # Pin the GoReleaser version so release artifacts are reproducible.
+      - name: Run GoReleaser
+        if: ${{ steps.release.outputs.releases_created }}
+        uses: goreleaser/goreleaser-action@e435ccd777264be153ace6237001ef4d979d3a7a # v6
+        with:
+          version: v2.17.0
+          args: release --clean
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

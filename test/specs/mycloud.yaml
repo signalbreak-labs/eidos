@@ -1,0 +1,1459 @@
+openapi: "3.0.3"
+info:
+  title: Mycloud
+  version: "1.0.0"
+  description: Trimmed MyCloud API reference spec for golden file regression tests. The schemas expose the path parameters (name, workspace) as top-level properties rather than nested under a metadata wrapper (a single-level metadata flattening is a documented follow-up in PROJECT_DESIGN §23) so the generator's path-parameter wiring is exercised end to end. The compute family (workspaces, instances, networks, stacks, configs, secrets) exercises workspace-scoped CRUD and list resources; the projects family (organizations, projects, tasks, pull requests, members, branches, commits) exercises organization-scoped data sources and list resources.
+servers:
+  - url: https://api.mycloud.example/v1
+security:
+  - bearerAuth: []
+paths:
+  /workspaces/{workspace}/instances:
+    get:
+      operationId: listInstances
+      summary: List Instances
+      parameters:
+        - name: workspace
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: InstanceList
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/InstanceList"
+    post:
+      operationId: createInstance
+      summary: Create an Instance
+      parameters:
+        - name: workspace
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/Instance"
+      responses:
+        "201":
+          description: Instance
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Instance"
+  /workspaces/{workspace}/instances/{name}:
+    get:
+      operationId: readInstance
+      summary: Read an Instance
+      parameters:
+        - name: workspace
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Instance
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Instance"
+    put:
+      operationId: replaceInstance
+      summary: Replace an Instance
+      parameters:
+        - name: workspace
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/Instance"
+      responses:
+        "200":
+          description: Instance
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Instance"
+    patch:
+      operationId: patchInstance
+      summary: Patch an Instance
+      parameters:
+        - name: workspace
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Instance
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Instance"
+    delete:
+      operationId: deleteInstance
+      summary: Delete an Instance
+      parameters:
+        - name: workspace
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Status"
+  /workspaces/{workspace}/networks:
+    get:
+      operationId: listNetworks
+      summary: List Networks
+      parameters:
+        - name: workspace
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: NetworkList
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/NetworkList"
+    post:
+      operationId: createNetwork
+      summary: Create a Network
+      parameters:
+        - name: workspace
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/Network"
+      responses:
+        "201":
+          description: Network
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Network"
+  /workspaces/{workspace}/networks/{name}:
+    get:
+      operationId: readNetwork
+      summary: Read a Network
+      parameters:
+        - name: workspace
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Network
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Network"
+    put:
+      operationId: replaceNetwork
+      summary: Replace a Network
+      parameters:
+        - name: workspace
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/Network"
+      responses:
+        "200":
+          description: Network
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Network"
+    delete:
+      operationId: deleteNetwork
+      summary: Delete a Network
+      parameters:
+        - name: workspace
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Status"
+  /workspaces/{workspace}/stacks:
+    get:
+      operationId: listStacks
+      summary: List Stacks
+      parameters:
+        - name: workspace
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: StackList
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StackList"
+    post:
+      operationId: createStack
+      summary: Create a Stack
+      parameters:
+        - name: workspace
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/Stack"
+      responses:
+        "201":
+          description: Stack
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Stack"
+  /workspaces/{workspace}/stacks/{name}:
+    get:
+      operationId: readStack
+      summary: Read a Stack
+      parameters:
+        - name: workspace
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Stack
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Stack"
+    put:
+      operationId: replaceStack
+      summary: Replace a Stack
+      parameters:
+        - name: workspace
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/Stack"
+      responses:
+        "200":
+          description: Stack
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Stack"
+    delete:
+      operationId: deleteStack
+      summary: Delete a Stack
+      parameters:
+        - name: workspace
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Status"
+  /workspaces/{workspace}/configs:
+    get:
+      operationId: listConfigs
+      summary: List Configs
+      parameters:
+        - name: workspace
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: ConfigList
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ConfigList"
+    post:
+      operationId: createConfig
+      summary: Create a Config
+      parameters:
+        - name: workspace
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/Config"
+      responses:
+        "201":
+          description: Config
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Config"
+  /workspaces/{workspace}/configs/{name}:
+    get:
+      operationId: readConfig
+      summary: Read a Config
+      parameters:
+        - name: workspace
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Config
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Config"
+    put:
+      operationId: replaceConfig
+      summary: Replace a Config
+      parameters:
+        - name: workspace
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/Config"
+      responses:
+        "200":
+          description: Config
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Config"
+    delete:
+      operationId: deleteConfig
+      summary: Delete a Config
+      parameters:
+        - name: workspace
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Status"
+  /workspaces/{workspace}/secrets:
+    get:
+      operationId: listSecrets
+      summary: List Secrets
+      parameters:
+        - name: workspace
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: SecretList
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SecretList"
+    post:
+      operationId: createSecret
+      summary: Create a Secret
+      parameters:
+        - name: workspace
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/Secret"
+      responses:
+        "201":
+          description: Secret
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Secret"
+  /workspaces/{workspace}/secrets/{name}:
+    get:
+      operationId: readSecret
+      summary: Read a Secret
+      parameters:
+        - name: workspace
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Secret
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Secret"
+    put:
+      operationId: replaceSecret
+      summary: Replace a Secret
+      parameters:
+        - name: workspace
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/Secret"
+      responses:
+        "200":
+          description: Secret
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Secret"
+    delete:
+      operationId: deleteSecret
+      summary: Delete a Secret
+      parameters:
+        - name: workspace
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Status"
+  /workspaces:
+    get:
+      operationId: listWorkspaces
+      summary: List Workspaces
+      responses:
+        "200":
+          description: WorkspaceList
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WorkspaceList"
+    post:
+      operationId: createWorkspace
+      summary: Create a Workspace
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/Workspace"
+      responses:
+        "201":
+          description: Workspace
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Workspace"
+  /workspaces/{name}:
+    get:
+      operationId: readWorkspace
+      summary: Read a Workspace
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Workspace
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Workspace"
+    put:
+      operationId: replaceWorkspace
+      summary: Replace a Workspace
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/Workspace"
+      responses:
+        "200":
+          description: Workspace
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Workspace"
+    delete:
+      operationId: deleteWorkspace
+      summary: Delete a Workspace
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Status"
+  /organizations/{organization}/projects/{project}:
+    get:
+      operationId: getProject
+      summary: Get a project
+      parameters:
+        - name: organization
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: project
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Project
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Project"
+    patch:
+      operationId: updateProject
+      summary: Update a project
+      parameters:
+        - name: organization
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: project
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/Project"
+      responses:
+        "200":
+          description: Project
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Project"
+    delete:
+      operationId: deleteProject
+      summary: Delete a project
+      parameters:
+        - name: organization
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: project
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "204":
+          description: Deleted
+  /organizations/{organization}/projects:
+    get:
+      operationId: listProjectsForOrganization
+      summary: List organization projects
+      parameters:
+        - name: organization
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Projects
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProjectList"
+    post:
+      operationId: createProjectForOrganization
+      summary: Create an organization project
+      parameters:
+        - name: organization
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/Project"
+      responses:
+        "201":
+          description: Project
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Project"
+  /organizations/{organization}/projects/{project}/tasks:
+    get:
+      operationId: listTasks
+      summary: List project tasks
+      parameters:
+        - name: organization
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: project
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Tasks
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TaskList"
+    post:
+      operationId: createTask
+      summary: Create an task
+      parameters:
+        - name: organization
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: project
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/Task"
+      responses:
+        "201":
+          description: Task
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Task"
+  /organizations/{organization}/projects/{project}/tasks/{task_number}:
+    get:
+      operationId: getTask
+      summary: Get an task
+      parameters:
+        - name: organization
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: project
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: task_number
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Task
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Task"
+    patch:
+      operationId: updateTask
+      summary: Update an task
+      parameters:
+        - name: organization
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: project
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: task_number
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/Task"
+      responses:
+        "200":
+          description: Task
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Task"
+  /organizations/{organization}/projects/{project}/pull_requests:
+    get:
+      operationId: listPullRequests
+      summary: List pull requests
+      parameters:
+        - name: organization
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: project
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Pull requests
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PullRequestList"
+    post:
+      operationId: createPullRequest
+      summary: Create a pull request
+      parameters:
+        - name: organization
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: project
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PullRequest"
+      responses:
+        "201":
+          description: Pull request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PullRequest"
+  /organizations/{organization}/projects/{project}/pull_requests/{pull_number}:
+    get:
+      operationId: getPullRequest
+      summary: Get a pull request
+      parameters:
+        - name: organization
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: project
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: pull_number
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Pull request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PullRequest"
+    patch:
+      operationId: updatePullRequest
+      summary: Update a pull request
+      parameters:
+        - name: organization
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: project
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: pull_number
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PullRequest"
+      responses:
+        "200":
+          description: Pull request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PullRequest"
+  /members:
+    get:
+      operationId: listMembers
+      summary: List members
+      responses:
+        "200":
+          description: Members
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MemberList"
+  /members/{member}:
+    get:
+      operationId: getMember
+      summary: Get a member
+      parameters:
+        - name: member
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Member
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Member"
+  /organizations/{organization}/projects/{project}/branches:
+    get:
+      operationId: listBranches
+      summary: List branches
+      parameters:
+        - name: organization
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: project
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Branches
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BranchList"
+  /organizations/{organization}/projects/{project}/branches/{branch}:
+    get:
+      operationId: getBranch
+      summary: Get a branch
+      parameters:
+        - name: organization
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: project
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: branch
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Branch
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Branch"
+  /organizations/{organization}/projects/{project}/commits:
+    get:
+      operationId: listCommits
+      summary: List commits
+      parameters:
+        - name: organization
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: project
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Commits
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CommitList"
+  /organizations/{organization}/projects/{project}/commits/{ref}:
+    get:
+      operationId: getCommit
+      summary: Get a commit
+      parameters:
+        - name: organization
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: project
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: ref
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Commit
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Commit"
+components:
+  schemas:
+    Container:
+      type: object
+      required:
+        - name
+      properties:
+        name:
+          type: string
+        image:
+          type: string
+        imagePullPolicy:
+          type: string
+    Instance:
+      type: object
+      required:
+        - name
+        - workspace
+      properties:
+        apiVersion:
+          type: string
+        kind:
+          type: string
+        name:
+          type: string
+        workspace:
+          type: string
+        labels:
+          type: object
+          additionalProperties:
+            type: string
+        spec:
+          type: object
+          properties:
+            containers:
+              type: array
+              items:
+                $ref: "#/components/schemas/Container"
+        status:
+          type: object
+          properties:
+            phase:
+              type: string
+    InstanceList:
+      type: array
+      items:
+        $ref: "#/components/schemas/Instance"
+    Network:
+      type: object
+      required:
+        - name
+        - workspace
+      properties:
+        apiVersion:
+          type: string
+        kind:
+          type: string
+        name:
+          type: string
+        workspace:
+          type: string
+        spec:
+          type: object
+          properties:
+            ipAddress:
+              type: string
+            ports:
+              type: array
+              items:
+                type: object
+                properties:
+                  name:
+                    type: string
+                  port:
+                    type: integer
+                    format: int32
+                  protocol:
+                    type: string
+            selector:
+              type: object
+              additionalProperties:
+                type: string
+        status:
+          type: object
+          properties:
+            loadBalancer:
+              type: object
+    NetworkList:
+      type: array
+      items:
+        $ref: "#/components/schemas/Network"
+    Stack:
+      type: object
+      required:
+        - name
+        - workspace
+      properties:
+        apiVersion:
+          type: string
+        kind:
+          type: string
+        name:
+          type: string
+        workspace:
+          type: string
+        spec:
+          type: object
+          properties:
+            replicas:
+              type: integer
+              format: int32
+            selector:
+              type: object
+              additionalProperties:
+                type: string
+        status:
+          type: object
+          properties:
+            readyReplicas:
+              type: integer
+              format: int32
+    StackList:
+      type: array
+      items:
+        $ref: "#/components/schemas/Stack"
+    Config:
+      type: object
+      required:
+        - name
+        - workspace
+      properties:
+        apiVersion:
+          type: string
+        kind:
+          type: string
+        name:
+          type: string
+        workspace:
+          type: string
+        data:
+          type: object
+          additionalProperties:
+            type: string
+    ConfigList:
+      type: array
+      items:
+        $ref: "#/components/schemas/Config"
+    Secret:
+      type: object
+      required:
+        - name
+        - workspace
+      properties:
+        apiVersion:
+          type: string
+        kind:
+          type: string
+        name:
+          type: string
+        workspace:
+          type: string
+        type:
+          type: string
+        data:
+          type: object
+          additionalProperties:
+            type: string
+    SecretList:
+      type: array
+      items:
+        $ref: "#/components/schemas/Secret"
+    Workspace:
+      type: object
+      required:
+        - name
+      properties:
+        apiVersion:
+          type: string
+        kind:
+          type: string
+        name:
+          type: string
+        labels:
+          type: object
+          additionalProperties:
+            type: string
+        status:
+          type: object
+          properties:
+            phase:
+              type: string
+    WorkspaceList:
+      type: array
+      items:
+        $ref: "#/components/schemas/Workspace"
+    Status:
+      type: object
+      properties:
+        kind:
+          type: string
+        phase:
+          type: string
+
+    Project:
+      type: object
+      properties:
+        id:
+          type: integer
+          format: int64
+        organization:
+          type: string
+        project:
+          type: string
+        name:
+          type: string
+        full_name:
+          type: string
+        description:
+          type: string
+        private:
+          type: boolean
+        default_branch:
+          type: string
+        html_url:
+          type: string
+    ProjectList:
+      type: array
+      items:
+        $ref: "#/components/schemas/Project"
+    Task:
+      type: object
+      properties:
+        id:
+          type: integer
+          format: int64
+        organization:
+          type: string
+        project:
+          type: string
+        number:
+          type: integer
+          format: int32
+        task_number:
+          type: integer
+          format: int32
+        title:
+          type: string
+        body:
+          type: string
+        state:
+          type: string
+        html_url:
+          type: string
+    TaskList:
+      type: array
+      items:
+        $ref: "#/components/schemas/Task"
+    PullRequest:
+      type: object
+      properties:
+        id:
+          type: integer
+          format: int64
+        organization:
+          type: string
+        project:
+          type: string
+        number:
+          type: integer
+          format: int32
+        pull_number:
+          type: integer
+          format: int32
+        title:
+          type: string
+        body:
+          type: string
+        state:
+          type: string
+        merged:
+          type: boolean
+        html_url:
+          type: string
+    PullRequestList:
+      type: array
+      items:
+        $ref: "#/components/schemas/PullRequest"
+    Member:
+      type: object
+      properties:
+        id:
+          type: integer
+          format: int64
+        handle:
+          type: string
+        member:
+          type: string
+        name:
+          type: string
+        avatar_url:
+          type: string
+        html_url:
+          type: string
+    MemberList:
+      type: array
+      items:
+        $ref: "#/components/schemas/Member"
+    Branch:
+      type: object
+      properties:
+        id:
+          type: integer
+          format: int64
+        organization:
+          type: string
+        project:
+          type: string
+        name:
+          type: string
+        branch:
+          type: string
+        sha:
+          type: string
+        protected:
+          type: boolean
+    BranchList:
+      type: array
+      items:
+        $ref: "#/components/schemas/Branch"
+    Commit:
+      type: object
+      properties:
+        sha:
+          type: string
+        organization:
+          type: string
+        project:
+          type: string
+        ref:
+          type: string
+        message:
+          type: string
+        author_name:
+          type: string
+        committed_at:
+          type: string
+    CommitList:
+      type: array
+      items:
+        $ref: "#/components/schemas/Commit"
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer

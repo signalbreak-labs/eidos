@@ -1,0 +1,129 @@
+openapi: "3.1.0"
+info:
+  title: Complex Polymorphism API
+  version: "1.0.0"
+  description: Reference spec exercising oneOf, anyOf, allOf, discriminator, readOnly, writeOnly, and nullable schemas.
+servers:
+  - url: https://example.com
+security:
+  - oauth2: [read, write]
+paths:
+  /pets/{id}:
+    get:
+      operationId: getPolymorphicPet
+      summary: Get a polymorphic pet
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: A pet
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Pet"
+    post:
+      operationId: createPolymorphicPet
+      summary: Create a polymorphic pet
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/Pet"
+      responses:
+        "201":
+          description: Created pet
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Pet"
+  /animals:
+    get:
+      operationId: listAnimals
+      summary: List animals using anyOf union
+      responses:
+        "200":
+          description: Animals
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Animal"
+components:
+  schemas:
+    Pet:
+      oneOf:
+        - $ref: "#/components/schemas/Cat"
+        - $ref: "#/components/schemas/Dog"
+      discriminator:
+        propertyName: petType
+        mapping:
+          cat: "#/components/schemas/Cat"
+          dog: "#/components/schemas/Dog"
+    Cat:
+      allOf:
+        - $ref: "#/components/schemas/PetBase"
+      properties:
+        name:
+          type: string
+        livesRemaining:
+          type: integer
+          minimum: 0
+          maximum: 9
+    Dog:
+      anyOf:
+        - $ref: "#/components/schemas/PetBase"
+      properties:
+        breed:
+          type: string
+        friendly:
+          type: boolean
+    PetBase:
+      type: object
+      properties:
+        id:
+          type: string
+          readOnly: true
+        secret:
+          type: string
+          writeOnly: true
+        nickname:
+          type:
+            - string
+            - "null"
+        petType:
+          type: string
+      required:
+        - petType
+    Animal:
+      anyOf:
+        - $ref: "#/components/schemas/Bird"
+        - $ref: "#/components/schemas/Fish"
+    Bird:
+      type: object
+      properties:
+        species:
+          type: string
+        wingspan:
+          type: number
+    Fish:
+      type: object
+      properties:
+        species:
+          type: string
+        depth:
+          type: integer
+  securitySchemes:
+    oauth2:
+      type: oauth2
+      flows:
+        clientCredentials:
+          tokenUrl: https://example.com/oauth/token
+          scopes:
+            read: Read access
+            write: Write access

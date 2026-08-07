@@ -1,0 +1,252 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+      - initiative/**
+      - epic/**
+  # Run CI on pull requests from any branch (including Brehon worker branches and
+  # forks). The workflow only needs the actions:write permission to upload build
+  # artifacts; secrets are not exposed to fork PRs by default.
+  pull_request:
+    branches:
+      - '**'
+
+permissions:
+  contents: read
+
+# Cancel superseded runs on the same ref. PRs cancel in progress; pushes to
+# long-lived branches run to completion so a green run is always recorded.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Set up Go
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      # golangci-lint runs the gofmt/goimports formatters and the enabled
+      # linters (revive, gocritic, gosec, errorlint, errcheck, ...). Pin a
+      # version built with a Go toolchain >= the one in go.mod: golangci-lint
+      # cannot lint code targeting a newer Go than it was built with (the
+      # project targets go 1.26, so v2.2.1 — built with go 1.24 — fails to
+      # load the config). v2.12.2 is built with go 1.26. Bump this pin when
+      # go.mod's `go` directive advances past the linter's build Go.
+      - name: Run golangci-lint
+        uses: golangci/golangci-lint-action@9fae48acfc02a90574d7c304a1758ef9895495fa # v7
+        with:
+          version: v2.12.2
+          args: ./...
+
+  build-and-test:
+    name: Build and Test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Set up Go
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      # Fail fast if go.mod/go.sum are not tidy: a PR that changes deps must
+      # commit the resulting go.sum so the build is reproducible offline.
+      - name: go mod tidy check
+        run: |
+          go mod tidy
+          git diff --exit-code -- go.mod go.sum
+
+      - name: Build
+        run: go build -v ./...
+
+      - name: Test
+        run: go test -v -race -coverprofile=coverage.out ./...
+
+      # Regenerate the golden snapshots and fail on any diff. TestGoldenFiles
+      # above already fails on stale snapshots; regenerating first additionally
+      # catches nondeterministic generation (timestamps, map ordering), which
+      # must never reach users.
+      - name: Generation determinism check
+        run: |
+          EIDOS_UPDATE_GOLDEN=1 go test -run TestGoldenFiles ./pkg/generator
+          git diff --exit-code -- testfixtures/golden/
+
+      # Regenerate the sample generated provider (examples/mycloud-provider)
+      # and fail on any diff, so the checked-in sample always reflects the
+      # current reference spec and generator output.
+      - name: Sample provider determinism check
+        run: |
+          go run ./cmd/eidos generate --spec test/specs/mycloud.yaml --output examples/mycloud-provider
+          git diff --exit-code -- examples/mycloud-provider/
+
+      - name: Upload coverage artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: coverage-report
+          path: coverage.out
+          if-no-files-found: error
+
+      # Tokenless upload works for public repos; never let coverage reporting
+      # gate the build.
+      - name: Upload to Codecov
+        uses: codecov/codecov-action@0fb7174895f61a3b6b78fc075e0cd60383518dac # v5
+        with:
+          files: ./coverage.out
+          fail_ci_if_error: false
+
+  # End-to-end: generates a provider module from a fixture IR and runs
+  # terraform plan/apply/destroy against the generated stateful mock API (an
+  # in-process httptest server), proving wired CRUD bodies work against a real
+  # Terraform run. terraform-plugin-testing downloads a terraform binary, so
+  # this job needs network access but no credentials.
+  mock-e2e:
+    name: Mock-server e2e
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Set up Go
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Run wired acceptance lifecycle
+        run: EIDOS_RUN_NETWORK_TESTS=1 go test -v -run 'TestResourceAcceptanceTestFile_(Lifecycle|AuthLifecycle|OAuth2Lifecycle)' ./pkg/generator
+
+  # Detect whether anything that could change the *generated* release tooling
+  # was touched in this change set. The release-tooling job below uses this
+  # output to decide whether the expensive GoReleaser snapshot run is needed.
+  changes:
+    name: Detect changes
+    runs-on: ubuntu-latest
+    outputs:
+      release-tooling: ${{ steps.filter.outputs.release-tooling }}
+    steps:
+      # fetch-depth: 0 so paths-filter can diff against the previous commit on
+      # push events (it uses the GitHub API for pull_request events).
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+
+      - uses: dorny/paths-filter@d1c1ffe0248fe513906c8e24db8ea791d46f8590 # v3
+        id: filter
+        with:
+          filters: |
+            release-tooling:
+              # The generated .goreleaser.yml template (goreleaserYAML const,
+              # Goreleaser(), BuildConfig fields it consumes).
+              - 'pkg/generator/build_files.go'
+              # The GoReleaser pin below — a version bump must re-validate the
+              # generated config against the new GoReleaser.
+              - '.github/workflows/ci.yml'
+              # The snapshot test itself.
+              - 'test/goreleaser_snapshot_test.go'
+              # The repo-root .goreleaser.yml (eidos' own release config) is
+              # validated by the same job; a broken config must not surface
+              # for the first time at tag time.
+              - '.goreleaser.yml'
+
+  # Verifies that the .goreleaser.yml eidos *generates* into downstream
+  # provider repos produces Terraform Registry-compatible artifacts (correct
+  # binary name, archives, checksums). This is the only runtime guard on the
+  # generated release tooling; the template's *content* is already covered by
+  # TestGoldenFiles in build-and-test. The full cross-compile matrix is
+  # expensive, so this job only runs when the template, the GoReleaser pin, or
+  # the test itself changes — not on every PR.
+  release-tooling:
+    name: Generated release tooling
+    needs: changes
+    if: ${{ needs.changes.outputs.release-tooling == 'true' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Set up Go
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      # Pin GoReleaser to a concrete tag rather than @latest so a future
+      # breaking change in GoReleaser cannot fail CI without a code change in
+      # this repo. setup-go adds $(go env GOPATH)/bin to PATH, so the test's
+      # exec.LookPath("goreleaser") finds this binary.
+      - name: Install GoReleaser
+        run: go install github.com/goreleaser/goreleaser/v2@v2.17.0
+
+      # Validate the repo-root .goreleaser.yml (eidos' own release config) so
+      # a broken config fails here instead of in the tag-triggered release
+      # workflows.
+      - name: Check root GoReleaser config
+        run: goreleaser check
+
+      - name: Test GoReleaser snapshot
+        run: go test -v -run TestGoreleaserSnapshot ./test
+
+  # eidos is a CLI users install on linux/darwin/windows. CI only runs on
+  # ubuntu, so compile-check every target platform to catch OS/Arch-specific
+  # breakage (e.g. runtime.GOOS conditionals) before it reaches a user.
+  cross-build:
+    name: Cross-build (${{ matrix.goos }}/${{ matrix.goarch }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        goos: [linux, darwin, windows]
+        goarch: [amd64, arm64]
+        exclude:
+          - goos: windows
+            goarch: arm64
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Set up Go
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Build
+        run: GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} CGO_ENABLED=0 go build -o /dev/null ./cmd/eidos
+
+  # govulncheck checks the dependency graph against the Go vulnerability
+  # database (gosec in golangci-lint is pattern-based and does not see this).
+  # If it becomes noisy on upstream CVEs, move it to a scheduled workflow.
+  vuln:
+    name: Vulnerability scan
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Set up Go
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Run govulncheck
+        uses: golang/govulncheck-action@032d45514ae346b1db93c04b0c90b841c370344f # v1
+        with:
+          go-args: ./...

@@ -1,0 +1,46 @@
+package transformer
+
+// SchemaSpec is a minimal normalized OpenAPI schema used by the transformer when
+// the parser/normalizer packages are not yet available. It carries enough
+// information to decide the Terraform Plugin Framework attribute type.
+//
+// The previous TypeMapping/FrameworkType/GoModelType cluster (MapSchemaType,
+// mapArrayType, mapObjectType, MapPrimitiveType, ApplyNullable, and the
+// mapStringFormat/mapIntegerFormat/mapNumberFormat helpers) lived here as a
+// parallel type-mapping surface that no production caller reached — only its own
+// tests. The live type mapping is schemaIRFromSpecRecursive / schemaIRFromSpec
+// (resource_schema.go, action.go), which already covers arrays, objects, maps,
+// nullable, and uniqueItems→Set, so the parallel surface was removed as dead
+// code (A1) rather than maintained as a correct-if-wired guarantee.
+type SchemaSpec struct {
+	Type                 string
+	Format               string
+	Nullable             bool
+	UniqueItems          bool
+	WriteOnly            bool
+	Required             []string
+	Items                *SchemaSpec
+	Properties           map[string]SchemaSpec
+	AdditionalProperties *SchemaSpec
+
+	// OneOf/AnyOf carry union composition captured during conversion so the IR
+	// can represent the union (SchemaIR.Union, D1) instead of dropping it with
+	// a warning. Top-level occurrences (the response/request root schema) are
+	// wired through to generation; nested occurrences are also captured (they
+	// render as Dynamic attributes) and still emit a fail-loud warning.
+	// RefName records the schema name a $ref resolved to (e.g. "Pet"), used to
+	// name union variants and wrapper attributes. Discriminator carries the
+	// OpenAPI discriminator declared alongside a oneOf.
+	OneOf         []SchemaSpec
+	AnyOf         []SchemaSpec
+	RefName       string
+	Discriminator *DiscriminatorSpec
+}
+
+// DiscriminatorSpec carries an OpenAPI discriminator object: the property
+// whose value selects the concrete variant, plus the optional value→schema
+// mapping.
+type DiscriminatorSpec struct {
+	PropertyName string
+	Mapping      map[string]string
+}

@@ -1,0 +1,56 @@
+openapi: "3.0.3"
+info:
+  title: Parameter Types API
+  version: "1.0.0"
+  description: Spec exercising path, query, header, and cookie parameter types.
+servers:
+  - url: https://example.com
+paths:
+  /items/{itemId}:
+    parameters:
+      - name: itemId
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: X-Request-ID
+        in: header
+        schema:
+          type: string
+    get:
+      operationId: getItem
+      summary: Get an item
+      parameters:
+        - name: includeDeleted
+          in: query
+          schema:
+            type: boolean
+        - name: session
+          in: cookie
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Item
+    delete:
+      operationId: deleteItem
+      summary: Delete an item
+      responses:
+        "204":
+          description: Deleted
+  /items:
+    get:
+      operationId: listItems
+      summary: List items
+      parameters:
+        - name: page
+          in: query
+          schema:
+            type: integer
+        - name: perPage
+          in: query
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Items

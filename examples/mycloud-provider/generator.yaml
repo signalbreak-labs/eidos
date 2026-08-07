@@ -1,0 +1,229 @@
+provider:
+    name: mycloud
+    display_name: terraform-provider-mycloud
+    version: 0.1.0
+    description: Trimmed MyCloud API reference spec for golden file regression tests. The schemas expose the path parameters (name, workspace) as top-level properties rather than nested under a metadata wrapper (a single-level metadata flattening is a documented follow-up in PROJECT_DESIGN §23) so the generator's path-parameter wiring is exercised end to end. The compute family (workspaces, instances, networks, stacks, configs, secrets) exercises workspace-scoped CRUD and list resources; the projects family (organizations, projects, tasks, pull requests, members, branches, commits) exercises organization-scoped data sources and list resources.
+    protocol_version: 6
+servers:
+    - url: https://api.mycloud.example/v1
+resource_overrides:
+    - schema: config
+      operation: createConfig
+      resource_name: config
+      id_attribute: id
+      import_format: '{workspace}:{name}'
+      computed_attributes:
+        - api_version
+        - data
+        - id
+        - kind
+    - schema: instance
+      operation: createInstance
+      resource_name: instance
+      id_attribute: id
+      import_format: '{workspace}:{name}'
+      computed_attributes:
+        - api_version
+        - id
+        - kind
+        - labels
+        - spec
+        - containers
+        - image
+        - image_pull_policy
+        - name
+        - status
+        - phase
+    - schema: network
+      operation: createNetwork
+      resource_name: network
+      id_attribute: id
+      import_format: '{workspace}:{name}'
+      computed_attributes:
+        - api_version
+        - id
+        - kind
+        - spec
+        - ip_address
+        - ports
+        - name
+        - port
+        - protocol
+        - selector
+        - status
+        - load_balancer
+    - schema: project
+      operation: createProjectForOrganization
+      resource_name: project
+      import_format: '{organization}:{project}'
+      computed_attributes:
+        - default_branch
+        - description
+        - full_name
+        - html_url
+        - id
+        - name
+        - organization
+        - private
+        - project
+    - schema: secret
+      operation: createSecret
+      resource_name: secret
+      id_attribute: id
+      import_format: '{workspace}:{name}'
+      computed_attributes:
+        - api_version
+        - data
+        - id
+        - kind
+        - type
+    - schema: stack
+      operation: createStack
+      resource_name: stack
+      id_attribute: id
+      import_format: '{workspace}:{name}'
+      computed_attributes:
+        - api_version
+        - id
+        - kind
+        - spec
+        - replicas
+        - selector
+        - status
+        - ready_replicas
+    - schema: workspace
+      operation: createWorkspace
+      resource_name: workspace
+      id_attribute: name
+      import_format: '{name}'
+      computed_attributes:
+        - api_version
+        - kind
+        - labels
+        - status
+        - phase
+    - schema: create_pull_request
+      operation: createPullRequest
+      resource_name: create_pull_request
+    - schema: update_pull_request
+      operation: updatePullRequest
+      resource_name: update_pull_request
+    - schema: create_task
+      operation: createTask
+      resource_name: create_task
+    - schema: update_task
+      operation: updateTask
+      resource_name: update_task
+datasource_overrides:
+    - operation: list_members
+      datasource_name: list_members
+    - operation: get_member
+      datasource_name: get_member
+    - operation: list_projects_for_organization
+      datasource_name: list_projects_for_organization
+    - operation: list_branches
+      datasource_name: list_branches
+    - operation: get_branch
+      datasource_name: get_branch
+    - operation: list_commits
+      datasource_name: list_commits
+    - operation: get_commit
+      datasource_name: get_commit
+    - operation: list_pull_requests
+      datasource_name: list_pull_requests
+    - operation: get_pull_request
+      datasource_name: get_pull_request
+    - operation: list_tasks
+      datasource_name: list_tasks
+    - operation: get_task
+      datasource_name: get_task
+    - operation: list_workspaces
+      datasource_name: list_workspaces
+    - operation: list_configs
+      datasource_name: list_configs
+    - operation: list_instances
+      datasource_name: list_instances
+    - operation: list_networks
+      datasource_name: list_networks
+    - operation: list_secrets
+      datasource_name: list_secrets
+    - operation: list_stacks
+      datasource_name: list_stacks
+list_resource_overrides:
+    - resource: list_members
+      operation: listMembers
+    - resource: list_projects_for_organization
+      operation: listProjectsForOrganization
+      config_schema:
+        - name: organization
+          type: string
+    - resource: list_branches
+      operation: listBranches
+      config_schema:
+        - name: organization
+          type: string
+        - name: project
+          type: string
+    - resource: list_commits
+      operation: listCommits
+      config_schema:
+        - name: organization
+          type: string
+        - name: project
+          type: string
+    - resource: list_pull_requests
+      operation: listPullRequests
+      config_schema:
+        - name: organization
+          type: string
+        - name: project
+          type: string
+    - resource: list_tasks
+      operation: listTasks
+      config_schema:
+        - name: organization
+          type: string
+        - name: project
+          type: string
+    - resource: list_workspaces
+      operation: listWorkspaces
+    - resource: list_configs
+      operation: listConfigs
+      config_schema:
+        - name: workspace
+          type: string
+    - resource: list_instances
+      operation: listInstances
+      config_schema:
+        - name: workspace
+          type: string
+    - resource: list_networks
+      operation: listNetworks
+      config_schema:
+        - name: workspace
+          type: string
+    - resource: list_secrets
+      operation: listSecrets
+      config_schema:
+        - name: workspace
+          type: string
+    - resource: list_stacks
+      operation: listStacks
+      config_schema:
+        - name: workspace
+          type: string
+logging:
+    max_body_bytes: 4096
+    redact_headers:
+        - Authorization
+        - X-API-Key
+        - Cookie
+auth:
+    - scheme: bearer
+      env_var: MYCLOUD_BEARERAUTH
+global_timeouts:
+    create: 20m
+    read: 10m
+    update: 20m
+    delete: 10m
+generate_terraform_tests: false

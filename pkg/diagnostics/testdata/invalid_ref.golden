@@ -1,0 +1,1 @@
+testdata/invalid_ref.yaml:14:23: error: Unresolvable $ref: Could not resolve token "components" at position 1 in "#/components/schemas/Missing".

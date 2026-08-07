@@ -1,0 +1,33 @@
+openapi: "3.0.3"
+info:
+  title: Link Example API
+  version: "1.0.0"
+  description: Demonstrates OpenAPI link definitions.
+servers:
+  - url: https://example.com
+paths:
+  /users:
+    get:
+      operationId: listUsers
+      summary: List users
+      responses:
+        "200":
+          description: Users
+          links:
+            userDetails:
+              operationId: getUser
+              parameters:
+                userId: $response.body#/users/0/id
+  /users/{userId}:
+    get:
+      operationId: getUser
+      summary: Get a user
+      parameters:
+        - name: userId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: User

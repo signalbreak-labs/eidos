@@ -1,0 +1,1 @@
+testdata/missing_info.yaml:1:1: error: Missing required field: OpenAPI document is missing the required 'info' object.

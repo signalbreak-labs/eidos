@@ -1,0 +1,146 @@
+[
+  {
+    "path": ".github/workflows/release.yml",
+    "reason": "GitHub Actions release workflow"
+  },
+  {
+    "path": ".goreleaser.yml",
+    "reason": "GoReleaser release configuration"
+  },
+  {
+    "path": "GNUmakefile",
+    "reason": "build and test automation"
+  },
+  {
+    "path": "README.md",
+    "reason": "provider overview and usage guide"
+  },
+  {
+    "path": "docs/data-sources/get_item.md",
+    "reason": "documentation for data source get_item"
+  },
+  {
+    "path": "docs/data-sources/list_items.md",
+    "reason": "documentation for data source list_items"
+  },
+  {
+    "path": "docs/index.md",
+    "reason": "provider overview and authentication guide"
+  },
+  {
+    "path": "docs/list-resources/list_items.md",
+    "reason": "documentation for list resource list_items"
+  },
+  {
+    "path": "docs/resources/delete_item.md",
+    "reason": "documentation for resource delete_item"
+  },
+  {
+    "path": "examples/data-sources/get_item/data-source.tf",
+    "reason": "example for data source get_item"
+  },
+  {
+    "path": "examples/data-sources/list_items/data-source.tf",
+    "reason": "example for data source list_items"
+  },
+  {
+    "path": "examples/resources/delete_item/resource.tf",
+    "reason": "example for resource delete_item"
+  },
+  {
+    "path": "generator.yaml",
+    "reason": "generated generator configuration"
+  },
+  {
+    "path": "go.mod",
+    "reason": "Go module definition"
+  },
+  {
+    "path": "internal/client/client.go",
+    "reason": "generated HTTP client"
+  },
+  {
+    "path": "internal/client/errors.go",
+    "reason": "typed API error helpers"
+  },
+  {
+    "path": "internal/client/logging.go",
+    "reason": "request/response trace logging"
+  },
+  {
+    "path": "internal/client/models.go",
+    "reason": "request/response model structs"
+  },
+  {
+    "path": "internal/client/pagination.go",
+    "reason": "pagination helpers"
+  },
+  {
+    "path": "internal/client/retry.go",
+    "reason": "retry logic with exponential backoff"
+  },
+  {
+    "path": "internal/protocol/value_mappers.go",
+    "reason": "tftypes.Value to Go struct converters"
+  },
+  {
+    "path": "internal/protocol/value_mappers_test.go",
+    "reason": "value mapper round-trip tests"
+  },
+  {
+    "path": "internal/provider/data_source_get_item.go",
+    "reason": "data source parameter_types_api_get_item"
+  },
+  {
+    "path": "internal/provider/data_source_get_item_test.go",
+    "reason": "unit tests for data source get_item"
+  },
+  {
+    "path": "internal/provider/data_source_list_items.go",
+    "reason": "data source parameter_types_api_list_items"
+  },
+  {
+    "path": "internal/provider/data_source_list_items_test.go",
+    "reason": "unit tests for data source list_items"
+  },
+  {
+    "path": "internal/provider/list_list_items.go",
+    "reason": "list resource parameter_types_api_list_items"
+  },
+  {
+    "path": "internal/provider/model_delete_item.go",
+    "reason": "API model for resource delete_item"
+  },
+  {
+    "path": "internal/provider/provider.go",
+    "reason": "provider schema and registration"
+  },
+  {
+    "path": "internal/provider/provider_test.go",
+    "reason": "provider-level unit tests"
+  },
+  {
+    "path": "internal/provider/resource_delete_item.go",
+    "reason": "resource parameter_types_api_delete_item"
+  },
+  {
+    "path": "internal/provider/resource_delete_item_acceptance_test.go",
+    "reason": "acceptance tests for resource delete_item"
+  },
+  {
+    "path": "internal/provider/resource_delete_item_test.go",
+    "reason": "unit tests for resource delete_item"
+  },
+  {
+    "path": "internal/provider/validators.go",
+    "reason": "custom schema validators"
+  },
+  {
+    "path": "main.go",
+    "reason": "provider server entrypoint"
+  },
+  {
+    "path": "terraform-registry-manifest.json",
+    "reason": "Terraform Registry manifest"
+  }
+]

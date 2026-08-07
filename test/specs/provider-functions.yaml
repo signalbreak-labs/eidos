@@ -1,0 +1,59 @@
+openapi: "3.0.3"
+info:
+  title: Search API
+  version: "1.0.0"
+  description: Reference spec exercising provider-defined function inference: GET operations on function-keyword paths (search/lookup) infer function signatures from parameters and the response schema (PROJECT_DESIGN §23). Function bodies stay honestly scaffolded by design (no remote endpoint modeled for the generated call).
+servers:
+  - url: https://search.example.com
+paths:
+  /search:
+    get:
+      operationId: searchUsers
+      summary: Search users
+      parameters:
+        - name: query
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            format: int32
+      responses:
+        "200":
+          description: Search result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SearchResult"
+  /lookup:
+    get:
+      operationId: lookupTags
+      summary: Look up tags
+      parameters:
+        - name: q
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Tags
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: string
+components:
+  schemas:
+    SearchResult:
+      type: object
+      properties:
+        query:
+          type: string
+        total:
+          type: integer
+          format: int32

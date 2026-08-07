@@ -1,0 +1,39 @@
+# Generated release workflow for terraform-provider-mycloud.
+# Configure GPG_PRIVATE_KEY and GPG_PASSPHRASE repository secrets before cutting
+# a signed release. To disable signed checksums, set SignRelease to false when
+# generating this workflow and also remove (or comment out) the signs: block in
+# .goreleaser.yml.
+
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Run GoReleaser
+        uses: goreleaser/goreleaser-action@v6
+        with:
+          version: "~> v2"
+          args: release --clean
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
