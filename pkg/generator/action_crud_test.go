@@ -132,6 +132,36 @@ func TestWiredActionInvoke_Render(t *testing.T) {
 	}
 }
 
+// TestWiredActionInvoke_ProgressMessages asserts that an action with
+// progress_messages: true emits a resp.SendProgress call before the request,
+// and that an action without it does not.
+func TestWiredActionInvoke_ProgressMessages(t *testing.T) {
+	a := wiredActionIR()
+	a.ProgressMessages = true
+
+	file := ActionFile(a, testClientImport)
+	var buf bytes.Buffer
+	if err := file.Render(&buf); err != nil {
+		t.Fatalf("Render() error = %v", err)
+	}
+	got := buf.String()
+
+	if !strings.Contains(got, `resp.SendProgress(action.InvokeProgressEvent{Message: "Invoking mycloud_reboot_server"})`) {
+		t.Errorf("generated wired Invoke body missing SendProgress call\n--- body ---\n%s", got)
+	}
+
+	// Without progress_messages, no SendProgress call is emitted.
+	a.ProgressMessages = false
+	file = ActionFile(a, testClientImport)
+	buf.Reset()
+	if err := file.Render(&buf); err != nil {
+		t.Fatalf("Render() error = %v", err)
+	}
+	if strings.Contains(buf.String(), "SendProgress") {
+		t.Errorf("action without progress_messages must not emit SendProgress\n--- body ---\n%s", buf.String())
+	}
+}
+
 // TestWiredActionInvoke_Compiles generates a full provider module with a wired
 // action and compiles it, proving the wired Invoke body, Configure method, and
 // client wiring are syntactically valid.
@@ -154,6 +184,34 @@ func TestWiredActionInvoke_Compiles(t *testing.T) {
 	buildCmd.Dir = tmp
 	if out, err := buildCmd.CombinedOutput(); err != nil {
 		t.Fatalf("go build ./... failed for wired action: %v\n%s", err, out)
+	}
+}
+
+// TestWiredActionInvoke_ProgressMessages_Compiles generates a full provider
+// module with a wired action that emits SendProgress and compiles it, proving
+// the resp.SendProgress call is syntactically valid against the framework's
+// action.InvokeResponse.
+func TestWiredActionInvoke_ProgressMessages_Compiles(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping network-bound compile test in -short mode")
+	}
+	a := wiredActionIR()
+	a.ProgressMessages = true
+	p := sampleProviderWithWiredActionIR(a)
+	tmp := generateWiredActionModule(t, p)
+
+	ctx, cancel := contextWithTimeout(t, 5*time.Minute)
+	defer cancel()
+
+	tidyCmd := exec.CommandContext(ctx, "go", "mod", "tidy")
+	tidyCmd.Dir = tmp
+	if out, err := tidyCmd.CombinedOutput(); err != nil {
+		t.Fatalf("go mod tidy failed: %v\n%s", err, out)
+	}
+	buildCmd := exec.CommandContext(ctx, "go", "build", "./...")
+	buildCmd.Dir = tmp
+	if out, err := buildCmd.CombinedOutput(); err != nil {
+		t.Fatalf("go build ./... failed for wired action with progress messages: %v\n%s", err, out)
 	}
 }
 

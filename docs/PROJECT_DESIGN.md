@@ -28,16 +28,16 @@
    - 7.1 [CLI (`cmd/eidos/`)](#71-cli)
      - 7.1.1 [Dry-Run Mode](#711-dry-run-mode)
      - 7.1.2 [Feature Validation Endpoint](#712-feature-validation-endpoint)
-     - 7.1.3 [MCP Tool for Configuration Generation](#713-mcp-tool-for-configuration-generation)
+     - 7.1.3 [MCP Server](#713-mcp-server)
      - 7.1.4 [Config File Generation from Detected Spec](#714-config-file-generation-from-detected-spec)
    - 7.2 [Parser (`pkg/parser/`)](#72-parser)
-   - 7.3 [Normalizer (`pkg/normalizer/`)](#73-normalizer)
-   - 7.4 [Transformer (`pkg/transform/`)](#74-transformer)
+   - 7.3 [Normalizer (`pkg/transformer/` — `normalizer_*.go`)](#73-normalizer)
+   - 7.4 [Transformer (`pkg/transformer/`)](#74-transformer)
    - 7.5 [Code Generator (`pkg/generator/`)](#75-code-generator)
-   - 7.6 [Protocol Layer Generator (`pkg/generator/protocol/`)](#76-protocol-layer-generator)
-   - 7.7 [Documentation Generator (`pkg/generator/docs/`)](#77-documentation-generator)
-   - 7.8 [HTTP Client Generator (`pkg/generator/client/`)](#78-http-client-generator)
-   - 7.9 [Test Generator (`pkg/generator/test/` — Go package `testgen`)](#79-test-generator)
+   - 7.6 [Protocol Layer Generator (`pkg/generator/`)](#76-protocol-layer-generator)
+   - 7.7 [Documentation Generator (`pkg/generator/`)](#77-documentation-generator)
+   - 7.8 [HTTP Client Generator (`pkg/generator/`)](#78-http-client-generator)
+   - 7.9 [Test Generator (`pkg/generator/`)](#79-test-generator)
    - 7.10 [Support Packages](#710-support-packages)
 8. [Terraform Plugin Framework Integration](#8-terraform-plugin-framework-integration)
    - 8.1 [Schema Generation](#81-schema-generation)
@@ -113,12 +113,12 @@ Eidos is under active development. The architecture, intermediate representation
 | Capability | Status | Notes |
 |------------|--------|-------|
 | OpenAPI 2.0 / 3.0.x / 3.1 parsing | Implemented | All three versions are parsed. Scalar type-mismatch diagnostics are emitted for OpenAPI 3.0.x/3.1.x and for Swagger 2.0 scalar fields at every depth (response `$ref`/description, `collectionFormat`, `externalDocs` description/URL, `additionalProperties` boolean, and the schema string/bool keywords). Any-value fields (`default`/`example`/`const`/`exclusiveMaximum`/`exclusiveMinimum`) are preserved via `nodeToNative` without warning, matching the 3.x converter and avoiding false positives on legitimate array/object values. Unquoted `openapi`/`swagger` version values are preserved as strings by the lexer. |
-| `$ref` resolution (local) | Implemented | Only local (same-document) JSON Pointer `$ref`s resolve. File and remote URL refs are rejected with a fail-loud error diagnostic rather than fetched (the remote-fetch `RefResolver` was removed from `pkg/parser/ref_external.go`). |
+| `$ref` resolution (local) | Implemented | Only local (same-document) JSON Pointer `$ref`s resolve. File and remote URL refs are rejected with a fail-loud error diagnostic rather than fetched (the remote-fetch `RefResolver` was removed; fetching a remote *spec* is handled separately by `cmd/eidos/remote_spec.go`, which never resolves `$ref`s inside it). |
 | IR normalization and transformation | Mostly implemented | Type mapping, CRUD inference, overrides, security mapping, and validator inference are functional. |
 | `eidos generate --dry-run` | Implemented | Produces a file list and summary from the real parsed `ProviderIR`. |
 | `eidos generate` (write mode) | Implemented | Writes generated files to `--output`, with overwrite guards controlled by `--force`. |
 | `eidos generate-config` | Implemented | Emits a starter `generator.yaml` from a spec. |
-| `eidos api` / `eidos mcp` | Implemented | Validation API and MCP `generate-config` tool are functional; the API server uses `MaxHeaderBytes`, access logging, and panic recovery. |
+| `eidos api` / `eidos mcp` | Implemented | Validation API and MCP server are functional; the MCP server advertises five tools (`eidos/generate-config`, `eidos/inspect`, `eidos/generate`, `eidos/validate-schemas`, `eidos/override-preview`); the API server uses `MaxHeaderBytes`, access logging, and panic recovery. |
 | Generated provider file list | Implemented | The generator records and writes the full set of files a provider needs. |
 | Generated resource CRUD bodies | Partial | `Create`/`Read`/`Update`/`Delete` are wired to the generated API client when the resource has a complete create/read/delete operation mapping (update optional); the provider `Configure` method constructs the client and the optional `endpoint` provider attribute overrides the API base URL. Resources with incomplete mappings keep honest runtime diagnostics. Request/response mapping is generic JSON↔model conversion; query/header/cookie params are wired. Request bodies are encoded per the selected media type — JSON (default), `application/x-www-form-urlencoded` (primitive `formData`), `multipart/form-data` (binary `formData`, read from the model field's path), and `application/xml` (`mapToXML`, best-effort element-per-field) — via `transformer.RequestBodyKind`; unsupported media types stay honestly scaffolded. |
 | Generated action / ephemeral / list / function bodies | Mostly wired | Ephemeral `Open` is wired, and `Renew`/`Close` wire when their mappings resolve (parameters are passed via ephemeral private state). Action `Invoke` is wired, and `ModifyPlan`/`ValidateConfig` wire when an explicit `modify_plan_operation`/`validate_config_operation` mapping is declared in `generator.yaml`. List resources wire when the list mapping resolves (identity from the paired instance path parameters or the item `id`), streaming results via the generated client with pagination. Provider-defined functions stay honestly scaffolded by design (no remote endpoint). Unresolvable mappings keep honest runtime diagnostics. |
@@ -176,61 +176,60 @@ For APIs that already publish OpenAPI specs, most of this work is mechanical and
 
 ## 4. High-Level Architecture
 
-```
-                              ┌──────────────────────┐
-                              │   CLI (cmd/eidos/)    │
-                              │  flags, config,       │
-                              │  orchestration        │
-                              └──────────┬───────────┘
+```text
+                             ┌────────────────────────┐
+                             │  CLI (cmd/eidos/)      │
+                             │  flags, config,        │
+                             │  orchestration         │
+                             └───────────┬────────────┘
                                          │
-                              ┌──────────▼───────────┐
-                               │     Parser            │
-                               │  dedicated in-house   │
-                               │  (2.0 / 3.0 / 3.1)   │
-                              └──────────┬───────────┘
+                             ┌───────────▼────────────┐
+                             │  Parser                │
+                             │  dedicated in-house    │
+                             │  (2.0 / 3.0 / 3.1)     │
+                             └───────────┬────────────┘
                                          │
-                              ┌──────────▼───────────┐
-                              │     Normalizer         │
-                              │  $ref dereference,     │
-                              │  allOf flatten,        │
-                              │  polymorphism resolve  │
-                              └──────────┬───────────┘
+                             ┌───────────▼────────────┐
+                             │  Normalizer            │
+                             │  $ref dereference,     │
+                             │  allOf flatten,        │
+                             │  polymorphism resolve  │
+                             └───────────┬────────────┘
                                          │
-                              ┌──────────▼───────────┐
-│  Intermediate          │
-│  Representation (IR)  │
-│  ProviderIR,           │
-│  ResourceIR,           │
-│  DataSourceIR,         │
-│  ActionIR,             │
-│  EphemeralResourceIR,  │
-│  ListResourceIR,       │
-│  SchemaIR, etc.        │
-                              └──────────┬───────────┘
+                             ┌───────────▼────────────┐
+                             │  Intermediate          │
+                             │  Representation (IR)   │
+                             │  ProviderIR,           │
+                             │  ResourceIR,           │
+                             │  DataSourceIR,         │
+                             │  ActionIR,             │
+                             │  EphemeralResourceIR,  │
+                             │  ListResourceIR,       │
+                             │  SchemaIR, etc.        │
+                             └───────────┬────────────┘
                                          │
-                              ┌──────────▼───────────┐
-                              │     Transformer        │
-                              │  OpenAPI → Terraform   │
-                              │  type mapping, CRUD    │
-                              │  inference, override    │
-                              │  application            │
-                              └──────────┬───────────┘
-                                         │
-          ┌───────────────────────────────┼──────────────────────────────────┐
-          │                               │                                  │
- ┌────────▼─────────┐  ┌─────────────────▼──────────────┐  ┌────────────────▼─────────────┐
- │  Code Generator   │  │   Documentation Generator       │  │   Test & Release Generator    │
- │  ├─ Provider      │  │   ├─ index.md                   │  │   ├─ acceptance_test.go        │
- │  ├─ Resources     │  │   ├─ resources/*.md             │  │   ├─ unit_test.go              │
- │  ├─ Data Sources  │  │   ├─ data-sources/*.md          │  │   ├─ .tftest.hcl               │
- │  ├─ Actions       │  │   ├─ actions/*.md               │  │   ├─ GNUmakefile               │
- │  ├─ Ephemeral     │  │   ├─ ephemeral-resources/*.md   │  │   ├─ .goreleaser.yml           │
- │  ├─ List Resources│  │   ├─ functions/*.md             │  │   └─ .github/workflows/        │
- │  ├─ Functions     │  │   └─ examples/                 │  │                                │
- │  ├─ Client        │  │                                 │  │                                │
- │  ├─ Protocol      │  │                                 │  │                                │
- │  └─ Models        │  │                                 │  │                                │
- └───────────────────┘  └─────────────────────────────────┘  └───────────────────────────────┘
+                             ┌───────────▼────────────┐
+                             │  Transformer           │
+                             │  OpenAPI → Terraform   │
+                             │  type mapping, CRUD    │
+                             │  inference, override   │
+                             │  application           │
+                             └───────────┬────────────┘
+          ┌──────────────────────────────┼──────────────────────────────────┐
+          │                              │                                  │
+ ┌────────▼──────────┐ ┌─────────────────▼──────────────┐  ┌────────────────▼─────────────┐
+ │  Code Generator   │ │   Documentation Generator      │  │   Test & Release Generator   │
+ │  ├─ Provider      │ │   ├─ index.md                  │  │   ├─ acceptance_test.go      │
+ │  ├─ Resources     │ │   ├─ resources/*.md            │  │   ├─ unit_test.go            │
+ │  ├─ Data Sources  │ │   ├─ data-sources/*.md         │  │   ├─ .tftest.hcl             │
+ │  ├─ Actions       │ │   ├─ actions/*.md              │  │   ├─ GNUmakefile             │
+ │  ├─ Ephemeral     │ │   ├─ ephemeral-resources/*.md  │  │   ├─ .goreleaser.yml         │
+ │  ├─ List Resources│ │   ├─ functions/*.md            │  │   └─ .github/workflows/      │
+ │  ├─ Functions     │ │   └─ examples/                 │  │                              │
+ │  ├─ Client        │ │                                │  │                              │
+ │  ├─ Protocol      │ │                                │  │                              │
+ │  └─ Models        │ │                                │  │                              │
+ └───────────────────┘ └────────────────────────────────┘  └──────────────────────────────┘
 ```
 
 ---
@@ -244,7 +243,7 @@ OpenAPI 2.0 (Swagger) introduces the foundational concepts that Eidos must handl
 | Feature | Description | Terraform Mapping |
 |---------|-------------|-------------------|
 | `swagger` | Version identifier (`"2.0"`) | Version detection in parser |
-| `host`, `basePath`, `schemes` | Server URL composition | Provider-level `host`, `base_url`, `scheme` config attributes |
+| `host`, `basePath`, `schemes` | Server URL composition | Default API base URL, overridable via the `endpoint` provider attribute |
 | `paths` + Operations | HTTP endpoints | Resource/Data Source CRUD methods |
 | `definitions` | Reusable schemas | `SchemaIR` → nested attributes/blocks |
 | `parameters` (path, query, header, body, formData) | Input parameters | Resource arguments, data source arguments |
@@ -265,15 +264,15 @@ OpenAPI 3.0 introduced significant structural changes over 2.0:
 | Feature | Description | Terraform Mapping |
 |---------|-------------|-------------------|
 | `openapi: "3.0.x"` | Version identifier | Version detection in parser |
-| `servers` / `serverVariables` | Replaces `host` + `basePath` + `schemes` | Provider config attributes with variable substitution |
+| `servers` / `serverVariables` | Replaces `host` + `basePath` + `schemes` | Default API base URL with variable substitution, overridable via the `endpoint` provider attribute |
 | `components` | Replaces top-level `definitions`, `parameters`, `responses`, `securitySchemes` | Unified component resolution |
 | `paths` + `operationId` | Uniquely identifies operations | Resource/data source name inference |
 | `requestBody` + `content` + `schema` | Replaces `body` / `formData` parameters | Resource Create/Update argument schemas |
-| `callbacks` | Out-of-band requests the API may make | **Action** (invoke action) or Ephemeral resource |
+| `callbacks` | Out-of-band requests the API may make | Parsed but not mapped to a Terraform construct |
 | `links` | Response-linked operations | Import hints, data source relations, or Action |
 | `components/securitySchemes` | Replaces `securityDefinitions` | Provider auth config; adds `http` (Basic/Bearer), `oauth2` flows, `openIdConnect` |
 | `nullable: true` | Explicit nullability | Computed + Optional attributes |
-| `readOnly: true` / `writeOnly: true` | Field directionality | `readOnly` → `Computed`; `writeOnly` → `WriteOnly: true` + `Sensitive` (Terraform 1.10+) |
+| `readOnly: true` / `writeOnly: true` | Field directionality | `readOnly` is parsed but not mapped (Computed-ness derives from request/response membership); `writeOnly` → `WriteOnly: true` + `Sensitive` (Terraform 1.10+) |
 | `deprecated: true` | Deprecation markers | Attribute deprecation messages |
 | `oneOf` / `anyOf` / `allOf` | Schema composition | See [Section 12](#12-polymorphism--complex-schemas) |
 | `discriminator` | Polymorphic type switching | See [Section 12](#12-polymorphism--complex-schemas) |
@@ -284,7 +283,7 @@ OpenAPI 3.0 introduced significant structural changes over 2.0:
 | `exclusiveMinimum` / `exclusiveMaximum` | Strict numeric bounds (3.1) | See [Section 5.4 Feature Mapping Matrix](#54-feature-mapping-matrix) |
 | `multipleOf` | Numeric multiple constraint (3.1) | See [Section 5.4 Feature Mapping Matrix](#54-feature-mapping-matrix) |
 | `unevaluatedProperties` | Controls unevaluated properties (3.1) | See [Section 5.4 Feature Mapping Matrix](#54-feature-mapping-matrix) |
-| `webhooks` (3.1 only) | Event-driven API descriptions | Provider-defined functions or ephemeral resources |
+| `webhooks` (3.1 only) | Event-driven API descriptions | Parsed but not mapped to a Terraform construct |
 
 ### 5.3 OpenAPI 3.1.x
 
@@ -294,11 +293,11 @@ OpenAPI 3.1 aligns with JSON Schema Draft 2020-12 and introduces:
 |---------|-------------|-------------------|
 | `jsonSchemaDialect` | Default `$schema` for Schema Objects | Validated but not directly mapped |
 | `type` arrays (e.g., `["string", "null"]`) | Union types at the schema level | `Optional` + `Computed` with nullable handling |
-| `prefixItems` | Ordered tuple validation | `ListNestedAttribute` with positional constraints |
-| `contentMediaType` / `contentEncoding` | Binary data description | `StringAttribute` with format validators (base64, binary) |
-| `$id` and `$ref` in Schema Objects | JSON Schema Draft 2020-12 reference resolution | Dereferenced during normalization with proper base URI resolution |
-| `webhooks` | Incoming webhook descriptions | Provider-level config or data sources |
-| `pathItems` in components | Reusable path items | Operation template reuse |
+| `prefixItems` | Ordered tuple validation | Parsed but not mapped to a Terraform construct |
+| `contentMediaType` / `contentEncoding` | Binary data description | Parsed but not mapped; no format validators are emitted |
+| `$id` and `$ref` in Schema Objects | JSON Schema Draft 2020-12 reference resolution | `$ref` is dereferenced; `$id` is not used for base-URI resolution |
+| `webhooks` | Incoming webhook descriptions | Parsed but not mapped to a Terraform construct |
+| `pathItems` in components | Reusable path items | Parsed but not mapped to a Terraform construct |
 | `not` / `const` / `if`-`then`-`else` | JSON Schema 2020-12 keywords | See [Section 5.4 Feature Mapping Matrix](#54-feature-mapping-matrix) |
 | `dependentRequired` / `dependentSchemas` | Conditional constraints | See [Section 5.4 Feature Mapping Matrix](#54-feature-mapping-matrix) |
 | `patternProperties` / `propertyNames` | Pattern-based property constraints | See [Section 5.4 Feature Mapping Matrix](#54-feature-mapping-matrix) |
@@ -317,60 +316,60 @@ The following matrix maps every major OpenAPI construct to its Terraform provide
 | `object` (with `additionalProperties`) | `MapAttribute` or `MapNestedAttribute` | `MapAttribute` for string→primitive, `MapNestedAttribute` for string→object |
 | `array` (of primitives) | `ListAttribute` or `SetAttribute` | `SetAttribute` when `uniqueItems: true` |
 | `array` (of objects) | `ListNestedAttribute` or `SetNestedAttribute` | `SetNestedAttribute` when `uniqueItems: true` |
-| `string` | `StringAttribute` | With format validators: `date-time`, `date`, `email`, `uuid`, `uri`, `password`, `byte`, `binary` |
+| `string` | `StringAttribute` | `format` is preserved as metadata; no format validators are emitted |
 | `number` | `Float64Attribute` | |
 | `integer` | `Int64Attribute` | |
 | `boolean` | `BoolAttribute` | |
-| `enum` | `StringAttribute` + `stringvalidator.OneOf()` | Or `Int64Attribute` + `int64validator.OneOf()` for integer enums |
-| `oneOf` | Dynamic union, discriminated nested blocks, or split resource types | Configurable per schema; see Section 12 |
-| `anyOf` | Union type with validators | See Section 12 |
+| `enum` | `StringAttribute` / `Int64Attribute` | Enum values are carried in the IR but no enum validator is emitted |
+| `oneOf` | Dynamic union, discriminated nested attribute, or split resource types | Configurable per schema; see Section 12 |
+| `anyOf` | Dynamic union (same rendering as `oneOf`) | See Section 12 |
 | `allOf` | Flattened merged object | All properties merged into one `SingleNestedAttribute` |
-| `discriminator` | Type-switched nested attribute | See Section 12 |
-| `$ref` | Dereferenced and inlined | Circular refs produce `Computed` opaque blocks |
-| `readOnly: true` | `Computed: true` + `Optional: true` | Read-only fields are computed on Read |
-| `writeOnly: true` | `WriteOnly: true` + `Sensitive: true` (Terraform 1.10+) | Not stored in state; requires `_wo_version` companion attribute |
+| `discriminator` | `SingleNestedAttribute` merging variant fields + `DiscriminatorValidator` (allowed-keys check) | See Section 12 |
+| `$ref` | Dereferenced and inlined | Circular refs are marked `Opaque` and treated as an opaque boundary (scalar fields kept, nested properties dropped) |
+| `readOnly: true` | Parsed but not mapped | Computed-ness is derived from request/response membership, not `readOnly` |
+| `writeOnly: true` | `WriteOnly: true` + `Sensitive: true` (Terraform 1.10+) | Renamed to `<name>_wo` with a companion `<name>_wo_version` Int64 attribute |
 | `nullable` / `type: ["string", "null"]` | `Optional` + `Computed` | Null is a valid state |
-| `default` | `Default: <value>` plan modifier | |
-| `minLength`, `maxLength` | `stringvalidator.LengthBetween()` | |
-| `minimum`, `maximum` | `int64validator.Between()` / `float64validator.Between()` | |
-| `pattern` | `stringvalidator.RegexMatches()` | |
-| `minItems`, `maxItems` | `listvalidator.SizeBetween()` | |
+| `default` | Carried in the IR; no `Default` schema field emitted | |
+| `minLength`, `maxLength` | Carried in the IR; no validator emitted | |
+| `minimum`, `maximum` | Carried in the IR; no validator emitted | Only the exclusive forms emit validators (below) |
+| `pattern` | Carried in the IR; no validator emitted | |
+| `minItems`, `maxItems` | Carried in the IR; no validator emitted | |
 | `uniqueItems` | Use `SetAttribute` / `SetNestedAttribute` | |
-| `format: "date-time"` | `stringvalidator.IsDateTime()` | Custom validator if not available |
-| `format: "email"` | `stringvalidator.IsEmailAddress()` | |
-| `format: "uuid"` | `stringvalidator.IsUUID()` | |
-| `format: "uri"` | `stringvalidator.IsURLWithScheme()` | |
-| `format: "password"` | `Sensitive: true` | |
-| `format: "byte"` | `StringAttribute` (base64) | |
-| `format: "binary"` | `StringAttribute` or custom type | Terraform has no native binary type; use base64 |
+| `format: "date-time"` | `StringAttribute` | No validator emitted |
+| `format: "email"` | `StringAttribute` | No validator emitted |
+| `format: "uuid"` | `StringAttribute` | No validator emitted |
+| `format: "uri"` | `StringAttribute` | No validator emitted |
+| `format: "password"` | `StringAttribute` | `Sensitive: true` is set for ephemeral-resource password-format properties and for write-only attributes, not for regular resource attributes |
+| `format: "byte"` | `StringAttribute` | No base64 encoding is applied |
+| `format: "binary"` | `StringAttribute` | Terraform has no native binary type; use base64 |
 | `format: "int32"` | `Int64Attribute` | Terraform only has Int64 |
 | `format: "int64"` | `Int64Attribute` | |
 | `format: "float"` | `Float64Attribute` | |
 | `format: "double"` | `Float64Attribute` | |
-| `deprecated: true` | `DeprecationMessage: "..."` plan modifier | |
+| `deprecated: true` | `DeprecationMessage: "..."` schema field | Not a plan modifier |
 | `example` / `x-examples` | Documentation defaults, acceptance test fixtures | |
 | `description` | `MarkdownDescription: "..."` | CommonMark support in Framework |
 | `externalDocs` | Documentation links in Markdown | |
 | `tags` | Resource categorization, doc sections | |
-| `not` | `stringvalidator.NoneOf(...)` or custom `NotValidator` | Simple enum negation uses `NoneOf`; complex negation generates custom validator |
-| `const` | `stringvalidator.OneOf(value)` or `Default: stringdefault.StaticString(value)` | Single-value enum; if server-controlled, use `Computed` + `Default` |
-| `if`/`then`/`else` | Resource-level `ConfigValidators()` with custom `ConditionalConfigValidator` | Generated validator inspects `if` condition and enforces `then`/`else` constraints |
-| `dependentRequired` | `stringvalidator.AlsoRequires(path.MatchRoot("..."))` | Per-trigger-attribute `AlsoRequires` validators |
-| `dependentSchemas` | Resource-level `ConfigValidators()` with custom `DependentSchemaValidator` | Generated validator runs sub-schema checks when trigger attribute is present |
-| `patternProperties` | `MapAttribute` (uniform type) or custom `PatternPropertiesValidator` | Multi-pattern heterogeneous types → custom validator |
-| `minProperties`/`maxProperties` | `mapvalidator.SizeBetween(min, max)` | Only for map types; fixed-schema objects skip |
-| `exclusiveMinimum`/`exclusiveMaximum` | `int64validator.AtLeast(n+1)` (int) or custom `ExclusiveBoundValidator` (float) | 3.0 boolean form normalized to 3.1 number form |
+| `not` | Carried in the IR; no validator emitted | |
+| `const` | Carried in the IR; no validator emitted | |
+| `if`/`then`/`else` | Carried in the IR; no validator emitted | |
+| `dependentRequired` | Custom `ConditionalValidator` | One per trigger attribute |
+| `dependentSchemas` | Carried in the IR; no validator emitted | |
+| `patternProperties` | Custom `PatternPropertiesValidator` | |
+| `minProperties`/`maxProperties` | Carried in the IR; no validator emitted | |
+| `exclusiveMinimum`/`exclusiveMaximum` | Custom `Int64ExclusiveMinimumValidator` / `Int64ExclusiveMaximumValidator` / `Float64ExclusiveMinimumValidator` / `Float64ExclusiveMaximumValidator` | 3.0 boolean form normalized to 3.1 number form |
 | `multipleOf` | Custom `Int64MultipleOfValidator` / `Float64MultipleOfValidator` | No built-in validator; generated custom validator |
-| `unevaluatedProperties` | No-op (closed schema) or overflow `MapAttribute` | After normalization, all properties are explicit; `false` → drop |
-| `propertyNames` | `mapvalidator.KeysAre(stringvalidator.RegexMatches(...))` | Only for map types; validates property name patterns |
+| `unevaluatedProperties` | Carried in the IR; no emission | |
+| `propertyNames` | Carried in the IR; no validator emitted | |
 | `securitySchemes` (apiKey) | Provider attribute `api_key` (Sensitive) | Header, query, or cookie placement |
 | `securitySchemes` (http Basic/Bearer) | Provider attributes `username`/`password` or `bearer_token` | |
 | `securitySchemes` (oauth2) | Provider attributes for each flow | `client_id`, `client_secret`, `token_url`, etc. |
 | `securitySchemes` (openIdConnect) | Provider attribute `oidc_token_url` | |
-| `servers` / `serverVariables` | Provider attributes `host`, `base_url` | Variable substitution in URL templates |
-| `callbacks` | **Action** (invoke action) — the API calls back with events | Trigger-style actions with progress messages |
-| `links` | Import hints, data source relations, or Action | Identify relationships between operations |
-| `webhooks` (3.1) | **Ephemeral resource** or **Action** | Short-lived credentials/tokens from webhook flows |
+| `servers` / `serverVariables` | Default API base URL, overridable via the `endpoint` provider attribute | Variable substitution in URL templates |
+| `callbacks` | Parsed; the declaring operation is classified by the standard heuristics | The callback object itself maps to no construct |
+| `links` | Parsed; the linked operations are classified by the standard heuristics | The link object itself maps to no construct |
+| `webhooks` (3.1) | Parsed but not mapped to a Terraform construct | Webhook operations are not processed by the transformer |
 | Non-CRUD operations (e.g., `POST /servers/{id}/reboot`) | **Action** (invoke action) | See Section 8.7 |
 | Collection `GET` endpoints (e.g., `GET /pets`) | **List Resource** (tfquery) | See Section 8.9 |
 | Token/credential endpoints (e.g., `POST /credentials/temporary`) | **Ephemeral resource** | See Section 8.8 |
@@ -408,8 +407,16 @@ const (
     Map  CollectionKind = "map"
 )
 
+type UnionKind string
+
+const (
+    OneOf UnionKind = "oneOf"
+    AnyOf UnionKind = "anyOf"
+)
+
 type UnionType struct {
-    Variants    []SchemaIR
+    Kind          UnionKind
+    Variants      []SchemaIR
     Discriminator *DiscriminatorIR
 }
 
@@ -431,6 +438,7 @@ type SchemaIR struct {
     Computed         bool
     Sensitive        bool
     WriteOnly        bool           // writeOnly: true → not stored in state (Terraform 1.10+)
+    ForceNew         bool           // x-terraform-force-new / forceNew marker
     Deprecated       bool
     DeprecationMessage string
     Default          *any
@@ -461,7 +469,13 @@ type SchemaIR struct {
     PropertyNames    *SchemaIR       // JSON Schema: validates property names
     UnevaluatedProperties *SchemaIR  // JSON Schema 2020-12: controls unevaluated properties
     OriginalRef      string   // Original $ref path for traceability
-    SourceLocation   string   // File:line for diagnostics
+    SourceLocation   *SourceLocation // Source position in the original spec
+}
+
+type SourceLocation struct {
+    File string
+    Line int
+    Col  int
 }
 ```
 
@@ -476,6 +490,7 @@ type ProviderIR struct {
     Description   string
     SourceSpec    string           // Path/URL of the original OpenAPI spec
     SourceSpecVersion string       // "2.0", "3.0.x", "3.1.x"
+    GenerateTerraformTests bool   // Emit native Terraform .tftest.hcl files
     ConfigSchema  ObjectSchemaIR  // Provider-level auth/endpoint config
     Resources     []ResourceIR
     DataSources   []DataSourceIR
@@ -507,6 +522,18 @@ type ResourceIR struct {
     Tags              []string
     DeprecationMessage string
     SourceOperation   string           // Primary operation ID for traceability
+    SchemaVersion     int              // State schema version (for state upgrades)
+    StateUpgrades     []StateUpgradeIR // Migrations from prior schema versions
+}
+
+type StateUpgradeIR struct {
+    FromVersion       int
+    Renames           map[string]string // old attribute name → current name
+    BlockRenames      map[string]string // old block name → current block name
+    AddedAttributes   []string
+    AddedBlocks       []string
+    RemovedAttributes []string
+    RemovedBlocks     []string
 }
 
 type CRUDMappingIR struct {
@@ -523,10 +550,14 @@ type OperationMappingIR struct {
     PathParams      []ParamIR
     QueryParams     []ParamIR
     HeaderParams    []ParamIR
+    CookieParams    []ParamIR
+    FormDataParams  []ParamIR
+    MediaType       string   // Request body media type (e.g. "application/json")
     BodySchema      *SchemaIR
     ResponseSchema  *SchemaIR
     SuccessCodes    []int
     ErrorMappings   map[int]ErrorMappingIR
+    SecurityRequirements []map[string][]string // Per-operation security (OR across alternatives)
 }
 ```
 
@@ -542,6 +573,9 @@ type DataSourceIR struct {
     ReadMapping   OperationMappingIR
     Tags          []string
     DeprecationMessage string
+    SourceOperation string
+    IsList        bool             // Read response is a top-level JSON array
+    Pagination    *PaginationIR    // Pagination strategy for a list data source
 }
 ```
 
@@ -555,9 +589,12 @@ type ActionIR struct {
     FullName          string           // e.g., "Reboot Server"
     TypeName          string           // e.g., "mycloud_reboot_server"
     Description       string
+    MarkdownDescription string
     ConfigSchema      ObjectSchemaIR  // Input parameters for the action
     InvokeMapping     OperationMappingIR // The HTTP call to make when invoked
     ModifyPlan        bool             // Whether to generate a ModifyPlan method (for API-accessible validation)
+    ModifyPlanMapping *OperationMappingIR // Explicit preflight endpoint (generator.yaml only)
+    ValidateConfigMapping *OperationMappingIR // Explicit server-side validation endpoint (generator.yaml only)
     ProgressMessages  bool             // Whether the action is long-running and should send progress messages
     Tags              []string
     SourceOperation   string           // Original OpenAPI operationId for traceability
@@ -596,7 +633,6 @@ type EphemeralResourceIR struct {
 - `POST /credentials/temporary` → ephemeral resource that returns time-limited credentials
 - `POST /sessions` with `writeOnly` response fields → ephemeral resource
 - Any operation where the response contains `writeOnly: true` fields that should never be stored in state
-- OpenAPI 3.1 `webhooks` that produce short-lived tokens or credentials
 
 ### 6.7 List Resource IR
 
@@ -629,10 +665,12 @@ type ListResourceIR struct {
 type ObjectSchemaIR struct {
     Attributes []AttributeIR
     Blocks     []BlockIR
+    DependentRequired map[string][]string // JSON Schema conditional required fields
 }
 
 type AttributeIR struct {
     Name             string
+    WireName         string   // Original OpenAPI property/parameter name when it differs from Name
     Schema           SchemaIR
     Description      string
     MarkdownDescription string
@@ -641,6 +679,7 @@ type AttributeIR struct {
     Computed         bool
     Sensitive        bool
     WriteOnly        bool           // writeOnly: true → not stored in state (Terraform 1.10+)
+    ForceNew         bool           // x-terraform-force-new / forceNew marker
     Deprecated       bool
     DeprecationMessage string
     Default          *any
@@ -652,8 +691,8 @@ type BlockIR struct {
     Name         string
     Schema       ObjectSchemaIR
     NestingMode BlockNestingMode // Single, List, Set
-    MinItems     *int
-    MaxItems     *int
+    MinItems     *int64
+    MaxItems     *int64
     Description  string
     Deprecated   bool
     DeprecationMessage string
@@ -755,6 +794,7 @@ type FunctionIR struct {
     FullName    string
     TypeName    string
     Description string
+    MarkdownDescription string
     Arguments   []AttributeIR
     ReturnType  SchemaIR
     Variadic    bool
@@ -771,6 +811,17 @@ type ClientIR struct {
     Timeout         time.Duration
     AuthMiddleware  []string  // ordered list of auth handler names
     Pagination      *PaginationIR
+    Logging         *LoggingIR
+}
+
+type LoggingIR struct {
+    LogFile                string
+    CaptureRequestHeaders  bool
+    CaptureRequestBody     bool
+    CaptureResponseHeaders bool
+    CaptureResponseBody    bool
+    MaxBodyBytes           int
+    RedactHeaders          []string
 }
 
 type PaginationIR struct {
@@ -800,39 +851,41 @@ type PaginationIR struct {
 **Package**: `cmd/eidos/`
 **Library**: `spf13/cobra`
 
-```
+```bash
 eidos generate \
   --spec ./api.yaml \
   --output ./terraform-provider-mycloud \
   --config ./generator.yaml \
-  --provider-name mycloud \
-  --provider-version 0.1.0 \
-  --protocol-version 6 \
-  --verbose
+  --dry-run
 ```
 
 | Flag | Description | Default |
 |------|-------------|---------|
-| `--spec` | Path to OpenAPI spec file (JSON or YAML) | Required |
-| `--output` | Output directory for generated provider | `./<provider-name>` |
+| `--spec` | Path to OpenAPI spec file (JSON or YAML), or an http(s) URL to fetch | Required |
+| `--output` | Output directory for generated provider | Required for full generation |
 | `--config` | Path to `generator.yaml` overrides file | None |
-| `--provider-name` | Terraform provider type name (e.g., `mycloud`) | Derived from `info.title` |
-| `--provider-version` | Semantic version for the generated provider | `0.1.0` |
-| `--protocol-version` | Terraform protocol version: `6` or `5` | `6` |
-| `--verbose` | Enable verbose logging | `false` |
-| `--format` | Run `gofmt` on output | `true` |
-| `--skip-tests` | Skip test generation | `false` |
-| `--skip-docs` | Skip documentation generation | `false` |
-| `--generate-terraform-tests` | Generate native `.tftest.hcl` files in the output `tests/` directory | `false` |
-| `--generate-config` | Emit a starter `generator.yaml` in the output directory | `false` |
-| `--dry-run` | Run the full pipeline but do not write files; print a summary of what would be generated | `false` |
-| `--dry-run-output` | Write the dry-run summary to a file (JSON or text) | stdout |
+| `--dry-run` | Run the full pipeline without writing files; print a summary | `false` |
+| `--dry-run-output` | Path to write the dry-run summary (JSON or text) | stdout |
+| `--generate-config` | Write a starter `generator.yaml` into the output directory | `false` |
+| `--force` | Overwrite an existing `generator.yaml` (with `--generate-config`) or existing generated provider files (write mode) | `false` |
+| `--provider-name` | Provider name for the starter config when used with `--generate-config` | Spec title |
+| `--generate-terraform-tests` | Generate native Terraform `.tftest.hcl` files | `false` |
+| `--spec-allow-http` | Permit `http://` spec URLs (https is the default for remote specs) | `false` |
+| `--spec-auth-scheme` | Authenticate a remote spec fetch: `bearer`, `basic`, `apiKey`, or `oauth2-client-credentials` | None |
+| `--spec-token-env` | Env var holding the bearer token for `--spec-auth-scheme bearer` | None |
+| `--spec-username-env` | Env var holding the username for `--spec-auth-scheme basic` | None |
+| `--spec-password-env` | Env var holding the password for `--spec-auth-scheme basic` | None |
+| `--spec-key-env` | Env var holding the API key for `--spec-auth-scheme apiKey` | None |
+| `--spec-header-name` | Header name the apiKey scheme sends the key in | None |
+| `--spec-token-url` | OAuth2 token endpoint for `--spec-auth-scheme oauth2-client-credentials` | None |
+| `--spec-client-id-env` | Env var holding the OAuth2 client ID | None |
+| `--spec-client-secret-env` | Env var holding the OAuth2 client secret | None |
 
 The CLI orchestrates the pipeline:
-1. **Parse** → `Parser.Parse(specBytes)` → raw OpenAPI document model
-2. **Normalize** → `Normalizer.Normalize(rawModel)` → dereferenced, flattened model
-3. **Transform** → `Transformer.Transform(normalizedModel, config)` → `ProviderIR`
-4. **Generate** → `Generator.Generate(providerIR, outputDir)` → file tree
+1. **Detect** → `parser.DetectVersion(root)` → OpenAPI version (2.0 / 3.0.x / 3.1.x)
+2. **Parse** → `convertForVersion(root, version)` → raw OpenAPI document model
+3. **Transform** → `buildIRPreview(sp, version, cfg)` → `ProviderIR`
+4. **Generate** → `generator.Run(provider, opts)` → file tree (record mode for `--dry-run`, write mode otherwise)
 
 ### 7.1.1 Dry-Run Mode
 
@@ -846,42 +899,56 @@ When `--dry-run` is set, the CLI:
 4. Prints a structured summary to stdout (and optionally to a file via `--dry-run-output`).
 5. Exits with code `0` on success or a non-zero code if the spec cannot be processed.
 
-**Summary output**:
+**Summary output** (from the reference `test/specs/mycloud.yaml`; the file list is truncated here for brevity — the real output prints every path):
 
 ```text
 Eidos dry-run summary for provider "mycloud"
-Spec: ./api.yaml (OpenAPI 3.0.3)
+Spec: test/specs/mycloud.yaml (OpenAPI 3.0)
 
 Generated constructs:
-  Resources:        3
-  Data sources:     2
-  Actions:          1
-  Ephemeral resources: 0
-  List resources:   1
-  Functions:        0
-  Security schemes: 1 (apiKey)
-  Write-only attributes: 2
+  Resources:            11
+  Data sources:         17
+  Actions:              0
+  Ephemeral resources:  0
+  List resources:       12
+  Functions:            0
+  Security schemes:     1
+  Write-only attributes:0
 
-Files that would be written (16):
-  internal/provider/provider.go
-  internal/provider/resource_pet.go
-  internal/provider/resource_server.go
-  internal/provider/resource_database.go
-  internal/provider/data_source_pet.go
-  internal/provider/data_source_pets.go
-  internal/provider/action_reboot_server.go
-  internal/provider/list_pet.go
-  internal/client/client.go
-  internal/client/auth.go
-  internal/client/models.go
+Files that would be written (180):
+  .github/workflows/release.yml
+  .goreleaser.yml
+  GNUmakefile
+  README.md
+  docs/data-sources/get_branch.md
   docs/index.md
-  docs/resources/pet.md
-  examples/resources/pet/resource.tf
-  tests/pet.tftest.hcl   (requires --generate-terraform-tests)
-  generator.yaml         (requires --generate-config)
+  docs/list-resources/list_branches.md
+  docs/resources/config.md
+  examples/resources/config/resource.tf
+  internal/client/auth.go
+  internal/client/client.go
+  internal/client/errors.go
+  internal/client/logging.go
+  internal/client/models.go
+  internal/client/pagination.go
+  internal/client/retry.go
+  internal/protocol/value_mappers.go
+  internal/protocol/value_mappers_test.go
+  internal/provider/data_source_get_branch.go
+  internal/provider/json_convert.go
+  internal/provider/model_config.go
+  internal/provider/provider.go
+  internal/provider/provider_test.go
+  internal/provider/resource_config.go
+  internal/provider/resource_config_acceptance_test.go
+  internal/provider/resource_config_test.go
+  internal/provider/validators.go
+  main.go
+  terraform-registry-manifest.json
+  …
 
 Diagnostics:
-  [info] Generated test files disabled; pass --generate-terraform-tests to include them
+  none
 ```
 
 **Flags**:
@@ -896,30 +963,34 @@ Diagnostics:
 ```json
 {
   "provider_name": "mycloud",
-  "spec_version": "3.0.3",
+  "spec": "test/specs/mycloud.yaml",
+  "spec_version": "3.0",
   "counts": {
-    "resources": 3,
-    "data_sources": 2,
-    "actions": 1,
+    "resources": 11,
+    "data_sources": 17,
+    "actions": 0,
     "ephemeral_resources": 0,
-    "list_resources": 1,
+    "list_resources": 12,
     "functions": 0,
     "security_schemes": 1,
-    "write_only_attributes": 2
+    "write_only_attributes": 0
   },
   "files": [
     { "path": "internal/provider/provider.go", "reason": "provider schema and registration" },
-    { "path": "internal/provider/resource_pet.go", "reason": "resource Pet" }
+    { "path": "internal/provider/resource_config.go", "reason": "resource config" }
   ],
+  "written": false,
   "diagnostics": []
 }
 ```
+
+`config_path` is present only when a `generator.yaml` overrides file was supplied; `written` is `false` for a dry-run and `true` after a full generation run.
 
 Dry-run mode shares the same code path as normal generation; only the final file-writer is replaced by a recorder, so the summary is always an accurate preview.
 
 ### 7.1.2 Feature Validation Endpoint
 
-Eidos includes a small built-in HTTP API (`cmd/eidos/api/`) that exposes a single endpoint designed to exercise and verify every generation feature supported by the project. This endpoint is used by the test suite and can be used by spec authors to confirm that Eidos will handle their constructs correctly.
+Eidos includes a small built-in HTTP API (`cmd/eidos/api.go`) that exposes a single endpoint designed to exercise and verify every generation feature supported by the project. This endpoint is used by the test suite and can be used by spec authors to confirm that Eidos will handle their constructs correctly.
 
 **Route**: `POST /api/v1/validate`
 
@@ -962,44 +1033,76 @@ Eidos includes a small built-in HTTP API (`cmd/eidos/api/`) that exposes a singl
       "Dog": { "type": "object", "properties": { "breed": { "type": "string" } } }
     }
   },
-  "config": "provider:\n  name: featuretest\n"
+  "config": "provider:\n  name: featuretest\n  version: 0.1.0\n"
 }
 ```
 
-**Response**:
+**Response** (abridged — `ir_preview` is the full `ProviderIR`):
 
 ```json
 {
   "valid": true,
   "diagnostics": [],
   "detected": {
-    "resources": 2,
-    "data_sources": 2,
+    "version": "3.0.3",
+    "title": "Feature Test",
+    "info_version": "1.0.0",
+    "paths": 1,
+    "schemas": 2,
+    "operations": 1,
+    "resources": 0,
+    "data_sources": 1,
     "actions": 0,
     "ephemeral_resources": 0,
     "list_resources": 0,
     "functions": 0,
     "security_schemes": 0,
-    "schemas_with_oneOf": 1,
+    "schemas_with_oneOf": 0,
     "schemas_with_allOf": 0,
+    "schemas_with_anyOf": 0,
     "write_only_attributes": 0,
-    "polymorphism_strategy": "split_resources"
+    "read_only_attributes": 0,
+    "nullable_attributes": 0,
+    "importable_resources": 0,
+    "state_upgraders": 0,
+    "generate_terraform_tests": false,
+    "logging_enabled": false
   },
   "ir_preview": {
-    "resources": [
+    "name": "featuretest",
+    "type_name": "featuretest",
+    "version": "0.1.0",
+    "source_spec_version": "3.0",
+    "data_sources": [
       {
-        "type_name": "featuretest_cat",
-        "schema": "Cat",
-        "crud": { "read": "GET /pets/{id}" }
-      },
-      {
-        "type_name": "featuretest_dog",
-        "schema": "Dog",
-        "crud": { "read": "GET /pets/{id}" }
+        "name": "get_pet",
+        "type_name": "featuretest_get_pet",
+        "schema": {
+          "attributes": [
+            {
+              "name": "value",
+              "schema": {
+                "union": {
+                  "kind": "oneOf",
+                  "variants": [
+                    { "name": "Cat", "attributes": [ { "name": "name", "schema": { "type": "string" }, "computed": true } ] },
+                    { "name": "Dog", "attributes": [ { "name": "breed", "schema": { "type": "string" }, "computed": true } ] }
+                  ],
+                  "discriminator": { "property_name": "petType", "mapping": null }
+                },
+                "computed": true
+              },
+              "computed": true
+            }
+          ]
+        },
+        "read_mapping": { "method": "GET", "path_template": "/pets/{id}", "success_codes": [200] }
       }
-    ]
+    ],
+    "client": {},
+    "security": {}
   },
-  "suggested_config": "provider:\n  name: featuretest\n  version: 0.1.0\n..."
+  "suggested_config": "provider:\n    name: featuretest\n    version: 0.1.0\n"
 }
 ```
 
@@ -1015,7 +1118,7 @@ The validation endpoint is intentionally designed to exercise every feature defi
 | `writeOnly` / `readOnly` / `nullable` | Flags detected attributes in `ir_preview` |
 | Security schemes | Lists detected schemes and mapped provider config attributes |
 | Resources, data sources, actions, ephemeral resources, list resources, functions | Counts and names each generated construct |
-| Pagination | Reports pagination style detected from `x-pagination` or response headers |
+| Pagination | Reports the pagination style from `generator.yaml` (`pagination_style`) |
 | Import support | Reports importable resources and import formats |
 | State upgraders | Reports version history if configured |
 | Provider-defined functions | Lists detected/declared functions |
@@ -1024,7 +1127,7 @@ The validation endpoint is intentionally designed to exercise every feature defi
 | `terraform test` files | Indicates whether `.tftest.hcl` generation would be enabled |
 | Config file generation | Includes a suggested `generator.yaml` in the response |
 
-The endpoint is implemented as a normal `net/http` handler in `cmd/eidos/api/validate.go` and can be started with `eidos api --port 8080`. It uses the same parser, normalizer, and transform package as the CLI so results are representative of real generation.
+The endpoint is implemented as a normal `net/http` handler in `cmd/eidos/api.go` and can be started with `eidos api --port 8080`. It uses the same parser, normalizer, and transform package as the CLI so results are representative of real generation.
 
 ### 7.1.3 MCP Server
 
@@ -1093,11 +1196,10 @@ In addition to accepting a user-authored `generator.yaml`, Eidos can **generate 
 
 **CLI command**:
 
-```
+```bash
 eidos generate-config \
   --spec ./api.yaml \
-  --output ./generator.yaml \
-  --include-comments
+  --output ./generator.yaml
 ```
 
 **Behavior**:
@@ -1107,79 +1209,78 @@ eidos generate-config \
 3. Emit a `generator.yaml` containing:
    - Detected `provider.name`, `provider.version`, and `provider.description`.
    - Detected `servers`.
-   - Detected security schemes with environment variable hints.
-   - Inferred resources, data sources, actions, ephemeral resources, list resources, and functions.
+   - Detected security schemes as `auth` entries with environment variable hints.
+   - Inferred `resource_overrides`, `datasource_overrides`, `action_overrides`, `ephemeral_resource_overrides`, `list_resource_overrides`, and `function_overrides`.
    - Detected polymorphism strategies (`dynamic_union` or `split_resources`) and variant names.
-   - Suggested `naming`, `timeouts`, and `pagination` blocks.
-   - Comments (when `--include-comments` is set) explaining why each inferred mapping was chosen and which fields may need manual adjustment.
+   - Suggested `global_timeouts`, `pagination`, and `logging` blocks.
+   - A `spec` block recording the source spec path and detected format (`openapi2`, `openapi3`, or `openapi31`).
 
-**Example generated config**:
+The CLI does not emit explanatory comments; the MCP `eidos/generate-config` tool accepts an `include_comments` parameter for that.
+
+**Example generated config** (trimmed from the reference `test/specs/mycloud.yaml`; the `provider.name`/`display_name` and `auth.env_var` values assume `--provider-name mycloud` — the default provider name is `generated`):
 
 ```yaml
 provider:
-  name: mycloud
-  version: 0.1.0
-  description: "Auto-generated from api.yaml (OpenAPI 3.0.3)"
-
+    name: mycloud
+    display_name: terraform-provider-mycloud
+    version: 0.1.0
+    description: Trimmed MyCloud API reference spec for golden file regression tests.
+    protocol_version: 6
 servers:
-  - url: "https://api.mycloud.io/v1"
-    description: "Production"
-
-security:
-  - scheme: apiKey
-    header_name: X-API-Key
-    env_var: MYCLOUD_API_KEY
-
-# Inferred resources. Review each mapping; ambiguous entries are flagged with comments.
-resources:
-  - operation: createPet
-    name: pet
-    id_attribute: id
-  - operation: createServer
-    name: server
-    id_attribute: server_id
-
-# Inferred data sources.
-data_sources:
-  - operation: getPet
-    name: pet
-  - operation: listPets
-    name: pets
-
-# Inferred actions.
-actions:
-  - operation: rebootServer
-    name: reboot_server
-
-# Inferred list resources.
-list_resources:
-  - resource: pet
-    operation: listPets
-
-# Polymorphism detected in the spec.
-# Strategy 'split_resources' chosen for Pet because it is a top-level oneOf of named variants.
-polymorphism:
-  strategy: split_resources
-  oneOf:
-    - schema: Pet
-      variants:
-        - schema: Cat
-          resource_name: cat
-        - schema: Dog
-          resource_name: dog
-
-# Suggested timeouts.
+    - url: https://api.mycloud.example/v1
+resource_overrides:
+    - schema: config
+      operation: createConfig
+      resource_name: config
+      id_attribute: id
+      import_format: '{workspace}:{name}'
+      computed_attributes:
+        - api_version
+        - data
+        - id
+        - kind
+    - schema: workspace
+      operation: createWorkspace
+      resource_name: workspace
+      id_attribute: name
+      import_format: '{name}'
+      computed_attributes:
+        - api_version
+        - kind
+        - labels
+        - status
+        - phase
+datasource_overrides:
+    - operation: get_branch
+      datasource_name: get_branch
+    - operation: list_branches
+      datasource_name: list_branches
+list_resource_overrides:
+    - resource: list_branches
+      operation: listBranches
+      config_schema:
+        - name: organization
+          type: string
+        - name: project
+          type: string
+logging:
+    max_body_bytes: 4096
+    redact_headers:
+        - Authorization
+        - X-API-Key
+        - Cookie
+auth:
+    - scheme: bearer
+      env_var: MYCLOUD_BEARERAUTH
 global_timeouts:
-  create: 20m
-  read: 10m
-  update: 20m
-  delete: 10m
-
-# Suggested pagination style detected from x-pagination extension.
-pagination:
-  style: offset
-  page_param: page
-  per_page_param: per_page
+    create: 20m
+    read: 10m
+    update: 20m
+    delete: 10m
+generate_terraform_tests: false
+spec:
+    path: /path/to/api.yaml
+    format: openapi3
 ```
 
 **Integration with `eidos generate`**:
@@ -1196,7 +1297,7 @@ The same config-generation logic is exposed through:
 - The `/api/v1/validate` endpoint (returns the config in `suggested_config`).
 - The `eidos/generate-config` MCP tool.
 
-All three use a single helper in `pkg/config/generator.go` so behavior never diverges.
+All three build the config from the IR via `generator.GenerateConfig` in `pkg/generator/config_generator.go` (the CLI and MCP tool both call it through `pkg/api`), so behavior never diverges.
 
 ### 7.2 Parser
 
@@ -1207,35 +1308,35 @@ All three use a single helper in `pkg/config/generator.go` so behavior never div
 - Detect spec version (`swagger: "2.0"`, `openapi: "3.0.x"`, `openapi: "3.1.x"`).
 - Parse JSON or YAML input into a thin, version-specific AST, then convert to a generic internal model.
 - Validate structural correctness (missing required fields, invalid `$ref` targets) with source-location diagnostics.
-- Resolve all `$ref` values, including external files and remote URLs, with cycle detection.
-- Return a version-agnostic intermediate model consumed by the normalizer.
+- Resolve local (same-document) JSON Pointer `$ref` values with cycle detection; external file and remote URL refs are rejected with a fail-loud error diagnostic rather than fetched.
+- Return a version-agnostic intermediate model consumed by the transformer.
 
 **Version-specific handling**:
 
 | Version | Key Differences | Parser Handling |
 |---------|----------------|-----------------|
-| 2.0 | `host` + `basePath` + `schemes` instead of `servers` | Convert to `ServerIR` with template |
+| 2.0 | `host` + `basePath` + `schemes` instead of `servers` | Convert to a server URL template (`ServerIR`) |
 | 2.0 | `definitions` instead of `components/schemas` | Map to `components.schemas` internally |
-| 2.0 | `parameters` in body/formData instead of `requestBody` | Convert to `RequestBodyIR` |
+| 2.0 | `parameters` in body/formData instead of `requestBody` | Convert to `FormDataParams` on `OperationMappingIR` |
 | 2.0 | `securityDefinitions` instead of `components/securitySchemes` | Map to `SecuritySchemeIR` |
 | 2.0 | `produces`/`consumes` at top-level and operation-level | Map to `OperationMappingIR` content negotiation |
 | 3.0 | `servers` with variables | Direct mapping to `ServerIR` |
 | 3.0 | `components/*` | Direct mapping |
 | 3.0 | `requestBody` with `content` | Direct mapping |
-| 3.0 | `nullable: true` | Set `Optional: true, Computed: true` in IR |
+| 3.0 | `nullable: true` | Carried in the IR; Optional/Computed derives from request/response membership |
 | 3.1 | `type` arrays (`["string", "null"]`) | Map to nullable schema |
-| 3.1 | `webhooks` | Map to provider-level config or data sources |
-| 3.1 | `prefixItems` | Map to ordered tuple validation |
-| 3.1 | `contentMediaType`/`contentEncoding` | Map to format validators or custom types |
+| 3.1 | `webhooks` | Parsed but not mapped to a Terraform construct |
+| 3.1 | `prefixItems` | Parsed but not mapped to a Terraform construct |
+| 3.1 | `contentMediaType`/`contentEncoding` | Parsed but not mapped; no format validators are emitted |
 
-**No external OpenAI parser dependency**: Eidos deliberately avoids `libopenapi`, `kin-openapi`, or any other third-party OpenAPI parser. All parsing, validation, and resolution logic lives in `pkg/parser/` and its version-specific subpackages.
+**No external OpenAPI parser dependency**: Eidos deliberately avoids `libopenapi`, `kin-openapi`, or any other third-party OpenAPI parser. All parsing, validation, and resolution logic lives in `pkg/parser/` and its version-specific files.
 
 ### 7.3 Normalizer
 
-**Package**: `pkg/normalizer/`
+**Package**: `pkg/transformer/` (normalization phase; the `normalizer_*.go` files)
 
 **Responsibilities**:
-1. **`$ref` resolution**: Recursively dereference all JSON Pointer `$ref` entries. Circular references are detected and produce a warning; the referencing attribute becomes `Computed` with an opaque type.
+1. **`$ref` resolution**: Recursively dereference all JSON Pointer `$ref` entries. Circular references are detected by the parser and produce a warning; the parser marks cyclic component schemas `Opaque`, and the transformer treats an `Opaque` schema as an opaque boundary (its scalar fields are kept, but nested properties/items are not descended into).
 2. **`allOf` flattening**: Merge all `allOf` schemas into a single flat object, resolving property conflicts (duplicate required fields with same type → merge; conflicting types → error).
 3. **Polymorphism normalization**: Convert `oneOf` + `discriminator` combinations into `UnionType` with `DiscriminatorIR`; `anyOf` becomes `UnionType` without a discriminator.
 4. **Parameter resolution**: Merge path-level parameters into operation-level parameters; resolve `parameters` references.
@@ -1245,7 +1346,7 @@ All three use a single helper in `pkg/config/generator.go` so behavior never div
 
 ### 7.4 Transformer
 
-**Package**: `pkg/transform/`
+**Package**: `pkg/transformer/`
 
 **Responsibilities**:
 1. **Type mapping**: Convert OpenAPI types to Terraform Plugin Framework types (see [Section 10](#10-openapi-to-terraform-type-mapping)).
@@ -1256,24 +1357,25 @@ All three use a single helper in `pkg/config/generator.go` so behavior never div
    - `PUT /pets/{petId}` → Full Update
    - `PATCH /pets/{petId}` → Partial Update
    - `DELETE /pets/{petId}` → Delete
-3. **Action inference**: Detect non-CRUD operations:
+3. **Action inference**: Detect non-CRUD operations (unified with `transformer.InferActions`):
    - `POST /servers/{id}/<action>` patterns → Action
-   - Operations returning non-resource responses (job IDs, status messages) → Action
+   - POST whose `operationId` leading verb is a recognized action verb → Action
+   - POST that is not a CRUD Create path → Action
    - Operations with `x-terraform-action: true` → Action
 4. **Ephemeral resource inference**: Detect temporary/credential operations:
-   - Operations returning `writeOnly: true` response properties → Ephemeral resource
-   - OAuth2 token endpoints → Ephemeral resource
+   - POST on a path containing ephemeral keywords (`credentials`, `token`, `session`, `lease`, `ticket`) → Ephemeral resource
    - Operations with `x-terraform-ephemeral: true` → Ephemeral resource
+   - The transformer's `InferEphemeralResources` additionally treats `writeOnly` response properties and `password`-format responses as ephemeral cues
 5. **List resource inference**: Detect collection endpoints:
-   - `GET /pets` where `GET /pets/{petId}` resource exists → List resource
+   - A collection `GET` paired with an instance Read is promoted additively to a List resource (the data source is kept)
    - Operations with `x-terraform-list: true` → List resource
 6. **ID attribute detection**: Identify the primary identifier attribute from path parameters or response schema (e.g., `id`, `petId`).
 7. **Computed/Required/Optional/WriteOnly inference**: Apply rules:
-   - `readOnly: true` → `Computed: true`
-   - `required: true` AND NOT `readOnly` → `Required: true`
-   - `required: false` AND NOT `readOnly` → `Optional: true`
-   - `writeOnly: true` → `WriteOnly: true` + `Sensitive: true`
-   - Default values present → `Optional: true` + `Default` plan modifier
+   - Response-only attributes → `Computed: true`
+   - Attributes present in both request and response → `Optional: true` + `Computed: true`
+   - `required: true` request attributes → `Required: true`
+   - `writeOnly: true` → `WriteOnly: true` + `Sensitive: true` (renamed to `<name>_wo` with a companion `<name>_wo_version` attribute)
+   - Default values are carried in the IR; no `Default` schema field is emitted
 8. **Security mapping**: Convert security schemes to provider config attributes.
 9. **Override application**: Apply `generator.yaml` overrides (see [Section 14](#14-configuration--overrides-system)).
 10. **Naming conflicts**: Resolve collisions (e.g., two operations producing the same resource name) by appending HTTP method or path segments.
@@ -1287,40 +1389,48 @@ All three use a single helper in `pkg/config/generator.go` so behavior never div
 
 | File | Purpose |
 |------|---------|
-| `main.go` | Provider server entrypoint using `providerserver.NewServe()` |
+| `main.go` | Provider server entrypoint serving via `providerserver.Serve` (Protocol v6) with a `tf5server.Serve` fallback for `--protocol-version 5` |
 | `internal/provider/provider.go` | Provider struct, `Metadata`, `Schema`, `Configure`, `Resources`, `DataSources`, `Actions`, `EphemeralResources`, `ListResources`, `Functions` |
 | `internal/provider/provider_test.go` | Provider-level unit tests |
 | `internal/provider/resource_<name>.go` | Resource implementation: `Create`, `Read`, `Update`, `Delete`, `ImportState`, `Schema` |
+| `internal/provider/resource_<name>_test.go` | Resource unit tests |
+| `internal/provider/resource_<name>_acceptance_test.go` | Resource acceptance tests |
 | `internal/provider/data_source_<name>.go` | Data source implementation: `Read`, `Schema` |
+| `internal/provider/data_source_<name>_test.go` | Data source unit tests |
 | `internal/provider/action_<name>.go` | Action implementation: `Invoke`, `Schema`, `ModifyPlan`, `ValidateConfig` |
 | `internal/provider/ephemeral_<name>.go` | Ephemeral resource: `Open`, `Renew`, `Close`, `Schema` |
 | `internal/provider/list_<name>.go` | List resource: `List`, `ListResourceConfigSchema` |
 | `internal/provider/function_<name>.go` | Provider-defined function (optional) |
 | `internal/provider/model_<name>.go` | Go struct types matching Terraform schemas (for JSON marshalling) |
 | `internal/provider/validators.go` | Custom validators (discriminator, conditional, exclusive bounds, multipleOf, etc.) |
+| `internal/provider/json_convert.go` | JSON/model conversion helpers for wired CRUD bodies (emitted when any resource, data source, or ephemeral resource is wired) |
 | `internal/client/client.go` | Generated HTTP client |
-| `internal/client/auth.go` | Authentication middleware |
+| `internal/client/auth.go` | Authentication middleware (emitted when the spec declares security schemes) |
 | `internal/client/models.go` | Request/response structs |
+| `internal/client/errors.go` | Typed API error helpers |
 | `internal/client/retry.go` | Retry logic with exponential backoff |
+| `internal/client/pagination.go` | Pagination helpers |
+| `internal/client/logging.go` | Request/response trace logging |
 | `internal/protocol/value_mappers.go` | `tftypes.Value` ↔ Go struct converters |
+| `internal/protocol/value_mappers_test.go` | Value mapper round-trip tests |
 
 ### 7.6 Protocol Layer Generator
 
-**Package**: `pkg/generator/protocol/`
+**Package**: `pkg/generator/`
 
 The generated provider uses `terraform-plugin-framework` which abstracts the gRPC protocol. However, Eidos also generates explicit value mapper code that bridges between `tftypes.Value` (the protocol representation) and generated Go models, ensuring:
 
 1. **Schema descriptors** are correctly defined via `schema.Schema` for every resource, data source, and the provider.
-2. **State conversion** between `tftypes.Value` and Go structs is handled by generated `PlanToModel()` and `ModelToState()` helper functions.
+2. **State conversion** between `tftypes.Value` and Go structs is handled by generated `XxxModelFromValue()` / `XxxModelToValue()` value mappers in `internal/protocol/value_mappers.go`; wired CRUD bodies additionally use `modelToJSONMap()` / `applyJSONToModel()` helpers to build request bodies and map responses back into the model.
 3. **Diagnostics accumulation** is handled by generated error-to-diagnostic converters that map HTTP error responses to `diag.Diagnostics`.
 4. **State upgraders** are generated when schema versioning is detected (via `generator.yaml`).
 5. **Import state** handlers parse composite IDs from `ImportStateRequest.ID`.
 
-The provider binary is served via `providerserver.NewServe()` (Protocol v6) or `tf5server.NewServe()` (Protocol v5), both from `terraform-plugin-go`.
+The provider binary is served via `providerserver.Serve` (Protocol v6) or `tf5server.Serve` (Protocol v5), both from `terraform-plugin-go`.
 
 ### 7.7 Documentation Generator
 
-**Package**: `pkg/generator/docs/`
+**Package**: `pkg/generator/`
 
 Generates Markdown files compatible with `terraform-plugin-docs` and the Terraform Registry:
 
@@ -1331,9 +1441,12 @@ Generates Markdown files compatible with `terraform-plugin-docs` and the Terrafo
 | `docs/data-sources/<name>.md` | Argument reference, attribute reference, example HCL |
 | `docs/actions/<name>.md` | Action argument reference, example HCL invocation |
 | `docs/ephemeral-resources/<name>.md` | Configuration reference, result attributes, ephemeral context restrictions, example HCL |
+| `docs/list-resources/<name>.md` | List resource configuration, identity, and result attributes, example HCL |
 | `docs/functions/<name>.md` | Arguments, return type, example HCL |
 | `examples/resources/<name>/resource.tf` | Minimal HCL example for `terraform apply` |
 | `examples/data-sources/<name>/data-source.tf` | Minimal HCL example for data source |
+| `examples/actions/<name>/action.tf` | Minimal HCL example for action invocation |
+| `examples/ephemeral-resources/<name>/ephemeral-resource.tf` | Minimal HCL example for ephemeral resource |
 
 Content is derived from:
 - `info.title` and `info.description` → `index.md`
@@ -1347,7 +1460,8 @@ Frontmatter for `terraform-plugin-docs`:
 
 ```yaml
 ---
-subcategory: "Pets"
+page_title: "mycloud_pet Resource - mycloud"
+subcategory: ""
 description: |-
   Manages a Pet resource.
 ---
@@ -1355,39 +1469,39 @@ description: |-
 
 ### 7.8 HTTP Client Generator
 
-**Package**: `pkg/generator/client/`
+**Package**: `pkg/generator/`
 
 Generates a Go HTTP client using `net/http`:
 
 **Features**:
 - **Request construction**: Path parameter substitution via `strings.ReplaceAll`, query parameter encoding via `url.Values`, header injection.
-- **Response parsing**: JSON unmarshalling into generated model structs; error response parsing into typed error structs.
+- **Response parsing**: JSON unmarshalling into generated model structs; error responses are captured by `NewAPIError` into an `APIError` (status code, headers, and body capped at 1 MiB) rather than decoded into typed error structs — the `ErrorResponse` model is emitted but not wired.
 - **Authentication middleware**: Pluggable auth handlers for each `SecuritySchemeIR` type:
   - `apiKey` → inject header/query/cookie
   - `http/basic` → `Authorization: Basic <encoded>`
   - `http/bearer` → `Authorization: Bearer <token>`
   - `oauth2/client_credentials` → token exchange with `client_id`, `client_secret`, `token_url`
-  - `oauth2/authorization_code` → redirect-based flow (documented, not auto-implemented)
-  - `openIdConnect` → OIDC discovery + token acquisition (documented, not auto-implemented)
-- **Retry logic**: Exponential backoff with jitter for `5xx` and `429` responses; configurable max retries.
-- **Pagination**: Detect `x-pagination` extension or `Link` header patterns; generate `ListAllPages()` helper.
-- **Timeouts**: Per-request context timeouts from Terraform resource timeouts.
-- **User-Agent**: `User-Agent: Terraform/<version> <provider-name>/<version>`.
+  - `oauth2/authorization_code` → `OAuth2AuthorizationCodeRefresh` exercises the non-interactive refresh path against the token endpoint; the initial authorization-code exchange requires an interactive browser redirect and must happen out-of-band
+  - `openIdConnect` → `OpenIDConnect` performs OIDC discovery (token endpoint resolved from the discovery document, cached on first use) and acquires tokens via the client-credentials flow
+- **Retry logic**: Exponential backoff with additive jitter for `5xx` and `429` responses (and network errors); configurable max retries.
+- **Pagination**: `DetectPaginationStyle` in the transformer examines the `x-pagination` extension, response `Link` headers, and query parameter names (offset/page vs cursor); the client emits `ListAllPages()` plus `ExtractLinkHeader` for RFC 5988 `Link` header following.
+- **Timeouts**: The client uses a fixed 30-second default HTTP client timeout; there is no per-request timeout derived from Terraform resource timeouts.
+- **User-Agent**: The client sets `User-Agent: eidos-generated-client` by default and exposes a `WithUserAgent` option to override it.
 
 ### 7.9 Test Generator
 
-**Package**: `pkg/generator/test/` (Go package `testgen`)
+**Package**: `pkg/generator/`
 
 Generates:
 
-1. **Unit tests** (`internal/provider/resource_<name>_test.go`): Test schema definitions, value mappers, validators.
-2. **Acceptance tests** (`internal/provider/resource_<name>_acc_test.go`): Full `terraform-plugin-testing` acceptance tests using `httptest.NewServer()` as a mock API server. Tests cover:
+1. **Unit tests** (`internal/provider/resource_<name>_test.go`): Schema validation via `ValidateImplementation` and metadata/type-name checks.
+2. **Acceptance tests** (`internal/provider/resource_<name>_acceptance_test.go`): Full `terraform-plugin-testing` acceptance tests using `httptest.NewServer()` as a mock API server. Tests cover:
    - Create + Read
    - Update + Read
    - Delete (resource disappears)
    - Import (by ID)
    - Import (by composite ID, if applicable)
-3. **Mock HTTP server**: Generated `httptest` handlers that return fixture data derived from OpenAPI `example` fields and `x-examples` extensions.
+3. **Mock HTTP server**: Generated `httptest` handlers that echo request bodies back (so create/update responses reflect the values sent by the test) and enforce the expected auth header (e.g. `Authorization: Bearer example`).
 
 ### 7.10 Support Packages
 
@@ -1395,7 +1509,7 @@ The following support packages are shared by multiple stages of the generation p
 
 **Package**: `pkg/ir/`
 
-Defines the intermediate representation (`ProviderIR`, `ResourceIR`, `DataSourceIR`, etc.) consumed by the normalizer, transform, and generator packages. See [Section 6](#6-intermediate-representation-ir) for the IR type system.
+Defines the intermediate representation (`ProviderIR`, `ResourceIR`, `DataSourceIR`, etc.) consumed by the transformer and generator packages. See [Section 6](#6-intermediate-representation-ir) for the IR type system.
 
 **Package**: `pkg/config/`
 
@@ -1426,15 +1540,15 @@ The Terraform Plugin Framework (v1.x) is the primary target. Each `SchemaIR` nod
 | `Sensitive` | `schema.Attribute{Sensitive: true}` |
 | `WriteOnly` | `schema.Attribute{WriteOnly: true}` (Terraform 1.10+) |
 | `Deprecated` | `schema.Attribute{DeprecationMessage: "..."}` |
-| `Validators` | `schema.Attribute{Validators: []validator.String{...}}` |
-| `PlanModifiers` | `schema.Attribute{PlanModifiers: []planmodifier.String{...}}` |
-| `Default` | `schema.Attribute{Default: stringdefault.StaticString("...")}` |
+| `Validators` | `schema.Attribute{Validators: []validator.Float64{...}}` — custom validators only (see §8.3) |
+| `PlanModifiers` | Not emitted (see §8.3) |
+| `Default` | Not emitted (see §8.3) |
 
 ### 8.2 CRUD Mapping
 
 | Terraform Operation | OpenAPI Pattern | HTTP Method |
 |--------------------|----------------|-------------|
-| `Create` | `POST /collection` or `PUT /collection/{id}` | POST or PUT |
+| `Create` | `POST /collection` | POST |
 | `Read` | `GET /collection/{id}` | GET |
 | `Update` (full) | `PUT /collection/{id}` | PUT |
 | `Update` (partial) | `PATCH /collection/{id}` | PATCH |
@@ -1443,16 +1557,18 @@ The Terraform Plugin Framework (v1.x) is the primary target. Each `SchemaIR` nod
 
 **Create flow**:
 1. Terraform calls `Create(ctx, req, resp)`.
-2. Provider constructs request body from `req.Plan` using `PlanToModel()`.
-3. Client sends HTTP request to API.
-4. On success (201/200), client parses response body and/or Location header.
-5. Provider stores response in state via `ModelToState()`.
-6. On error, provider returns `diag.Diagnostics` with error detail.
+2. Provider decodes `req.Plan` into the model via `req.Plan.Get(ctx, &plan)`.
+3. Provider builds the request body from the model via `modelToJSONMap(&plan)` and `json.Marshal`.
+4. Client sends HTTP request to API.
+5. On success (201/200), client parses the response body and/or `Location` header.
+6. Provider maps the response JSON back into the model via `applyJSONToModel(&plan, data)`.
+7. Provider stores the model in state via `resp.State.Set(ctx, &plan)`.
+8. On error, provider returns `resp.Diagnostics` with error detail.
 
 **Update flow**:
 - If `PUT` is available → full replacement of all modifiable fields.
-- If only `PATCH` is available → compute diff, send only changed fields.
-- If both are available → prefer `PUT` for full updates, `PATCH` for partial (configurable via `generator.yaml`).
+- If only `PATCH` is available → the generated `Update` sends the full model body via PATCH (no diff is computed).
+- If both are available → `PUT` wins over `PATCH` (hardcoded in the transformer's `chooseUpdateOps`; not configurable via `generator.yaml`).
 
 **Delete flow**:
 1. Terraform calls `Delete(ctx, req, resp)`.
@@ -1464,40 +1580,33 @@ The Terraform Plugin Framework (v1.x) is the primary target. Each `SchemaIR` nod
 
 ### 8.3 Plan Modifiers & Validators
 
-**Automatically inferred plan modifiers**:
+**Plan modifiers**: The generator does not currently emit typed plan-modifier
+constructors (`planmodifier.RequiresReplace`, `stringplanmodifier.UseStateForUnknown`,
+`stringdefault.StaticString`, etc.) into generated schemas. Force-new attributes
+(`forceNew` / `x-terraform-force-new: true`) are tracked in the IR
+(`PlanModifierIR` with `planmodifier.RequiresReplace`) and surfaced in the
+generated `generator.yaml` as `force_new` entries, but the schema itself does not
+attach a `RequiresReplace` modifier. Attribute default values are carried on the
+IR but are not rendered as `Default` schema fields.
 
-| OpenAPI Indicator | Generated Plan Modifier |
-|-------------------|------------------------|
-| `readOnly: true` | `stringplanmodifier.UseStateForUnknown()` (value set on Read) |
-| `writeOnly: true` | `stringplanmodifier.UseStateForUnknown()` + `WriteOnly: true` (not stored in state) |
-| `forceNew` / `x-terraform-force-new: true` | `planmodifier.RequiresReplace()` |
-| Default value present | `stringdefault.StaticString(value)` |
-
-**Automatically inferred validators**:
+**Validators emitted by the generator**: The generator renders validators
+directly from schema constraints — not from the IR's generic `ValidatorIR`
+metadata, which is currently dead metadata on the IR. The emitted set is:
 
 | OpenAPI Indicator | Generated Validator |
 |-------------------|-------------------|
-| `enum: [...]` | `stringvalidator.OneOf(values...)` |
-| `minLength` / `maxLength` | `stringvalidator.LengthBetween(min, max)` |
-| `minimum` / `maximum` | `int64validator.Between(min, max)` or `float64validator.Between(min, max)` |
-| `pattern` | `stringvalidator.RegexMatches(regexp.MustCompile(pattern), msg)` |
-| `format: "email"` | `stringvalidator.IsEmailAddress()` |
-| `format: "uuid"` | `stringvalidator.IsUUID()` |
-| `format: "uri"` | `stringvalidator.IsURLWithScheme("https")` |
-| `format: "date-time"` | Custom RFC3339 validator |
-| `not: {enum: [...]}` | `stringvalidator.NoneOf(values...)` |
-| `not: {complex schema}` | Custom `NotValidator` |
-| `const` | `stringvalidator.OneOf(value)` or `Default: stringdefault.StaticString(value)` |
-| `if`/`then`/`else` | Resource-level `ConfigValidators()` with custom `ConditionalConfigValidator` |
-| `dependentRequired` | `stringvalidator.AlsoRequires(path.MatchRoot("..."))` per trigger attribute |
-| `dependentSchemas` | Resource-level `ConfigValidators()` with custom `DependentSchemaValidator` |
-| `patternProperties` (uniform type) | `MapAttribute` with element type |
-| `patternProperties` (heterogeneous) | Custom `PatternPropertiesValidator` |
-| `minProperties`/`maxProperties` | `mapvalidator.SizeBetween(min, max)` (map types only) |
-| `exclusiveMinimum`/`exclusiveMaximum` (int) | `int64validator.AtLeast(n+1)` / `int64validator.AtMost(n-1)` |
-| `exclusiveMinimum`/`exclusiveMaximum` (float) | Custom `ExclusiveBoundValidator` |
+| `exclusiveMinimum` / `exclusiveMaximum` (int) | Custom `Int64ExclusiveMinimumValidator` / `Int64ExclusiveMaximumValidator` |
+| `exclusiveMinimum` / `exclusiveMaximum` (float) | Custom `Float64ExclusiveMinimumValidator` / `Float64ExclusiveMaximumValidator` |
 | `multipleOf` | Custom `Int64MultipleOfValidator` / `Float64MultipleOfValidator` |
-| `propertyNames` | `mapvalidator.KeysAre(stringvalidator.RegexMatches(...))` (map types only) |
+| `discriminator` | Custom `DiscriminatorValidator` |
+| `dependentRequired` | Custom `ConditionalValidator` per trigger attribute |
+| `patternProperties` | Custom `PatternPropertiesValidator` |
+
+These custom validators are emitted into `internal/provider/validators.go` and
+attached to the matching attributes. Standard framework validators for `enum`,
+`minLength`/`maxLength`, `minimum`/`maximum`, `pattern`, `format`, `not`,
+`const`, `if`/`then`/`else`, `dependentSchemas`, `minProperties`/`maxProperties`,
+and `propertyNames` are not currently emitted.
 
 ### 8.4 State Upgraders
 
@@ -1528,21 +1637,22 @@ For composite import IDs, the handler splits the import string on the delimiter 
 
 ### 8.6 Provider-Defined Functions
 
-OpenAPI specs can define utility endpoints that don't map naturally to resources or data sources. Eidos can generate provider-defined functions for:
+OpenAPI specs can define utility endpoints that don't map naturally to resources or data sources. Eidos can generate provider-defined functions for read-only compute/query endpoints:
 
-- `GET /utils/validate` → function `validate_<name>()`
 - `GET /utils/lookup` → function `lookup_<name>()`
+- `GET /utils/search` → function `search_<name>()`
 
-This is opt-in via `generator.yaml`:
+**Automatic detection**: GET operations whose path contains a function keyword (`search`, `compute`, `calculate`, `convert`, `lookup`, `query`) or that are annotated with `x-terraform-function: true` are inferred as functions. The function signature is derived from the operation's path/query/header/cookie parameters (arguments) and the resolved response schema (return type).
+
+**Explicit configuration** (`generator.yaml`): `function_overrides` entries create or rename functions:
 
 ```yaml
-functions:
+function_overrides:
   - operation: "ipLookup"
-    type: "lookup"
+    name: "lookup_ip"
     arguments:
       - name: "ip"
         type: "string"
-    return_type: "string"
 ```
 
 ### 8.7 Actions (Invoke Actions)
@@ -1557,16 +1667,18 @@ Not every HTTP operation maps to a resource CRUD method. Eidos uses the followin
 
 **Automatic detection**:
 - `POST /resources/{id}/<action>` patterns (e.g., `POST /servers/{id}/reboot`) → Action
-- Operations that return non-resource responses (e.g., job IDs, status messages) → Action
+- POST operations whose `operationId` leading verb is a recognized action verb → Action
+- POST operations that are not a CRUD Create path → Action
+- PUT/PATCH or DELETE on a collection path (bulk update/clear) → Action
 - Operations annotated with `x-terraform-action: true` → Action
 
 **Explicit configuration** (`generator.yaml`):
 ```yaml
-actions:
+action_overrides:
   - operation: "rebootServer"
     name: "reboot_server"
     description: "Reboots the specified server"
-    progress_messages: true   # Generate streaming progress updates
+    progress_messages: true   # Stream progress updates during invocation
     modify_plan: true          # Generate ModifyPlan for API-accessible validation
   - operation: "rotateDatabaseCredentials"
     name: "rotate_database_credentials"
@@ -1579,38 +1691,43 @@ actions:
 // internal/provider/action_reboot_server.go
 
 type RebootServerAction struct {
-    client *http.Client
+    client *client.Client
 }
 
-func (a *RebootServerAction) Metadata(ctx context.Context, req action.MetadataRequest, resp *action.MetadataResponse) {
+func (r *RebootServerAction) Metadata(ctx context.Context, req action.MetadataRequest, resp *action.MetadataResponse) {
     resp.TypeName = req.ProviderTypeName + "_reboot_server"
 }
 
-func (a *RebootServerAction) Schema(ctx context.Context, req action.SchemaRequest, resp *action.SchemaResponse) {
+func (r *RebootServerAction) Schema(ctx context.Context, req action.SchemaRequest, resp *action.SchemaResponse) {
     resp.Schema = schema.Schema{
         Attributes: map[string]schema.Attribute{
             "server_id": schema.StringAttribute{
                 Required:    true,
-                Description:  "The ID of the server to reboot.",
+                Description: "The ID of the server to reboot.",
             },
             "force": schema.BoolAttribute{
                 Optional:    true,
-                Description:  "Force a hard reboot.",
+                Description: "Force a hard reboot.",
             },
         },
     }
 }
 
-func (a *RebootServerAction) Invoke(ctx context.Context, req action.InvokeRequest, resp *action.InvokeResponse) {
-    var data RebootServerActionModel
-    resp.Diagnostics.Append(req.Config.Get(ctx, &data)...)
+func (r *RebootServerAction) Invoke(ctx context.Context, req action.InvokeRequest, resp *action.InvokeResponse) {
+    var config RebootServerActionModel
+    resp.Diagnostics.Append(req.Config.Get(ctx, &config)...)
     if resp.Diagnostics.HasError() {
         return
     }
     // Generated HTTP call to POST /servers/{serverId}/reboot
-    httpReq, _ := http.NewRequestWithContext(ctx, http.MethodPost,
-        a.client.BaseURL + "/servers/" + data.ServerId.ValueString() + "/reboot", nil)
-    httpResp, err := a.client.Do(httpReq)
+    reqPath := "/servers/{serverId}/reboot"
+    reqPath = strings.ReplaceAll(reqPath, "{serverId}", config.ServerId.ValueString())
+    httpReq, err := r.client.NewRequest(ctx, http.MethodPost, reqPath, nil)
+    if err != nil {
+        resp.Diagnostics.AddError("Error invoking ...", fmt.Sprintf("Could not build request: %s", err))
+        return
+    }
+    httpResp, err := r.client.Do(httpReq)
     // ... error handling and progress messages ...
 }
 ```
@@ -1623,13 +1740,12 @@ func (a *RebootServerAction) Invoke(ctx context.Context, req action.InvokeReques
 | `Schema` | Define input parameters | Derived from operation parameters + request body |
 | `Configure` | Receive provider client | Same as resources/data sources |
 | `Invoke` | Execute the action | The mapped HTTP operation |
-| `ValidateConfig` | Validate configuration offline | Derived from parameter constraints |
-| `ModifyPlan` | Validate with API access | Optional; for API-accessible validation |
-| `ConfigValidators` | Cross-attribute validation | Derived from `allOf`/`oneOf` constraints |
+| `ValidateConfig` | Validate configuration offline | Scaffolded unless an explicit `validate_config_operation` mapping is declared |
+| `ModifyPlan` | Validate with API access | Optional; generated when `modify_plan: true`, wired only with an explicit `modify_plan_operation` mapping |
 
 #### Streaming Progress Messages
 
-For long-running actions (e.g., `POST /servers/{id}/migrate`), Eidos generates code that uses `resp.SendProgress()` to stream progress messages back to the practitioner during invocation. This is enabled via `progress_messages: true` in the override config or auto-detected from operations that return `202 Accepted` responses.
+For long-running actions (e.g., `POST /servers/{id}/migrate`), Eidos generates code that calls `resp.SendProgress(action.InvokeProgressEvent{Message: "Invoking <action>"})` before issuing the request, streaming a progress update back to the practitioner during invocation. This is enabled via `progress_messages: true` in the `action_overrides` config.
 
 ### 8.8 Ephemeral Resources
 
@@ -1640,14 +1756,13 @@ This is the natural Terraform mapping for OpenAPI operations that produce short-
 #### How Ephemeral Resources Map from OpenAPI
 
 **Automatic detection**:
-- Operations that return `writeOnly: true` response properties → Ephemeral resource
-- Operations with `x-terraform-ephemeral: true` annotation → Ephemeral resource
-- OAuth2 token endpoints (detected from `securitySchemes` with `oauth2` flows) → Ephemeral resource
-- Operations where the response schema has `format: "password"` or sensitive headers → Candidate ephemeral resource
+- POST operations whose path contains an ephemeral keyword (`credentials`, `token`, `session`, `lease`, `ticket`) and is not a lifecycle subpath → Ephemeral resource
+- Operations annotated with `x-terraform-ephemeral: true` → Ephemeral resource
+- The sibling lifecycle operations (`/renew`, `/close`, `/revoke`, `/refresh`, `/rotate`) of an ephemeral open are consumed as its Renew/Close mappings rather than emitted as separate constructs
 
 **Explicit configuration** (`generator.yaml`):
 ```yaml
-ephemeral_resources:
+ephemeral_resource_overrides:
   - operation: "generateTemporaryCredentials"
     name: "temporary_credential"
     description: "Generates short-lived credentials"
@@ -1682,7 +1797,7 @@ ephemeral_resources:
 // internal/provider/ephemeral_temporary_credential.go
 
 type TemporaryCredentialEphemeralResource struct {
-    client *http.Client
+    client *client.Client
 }
 
 func (e *TemporaryCredentialEphemeralResource) Metadata(ctx context.Context, req ephemeral.MetadataRequest, resp *ephemeral.MetadataResponse) {
@@ -1761,7 +1876,7 @@ This is the natural Terraform mapping for OpenAPI `GET` collection endpoints —
 
 **Explicit configuration** (`generator.yaml`):
 ```yaml
-list_resources:
+list_resource_overrides:
   - resource: "pet"                    # Must match a managed resource type name
     operation: "listPets"              # The GET collection operation
     config_schema:
@@ -1785,7 +1900,7 @@ list_resources:
 // internal/provider/list_pet.go
 
 type PetListResource struct {
-    client *http.Client
+    client *client.Client
 }
 
 func (l *PetListResource) Metadata(ctx context.Context, req resource.MetadataRequest, resp *resource.MetadataResponse) {
@@ -1846,8 +1961,7 @@ Write-only arguments are the natural Terraform mapping for OpenAPI fields marked
 
 **Automatic detection**:
 - Any request body property with `writeOnly: true` → Write-only argument on the resource
-- Any parameter with `writeOnly: true` → Write-only argument
-- Operations annotated with `x-terraform-write-only: true` on specific fields → Write-only argument
+- Explicit `write_only_attributes` entries in `resource_overrides` → Write-only argument
 
 **Explicit configuration** (`generator.yaml`):
 ```yaml
@@ -1879,9 +1993,6 @@ Write-only arguments follow a versioned pattern:
     Optional:    true,
     Sensitive:   true,
     Description: "The database master password. Not stored in state.",
-    PlanModifiers: []planmodifier.String{
-        stringplanmodifier.UseStateForUnknown(),
-    },
 },
 "password_wo_version": schema.Int64Attribute{
     Optional:    true,
@@ -1925,18 +2036,37 @@ Protocol v6 is the default and recommended target. It is compatible with Terrafo
 - **List Resources**: `terraform query` search operations that stream results and can include resource data (Terraform 1.14+).
 - **State Stores**: Pluggable state persistence via providers (experimental, Terraform 1.15+).
 
-**Generated server setup**:
+**Generated server setup** (from the reference `test/specs/mycloud.yaml`):
 
 ```go
 func main() {
-    opts := providerserver.ServeOpts{
-        Address: "registry.terraform.io/hashicorp/mycloud",
-        Debug:   os.Getenv("TF_DEBUG") != "",
-    }
-    err := providerserver.New(ctx, New("0.1.0"), opts)
-    if err != nil {
-        log.Fatal(err)
-    }
+	var debug bool
+	flag.BoolVar(&debug, "debug", false, "Set to true to run the provider with support for debuggers like delve")
+	var protocolVersion int
+	flag.IntVar(&protocolVersion, "protocol-version", 6, "Terraform plugin protocol version to serve (5 or 6)")
+	var printVersion bool
+	flag.BoolVar(&printVersion, "version", false, "Print version information and exit")
+	flag.Parse()
+	if printVersion {
+		fmt.Printf("version=%s\ncommit=%s\ndate=%s\n", version, commit, date)
+		return
+	}
+	address := "registry.terraform.io/mycloud/mycloud"
+	if protocolVersion == 5 {
+		err := tf5server.Serve(address, providerserver.NewProtocol5(provider.New()))
+		if err != nil {
+			log.Fatal(err)
+		}
+		return
+	}
+	if protocolVersion != 6 {
+		log.Printf("warning: unsupported --protocol-version %d; defaulting to protocol version 6", protocolVersion)
+	}
+	opts := providerserver.ServeOpts{Address: address, Debug: debug}
+	err := providerserver.Serve(context.Background(), provider.New, opts)
+	if err != nil {
+		log.Fatal(err)
+	}
 }
 ```
 
@@ -1944,7 +2074,7 @@ func main() {
 
 Protocol v5 is compatible with Terraform CLI >= 0.12. It lacks nested attributes and provider-defined functions.
 
-Eidos generates Protocol v5 code only when `--protocol-version=5` is specified. The generated code uses `tf5server.Serve()` and follows SDKv2 conventions (mapped through `terraform-plugin-mux` if needed).
+The generated `main.go` always serves Protocol v6 by default and includes a `tf5server.Serve` fallback path selected by the generated binary's runtime `-protocol-version` flag (5 or 6). The eidos CLI itself has no `--protocol-version` flag; the choice is made at provider runtime.
 
 ---
 
@@ -1957,7 +2087,7 @@ The generated provider binary:
 4. The provider processes each RPC, calls the generated HTTP client, and returns results.
 5. On `SIGINT`, the provider gracefully shuts down.
 
-The generated `main.go` handles debug mode (`TF_REATTACH_PROVIDERS`) for development.
+The generated `main.go` handles debug mode via a `-debug` flag passed to `providerserver.ServeOpts{Debug: ...}` for development.
 
 ### 9.4 DynamicValue Serialization
 
@@ -1965,7 +2095,7 @@ Terraform transmits resource state between CLI and provider as `DynamicValue` �
 
 - **Plan → Model**: `req.Plan.Get(ctx, &model)` — Framework handles this natively.
 - **Model → State**: `resp.State.Set(ctx, &model)` — Framework handles this natively.
-- **Custom types**: For OpenAPI types that don't have native Terraform equivalents (e.g., `format: binary`), custom `basetypes.StringTypable` types are generated.
+- **Value mappers**: `internal/protocol/value_mappers.go` provides `XxxModelFromValue()` / `XxxModelToValue()` converters between `tftypes.Value` and the generated Go models. String-typed attributes (including `format: byte` / `format: binary`) map to `tftypes.String`; no base64 encoding is applied.
 
 ---
 
@@ -1985,19 +2115,20 @@ Eidos does **not** depend on third-party OpenAPI parsing libraries such as `libo
 
 ### Parser structure
 
-```
+```text
 pkg/parser/
-├── lexer.go            # Minimal YAML/JSON tokenization
-├── spec.go             # Generic OpenAPI document model (version-agnostic nodes)
-├── resolve.go          # $ref resolution, including external files and URLs
-├── validate.go         # Structural validation and semantic warnings
-├── v2/
-│   └── convert.go      # Swagger 2.0 → generic spec model
-├── v3_0/
-│   └── convert.go      # OpenAPI 3.0.x → generic spec model
-├── v3_1/
-│   └── convert.go      # OpenAPI 3.1.x → generic spec model
-└── parser_test.go      # Unit + fixture tests
+├── doc.go              # Package documentation
+├── lexer.go            # YAML/JSON tokenization into a generic AST with source locations
+├── spec.go             # Generic OpenAPI document model (version-agnostic Spec)
+├── version.go          # Version detection (2.0 / 3.0.x / 3.1.x) and diagnostics types
+├── ref_local.go        # Local JSON Pointer $ref resolution (non-local refs rejected)
+├── circular.go         # Circular schema $ref cycle detection; marks participants Opaque
+├── validate.go         # Structural validation and semantic checks
+├── limits.go           # Resource usage guardrails (recursion/memory limits)
+├── helpers.go          # Generic AST node helpers
+├── v2.go               # Swagger 2.0 → generic spec model
+├── v30.go              # OpenAPI 3.0.x → generic spec model (shared converter state)
+└── v31.go              # OpenAPI 3.1.x → generic spec model
 ```
 
 ### Parsing pipeline
@@ -2005,7 +2136,7 @@ pkg/parser/
 1. **Detect version** from `swagger` (2.0) or `openapi` (3.0.x / 3.1.x).
 2. **Decode raw bytes** into a thin, typed YAML/JSON AST.
 3. **Version-specific conversion** maps raw AST nodes to the generic `Spec` model.
-4. **Generic resolution** dereferences all `$ref` values, merges `allOf`, resolves polymorphism, and validates structural correctness.
+4. **Generic resolution** dereferences local `$ref` values, detects circular schema refs (marking participants `Opaque`), and validates structural correctness. `allOf` merging and polymorphism resolution happen later in the transformer, not in the parser.
 5. **Return normalized model** to the transformer.
 
 ### Supported inputs
@@ -2018,9 +2149,9 @@ pkg/parser/
 ### `$ref` resolution
 
 - Local JSON Pointers (`#/components/schemas/Pet`) are resolved against the in-memory spec.
-- External file references (`./models.yaml#/Pet`) are loaded recursively with a cache.
-- Remote references (`https://example.com/spec.yaml#/Pet`) are fetched with a bounded timeout and cache.
-- Circular references are detected and reported as warnings; the referencing field is marked `Computed` with an opaque type.
+- External file references (`./models.yaml#/Pet`) are rejected with a fail-loud error diagnostic; only same-document refs resolve.
+- Remote references (`https://example.com/spec.yaml#/Pet`) are rejected with a fail-loud error diagnostic rather than fetched.
+- Circular references are detected and reported as warnings; the parser marks the participating schemas `Opaque` so downstream phases treat them as opaque boundaries instead of expanding them.
 
 ### Validation
 
@@ -2041,7 +2172,7 @@ Because the parser is dedicated, the following items are removed from the techno
 - `github.com/pb33f/libopenapi`
 - `github.com/getkin/kin-openapi`
 
-These are replaced by the in-house parser packages. All parser tests use fixture specs stored in `test/specs/` and assert on the resulting normalized model and IR.
+These are replaced by the in-house parser packages. Parser unit tests use embedded fixtures in `pkg/parser/testdata/`; the reference specs in `test/specs/` drive the end-to-end golden tests in `pkg/generator/golden_test.go`, which assert on the resulting IR and generated file list.
 
 ---
 
@@ -2050,14 +2181,14 @@ These are replaced by the in-house parser packages. All parser tests use fixture
 | OpenAPI `type` | OpenAPI `format` | Terraform Framework Type | Go Model Type |
 |----------------|-------------------|------------------------|----------------|
 | `string` | (none) | `schema.StringAttribute` | `types.String` |
-| `string` | `date-time` | `schema.StringAttribute` | `types.String` (with RFC3339 validator) |
-| `string` | `date` | `schema.StringAttribute` | `types.String` (with date validator) |
-| `string` | `email` | `schema.StringAttribute` | `types.String` (with email validator) |
-| `string` | `uuid` | `schema.StringAttribute` | `types.String` (with UUID validator) |
-| `string` | `uri` | `schema.StringAttribute` | `types.String` (with URL validator) |
-| `string` | `password` | `schema.StringAttribute` | `types.String` (`Sensitive: true`) |
-| `string` | `byte` | `schema.StringAttribute` | `types.String` (base64) |
-| `string` | `binary` | `schema.StringAttribute` | `types.String` (base64 encoded) |
+| `string` | `date-time` | `schema.StringAttribute` | `types.String` |
+| `string` | `date` | `schema.StringAttribute` | `types.String` |
+| `string` | `email` | `schema.StringAttribute` | `types.String` |
+| `string` | `uuid` | `schema.StringAttribute` | `types.String` |
+| `string` | `uri` | `schema.StringAttribute` | `types.String` |
+| `string` | `password` | `schema.StringAttribute` | `types.String` (`Sensitive: true` for ephemeral-resource password-format properties and write-only attributes) |
+| `string` | `byte` | `schema.StringAttribute` | `types.String` |
+| `string` | `binary` | `schema.StringAttribute` | `types.String` |
 | `integer` | (none) | `schema.Int64Attribute` | `types.Int64` |
 | `integer` | `int32` | `schema.Int64Attribute` | `types.Int64` |
 | `integer` | `int64` | `schema.Int64Attribute` | `types.Int64` |
@@ -2069,10 +2200,10 @@ These are replaced by the in-house parser packages. All parser tests use fixture
 | `array` | (of objects) | `schema.ListNestedAttribute` / `schema.SetNestedAttribute` | Nested model struct |
 | `object` | (with properties) | `schema.SingleNestedAttribute` or `schema.SingleNestedBlock` | Nested model struct |
 | `object` | (with additionalProperties) | `schema.MapAttribute` or `schema.MapNestedAttribute` | `types.Map` or nested map |
-| `null` (in type array) | — | `Optional: true, Computed: true` | `types.String` (nullable) |
-| `oneOf` | — | Dynamic or discriminated blocks | See Section 12 |
-| `anyOf` | — | Dynamic or union blocks | See Section 12 |
-| `allOf` | — | Flattened nested attribute | Merged model struct |
+| `null` (in type array) | — | The `"null"` entry is dropped and the remaining type maps normally; a lone `"null"` or a multi-type array falls back to `schema.DynamicAttribute` | `types.String` / `types.Dynamic` |
+| `oneOf` | — | `schema.SingleNestedAttribute` (discriminated union) or `schema.DynamicAttribute` | See Section 12 |
+| `anyOf` | — | `schema.SingleNestedAttribute` (discriminated union) or `schema.DynamicAttribute` | See Section 12 |
+| `allOf` | — | Flattened into a single flat object schema | Merged model struct |
 | `$ref` | — | Resolved inline | Dereferenced schema |
 | (absent type) | — | `schema.DynamicAttribute` | `types.Dynamic` |
 
@@ -2157,7 +2288,7 @@ allOf:
         type: string
 ```
 
-→ Single `SingleNestedAttribute` with all properties from `BasePet` plus `status`.
+→ A single flat object schema with all properties from `BasePet` plus `status`.
 
 ### `oneOf` (Exclusive Union)
 
@@ -2167,7 +2298,7 @@ allOf:
 
 Without a `discriminator`: mapped to a `DynamicAttribute` (Terraform can hold any shape). The generated `Read` method populates the dynamic value based on the actual API response shape.
 
-With a `discriminator`: mapped to type-switched nested blocks:
+With a `discriminator`: mapped to a type-switched `SingleNestedAttribute`:
 
 ```yaml
 oneOf:
@@ -2221,9 +2352,9 @@ polymorphism:
 |-----------|------------------|-----------|
 | `oneOf` appears inside a request/response body with a discriminator | Dynamic union with discriminator | Terraform can switch on the discriminator attribute |
 | `oneOf` appears inside a request/response body without discriminator | Dynamic union | No reliable way to choose variant at plan time |
-| Top-level resource schema is a `oneOf` of named variants | Split resources | Each variant is effectively a different resource kind |
-| `x-terraform-polymorphism: split` extension present | Split resources | Explicit opt-in from spec author |
-| `x-terraform-polymorphism: union` extension present | Dynamic union | Explicit opt-in from spec author |
+| Top-level resource schema is a `oneOf` of named, object-like variants | Split resources | Each variant is effectively a different resource kind |
+
+Strategy selection precedence is: a per-schema `polymorphism.oneOf[i].strategy` override, then the global `polymorphism.strategy` default, then the heuristics above. There is no `x-terraform-polymorphism` spec extension — split/union is chosen via `generator.yaml` or the heuristics.
 
 When `strategy: split_resources` is chosen, Eidos also generates:
 - A shared `Model` struct and helper functions if a base schema exists.
@@ -2238,29 +2369,47 @@ A top-level `anyOf` reaches the IR as a union (kind `AnyOf`) and renders with th
 
 ### Circular References
 
-When `$ref` forms a cycle (e.g., `Person` → `children: Person[]`), the referencing attribute is marked `Computed` with `MarkdownDescription: "Recursive type - see API documentation"`. The client serializes/deserializes using `json.RawMessage` for the recursive field.
+When `$ref` forms a cycle (e.g., `Person` → `children: Person[]`), the parser's
+`DetectCircularSchemaRefs` detects it and emits a `Warning` diagnostic
+("Circular schema reference" — the ref "resolves back to itself or an ancestor
+schema, forming a cycle"). Every schema whose `$ref` participates in a cycle is
+then marked `Opaque` (`markCircularSchemaRefs`). The transformer treats an
+Opaque schema as an opaque boundary: it keeps the schema's scalar fields (type,
+format, nullable, required, …) but does not descend into nested properties or
+items, so the cycle terminates instead of recursing forever (M-41). The
+recursive nested property is therefore dropped from the generated model rather
+than rendered as a self-referential attribute.
 
 ---
 
 ## 13. Error Handling & Diagnostics
 
-All errors from the API client are translated into Terraform `diag.Diagnostics`:
+The generated client translates HTTP failures into a single `client.APIError`
+value (`NewAPIError`), and every resource/data-source CRUD method surfaces it as
+a Terraform `diag.Diagnostics` error. There is no per-status-code diagnostic
+wording; the status code and (truncated) response body are carried verbatim:
 
-| API Error | Diagnostic |
-|-----------|------------|
-| 400 Bad Request | `diag.Errorf("API returned 400: %s", body)` with `Summary: "Bad Request"` |
-| 401 Unauthorized | `diag.Errorf("Unauthorized: check provider credentials")` |
-| 403 Forbidden | `diag.Errorf("Forbidden: insufficient permissions")` |
-| 404 Not Found (on Read) | Mark resource as removed from state |
+| API Error | Behavior |
+|-----------|----------|
+| Any non-success status | `NewAPIError` captures the status code, headers, and body (capped at 1 MiB stored, 1 KiB displayed) and the CRUD method emits `AddError("Error <verb>ing <resource>", apiErr.Error())` where `Error()` renders `API error status=<code> body=<body>` |
+| 404 Not Found (on Read) | `resp.State.RemoveResource(ctx)` — resource dropped from state |
 | 404 Not Found (on Delete) | Success (already deleted) |
-| 409 Conflict | `diag.Errorf("Conflict: resource already exists")` |
-| 422 Unprocessable Entity | Parse validation errors from response body |
-| 429 Too Many Requests | Retry with exponential backoff |
-| 500 Internal Server Error | `diag.Errorf("Internal server error")` |
-| 502/503/504 | Retry with exponential backoff |
-| Network error | `diag.Errorf("API request failed: %v", err)` |
+| 429 Too Many Requests | Retried by `DefaultRetryPolicy` (see below) |
+| 5xx (500/502/503/504) | Retried by `DefaultRetryPolicy` (see below) |
+| Network / transport error | `AddError("Error <verb>ing <resource>", "Could not send request: <err>")` |
+| Response body decode error | `AddError("Error <verb>ing <resource>", "Could not decode response body: <err>")` |
 
-Custom error response schemas (from `4xx`/`5xx` response definitions in the spec) are parsed into structured diagnostics.
+Retries are applied inside `client.Do` via `DoWithRetry`: `DefaultRetryPolicy`
+retries on network errors, HTTP 5xx, and 429 (never on context cancellation or
+deadline exceeded), and `DefaultBackoff` returns exponential backoff with
+additive jitter, clamped to the provider's configured `RetryWaitMin`/`RetryWaitMax`
+windows (default 1s–30s). The retry count and wait windows come from the
+`global_timeouts`/retry configuration in `generator.yaml`.
+
+The generated client also defines an `ErrorResponse` struct (`message`/`code`
+fields) for APIs that wrap errors in a predictable envelope, but it is not
+wired into diagnostics — error bodies are surfaced raw via `APIError`, not
+parsed into structured fields.
 
 ---
 
@@ -2434,8 +2583,8 @@ naming:
   transform: "snake_case"          # snake_case, camelCase, PascalCase
 
 skip_operations:
-  - "DELETE /admin/pets"           # Don't generate a resource for this
-  - "OPTIONS *"
+  - "deleteAdminPet"               # Don't generate a resource for this
+  - "OPTIONS*"
 
 global_timeouts:
   create: 20m
@@ -2455,84 +2604,80 @@ pagination:
 
 ## 15. Output Directory Structure
 
-```
+```text
 terraform-provider-mycloud/
 ├── main.go                                    # Provider server entrypoint
 ├── go.mod                                     # Module definition
-├── go.sum                                     # Dependency checksums
 ├── GNUmakefile                                # Build, test, lint targets
-├── Makefile                                   # Symlink to GNUmakefile
 ├── .goreleaser.yml                            # Release automation
-├── .golangci.yml                              # Linter config
 ├── .github/
 │   └── workflows/
-│       ├── ci.yml                             # CI: lint, test
 │       └── release.yml                        # CD: goreleaser + registry publish
 ├── terraform-registry-manifest.json           # Registry manifest
 ├── README.md                                  # Auto-generated overview
+├── generator.yaml                             # Configuration used to generate this provider
 ├── internal/
 │   ├── provider/
 │   │   ├── provider.go                        # Provider struct, Schema, Configure, Resources, DataSources, Actions, EphemeralResources, ListResources, Functions
 │   │   ├── provider_test.go                   # Unit tests
-│   │   ├── resource_pet.go                    # Pet resource: Create, Read, Update, Delete, ImportState
-│   │   ├── resource_pet_test.go               # Unit tests
-│   │   ├── data_source_pet.go                 # Pet data source: Read
-│   │   ├── data_source_pet_test.go            # Unit tests
-│   │   ├── data_source_pets.go                # Pets list data source
-│   │   ├── action_reboot_server.go            # Reboot server action: Invoke, ModifyPlan, progress messages
-│   │   ├── action_reboot_server_test.go       # Action unit tests
-│   │   ├── ephemeral_temporary_credential.go  # Ephemeral resource: Open, Renew, Close
-│   │   ├── ephemeral_temporary_credential_test.go # Ephemeral resource tests
-│   │   ├── list_pet.go                        # Pet list resource: List (for tfquery)
-│   │   ├── list_pet_test.go                   # List resource tests
-│   │   ├── model_pet.go                       # Pet Go struct models
+│   │   ├── resource_<name>.go                 # Resource: Create, Read, Update, Delete, ImportState
+│   │   ├── resource_<name>_test.go            # Unit tests
+│   │   ├── resource_<name>_acceptance_test.go # Acceptance tests
+│   │   ├── data_source_<name>.go              # Data source: Read
+│   │   ├── data_source_<name>_test.go         # Unit tests
+│   │   ├── action_<name>.go                   # Action: Invoke, ModifyPlan, progress messages
+│   │   ├── ephemeral_<name>.go                # Ephemeral resource: Open, Renew, Close
+│   │   ├── list_<name>.go                     # List resource: List (for tfquery)
+│   │   ├── function_<name>.go                 # Provider-defined function
+│   │   ├── model_<name>.go                    # Go struct models
+│   │   ├── json_convert.go                    # JSON/model conversion helpers (emitted when any resource, data source, or ephemeral resource is wired)
 │   │   └── validators.go                      # Custom validators (discriminator, etc.)
 │   ├── client/
 │   │   ├── client.go                          # HTTP client: request construction, retry
-│   │   ├── auth.go                            # Auth middleware: apiKey, Bearer, OAuth2, Basic
+│   │   ├── auth.go                            # Auth middleware (emitted when the spec declares security schemes)
 │   │   ├── models.go                          # Request/response Go structs
 │   │   ├── errors.go                          # Typed error structs
 │   │   ├── retry.go                           # Exponential backoff + jitter
-│   │   └── pagination.go                      # Pagination helpers
+│   │   ├── pagination.go                      # Pagination helpers
+│   │   └── logging.go                         # Request/response trace logging
 │   └── protocol/
-│       └── value_mappers.go                   # tftypes.Value ↔ Go struct converters
+│       ├── value_mappers.go                   # tftypes.Value ↔ Go struct converters
+│       └── value_mappers_test.go              # Value mapper round-trip tests
 ├── docs/
 │   ├── index.md                               # Provider overview + auth guide
 │   ├── resources/
-│   │   └── pet.md                             # Pet resource documentation
+│   │   └── <name>.md                          # Resource documentation
 │   ├── data-sources/
-│   │   ├── pet.md                             # Pet data source documentation
-│   │   └── pets.md                            # Pets list data source documentation
+│   │   └── <name>.md                          # Data source documentation
 │   ├── actions/
-│   │   └── reboot_server.md                  # Action documentation
+│   │   └── <name>.md                          # Action documentation
 │   ├── ephemeral-resources/
-│   │   └── temporary_credential.md           # Ephemeral resource documentation
+│   │   └── <name>.md                          # Ephemeral resource documentation
+│   ├── list-resources/
+│   │   └── <name>.md                          # List resource documentation
 │   └── functions/
-│       └── lookup_ip.md                       # Provider-defined function docs
+│       └── <name>.md                          # Provider-defined function docs
 ├── examples/
 │   ├── resources/
-│   │   └── pet/
+│   │   └── <name>/
 │   │       └── resource.tf                    # Minimal HCL example
 │   ├── data-sources/
-│   │   ├── pet/
-│   │   │   └── data-source.tf
-│   │   └── pets/
+│   │   └── <name>/
 │   │       └── data-source.tf
 │   ├── actions/
-│   │   └── reboot_server/
-│   │       └── action.tf                     # Action invocation example
-│   ├── ephemeral/
-│   │   └── temporary_credential/
-│   │       └── ephemeral.tf                   # Ephemeral resource example
-│   └── provider/
-│       └── provider.tf                       # Provider config example
-├── templates/                                 # (optional) Custom Go templates for overrides
-├── tests/                                      # terraform test framework files
-│   └── pet.tftest.hcl                          # Native Terraform test for pet resource
-├── tools/
-│   └── tools.go                                # go generate tool dependencies
-└── generator.yaml                             # Configuration used to generate this provider
+│   │   └── <name>/
+│   │       └── action.tf                      # Action invocation example
+│   └── ephemeral-resources/
+│       └── <name>/
+│           └── ephemeral-resource.tf          # Ephemeral resource example
+└── tests/                                     # Only with --generate-terraform-tests
+    ├── <name>.tftest.hcl                      # Native Terraform test
+    └── modules/
+        └── <name>/
+            └── main.tf                        # Terraform test module
 ```
+
+`go.sum`, `.golangci.yml`, a `Makefile` symlink, `templates/`, `tools/`, and `examples/provider/` are **not** generated; they are created by the operator (e.g. `go mod tidy` produces `go.sum`).
 
 ---
 
@@ -2546,15 +2691,15 @@ terraform-provider-mycloud/
 | Fallback Parsing | None | No external fallback parser; all edge cases handled in dedicated parser |
 | Terraform SDK | [`terraform-plugin-framework`](https://github.com/hashicorp/terraform-plugin-framework) v1.x | Schema, CRUD, validators, plan modifiers |
 | Protocol | [`terraform-plugin-go`](https://github.com/hashicorp/terraform-plugin-go) v0.31+ | Protocol v6/v5 server |
+| Logging | [`terraform-plugin-log`](https://github.com/hashicorp/terraform-plugin-log) | Provider trace logging |
 | Testing | [`terraform-plugin-testing`](https://github.com/hashicorp/terraform-plugin-testing) | Acceptance tests |
-| Documentation | [`terraform-plugin-docs`](https://github.com/hashicorp/terraform-plugin-docs) | Registry-compatible Markdown generation |
+| Documentation | In-house Markdown generation (`pkg/generator/docs.go`) | Registry-compatible Markdown, no `terraform-plugin-docs` dependency |
 | CLI | [`spf13/cobra`](https://github.com/spf13/cobra) v1.x | Command-line interface |
 | Templates | [`text/template`](https://pkg.go.dev/text/template) for text files; `pkg/generator/astgen` (`go/ast` + `go/format`) for Go source files | Go code generation |
 | HTTP Client | [`net/http`](https://pkg.go.dev/net/http) | Generated API client |
-| Retry | [`github.com/hashicorp/go-retryablehttp`](https://github.com/hashicorp/go-retryablehttp) | Exponential backoff |
+| Retry | In-house retry logic in the generated `internal/client/retry.go` | Exponential backoff with jitter (no `go-retryablehttp` dependency) |
 | Release | [`goreleaser/goreleaser`](https://goreleaser.com) | Multi-platform binary builds, signing, GitHub release |
 | Linting | [`golangci-lint`](https://golangci-lint.run) | Code quality |
-| YAML/JSON | [`gopkg.in/yaml.v3`](https://gopkg.in/yaml.v3), [`encoding/json`](https://pkg.go.dev/encoding/json) | Spec and config parsing |
 
 ---
 
@@ -2579,7 +2724,7 @@ lint:
     golangci-lint run
 
 generate:
-    cd tools; go generate ./...
+    @if [ -d tools ]; then cd tools && go generate ./...; fi
 
 fmt:
     gofmt -s -w -e .
@@ -2595,25 +2740,31 @@ testacc:
 
 ### 17.2 Version Injection
 
-The generated `main.go` includes a package-level `version` variable that is injected at build time via `ldflags`:
+The generated `main.go` includes package-level `version`, `commit`, and `date`
+variables that are injected at build time via `ldflags`:
 
 ```go
 // main.go
-var version string = "dev"  // overridden at release build time
+var (
+    version string = "dev"
+    commit  string = "none"
+    date    string = "unknown"
+)
 ```
 
 **GoReleaser ldflags**:
 ```yaml
 ldflags:
-  - '-s -w -X main.version={{.Version}} -X main.commit={{.Commit}}'
+  - -s -w -X main.version={{ .Version }} -X main.commit={{ .Commit }} -X main.date={{ .CommitDate }}
 ```
 
 | Flag | Purpose |
 |------|---------|
 | `-s` | Omit symbol table (reduces binary size) |
 | `-w` | Omit DWARF debug info |
-| `-X main.version={{.Version}}` | Inject release tag (e.g., `1.2.3`) |
-| `-X main.commit={{.Commit}}` | Inject short commit SHA |
+| `-X main.version={{ .Version }}` | Inject release tag (e.g., `1.2.3`) |
+| `-X main.commit={{ .Commit }}` | Inject short commit SHA |
+| `-X main.date={{ .CommitDate }}` | Inject build date |
 
 ### 17.3 Local Development Overrides
 
@@ -2651,18 +2802,15 @@ The generated provider uses `terraform-plugin-log` for structured logging. Key e
 
 ### 17.5 Debugging with Delve
 
-The generated `main.go` supports debug mode via a `-debug` flag:
+The generated `main.go` supports debug mode via a `-debug` flag (see §9.1 for
+the full generated `main.go`):
 
 ```go
-func main() {
-    var debug bool
-    flag.BoolVar(&debug, "debug", false, "enable debugger support")
-    flag.Parse()
-    providerserver.Serve(context.Background(), provider.New(), providerserver.ServeOpts{
-        Address: "registry.terraform.io/mycloud/mycloud",
-        Debug:   debug,
-    })
-}
+var debug bool
+flag.BoolVar(&debug, "debug", false, "Set to true to run the provider with support for debuggers like delve")
+// ...
+opts := providerserver.ServeOpts{Address: address, Debug: debug}
+err := providerserver.Serve(context.Background(), provider.New, opts)
 ```
 
 **Debug workflow**:
@@ -2674,46 +2822,35 @@ func main() {
 
 ### 17.6 `go generate` Integration
 
-The generated provider includes a `tools/` subdirectory for dev-only tool dependencies:
+Eidos does **not** emit a `tools/` directory. The generated `GNUmakefile` `generate` target is a conditional no-op that runs `go generate` only when the operator has added a `tools/` directory:
 
-**`tools/tools.go`** (build-tagged to never compile into the provider binary):
-```go
-//go:build generate
-
-package tools
-
-import (
-    _ "github.com/hashicorp/copywrite"
-    _ "github.com/hashicorp/terraform-plugin-docs/cmd/tfplugindocs"
-)
-
-//go:generate go run github.com/hashicorp/copywrite headers -d .. --config ../.copywrite.hcl
-//go:generate terraform fmt -recursive ../examples/
-//go:generate go run github.com/hashicorp/terraform-plugin-docs/cmd/tfplugindocs generate --provider-dir .. -provider-name mycloud
+```make
+generate:
+	@if [ -d tools ]; then cd tools && go generate ./...; fi
 ```
 
-This produces:
-- Copyright headers on all Go source files.
-- Formatted example `.tf` files in `examples/`.
-- Registry-ready documentation Markdown in `docs/`.
+Operators who want `go generate` integration (e.g. `copywrite` headers, `tfplugindocs` documentation) add their own `tools/tools.go` with the appropriate `//go:generate` directives; the generated `GNUmakefile` picks it up automatically.
 
 ### 17.7 Multi-Platform Builds
 
-The generated `.goreleaser.yml` targets these GOOS/GOARCH combinations:
+The generated `.goreleaser.yml` builds for every GOOS/GOARCH combination in the
+matrix below (the `ignore` list removes the unsupported pairs):
 
-| Tier | GOOS | GOARCH |
-|------|------|--------|
-| Required (HCP Terraform) | linux | amd64 |
-| Primary | darwin | amd64 |
-| Primary | darwin | arm64 |
-| Primary | linux | amd64 |
-| Primary | linux | arm64 |
-| Primary | linux | arm (ARMv6) |
-| Primary | windows | amd64 |
-| Secondary | linux, windows, freebsd | 386 |
-| Secondary | freebsd | amd64 |
+| GOOS | GOARCH |
+|------|--------|
+| linux | amd64, arm, arm64, 386 |
+| darwin | amd64, arm64 |
+| windows | amd64, arm, 386 |
+| freebsd | amd64, arm, arm64, 386 |
+| openbsd | amd64, 386 |
+| solaris | amd64 |
 
-`CGO_ENABLED=0` is set for all targets. `darwin/386` and `windows/arm` are explicitly excluded.
+`CGO_ENABLED=0` is set for all targets. The explicitly excluded pairs are
+`darwin/386`, `darwin/arm`, `openbsd/arm`, `openbsd/arm64`, `solaris/386`,
+`solaris/arm`, `solaris/arm64`, and `windows/arm64`. The binary is named
+`terraform-provider-<name>_v{{ .Version }}` and archives use the
+`{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}` template (zip on
+Windows, tar.gz elsewhere).
 
 ### 17.8 Provider Source Address
 
@@ -2777,77 +2914,76 @@ The generated provider is compatible with all standard Terraform meta-arguments:
 
 ### 18.5 Test Infrastructure
 
-```
+```text
 test/
-├── specs/                    # Reference OpenAPI specs
+├── specs/                    # Reference OpenAPI specs (14)
 │   ├── mycloud.yaml
 │   ├── mycloud-pets.yaml
 │   ├── mycloud-data.yaml
-│   └── complex-polymorphism.yaml
-├── fixtures/                 # Expected output
-│   ├── mycloud/
-│   │   ├── internal/
-│   │   │   └── provider/
-│   │   │       ├── provider.go
-│   │   │       ├── resource_pet.go
-│   │   │       └── ...
-│   │   └── ...
-│   └── ...
-└── generator_test.go         # Integration tests
+│   ├── complex-polymorphism.yaml
+│   ├── circular-references.yaml
+│   └── ... (14 total)
+└── fixtures/                 # Empty (only .gitkeep)
+
+testfixtures/
+├── golden/                   # Golden snapshots, one per reference spec
+│   ├── mycloud.golden.json
+│   ├── mycloud-pets.golden.json
+│   └── ... (14 total)
+└── live/                     # Live e2e tests (TF_ACC=1, local mock server)
+    └── live_test.go
+
+pkg/generator/golden_test.go  # Parse→transform→generate integration tests
 ```
 
 ### 18.6 `terraform test` Framework
 
-Terraform 1.6+ introduced a native testing framework using `.tftest.hcl` files. Eidos generates `.tftest.hcl` test files alongside the provider for integration testing without Go code:
+Terraform 1.6+ introduced a native testing framework using `.tftest.hcl` files. Eidos generates `.tftest.hcl` test files alongside the provider for integration testing without Go code. For each managed resource it emits an orchestration file plus a supporting module:
 
 ```hcl
 # tests/pet.tftest.hcl
-provider "mycloud" {
-  host     = "localhost"
-  port     = 8080
-  api_key  = "test-key"
-}
-
 run "create_pet" {
   command = apply
 
   variables {
-    name   = "Fluffy"
-    status = "available"
+    name = "example"
+  }
+
+  module {
+    source = "./tests/modules/pet"
   }
 
   assert {
-    condition     = mycloud_pet.test.name == "Fluffy"
-    error_message = "Pet name should be Fluffy"
+    condition     = output.id == "generated"
+    error_message = "unexpected id"
   }
+}
+```
 
-  assert {
-    condition     = mycloud_pet.test.status == "available"
-    error_message = "Pet status should be available"
+```hcl
+# tests/modules/pet/main.tf
+terraform {
+  required_providers {
+    mycloud = {
+      source = "mycloud/mycloud"
+    }
   }
 }
 
-run "update_pet" {
-  command = apply
-
-  variables {
-    name   = "Fluffy Updated"
-    status = "sold"
-  }
-
-  assert {
-    condition     = mycloud_pet.test.name == "Fluffy Updated"
-    error_message = "Pet name should be updated"
-  }
+provider "mycloud" {
+  api_key = "example"
 }
 
-run "delete_pet" {
-  command = destroy
+variable "name" {
+  type = string
+}
 
-  assert {
-    condition     = length(mycloud_pet.test) == 0
-    error_message = "Pet should be destroyed"
-  }
+resource "mycloud_pet" "example" {
+  name = var.name
+}
+
+output "id" {
+  value = mycloud_pet.example.id
 }
 ```
 
@@ -2860,11 +2996,11 @@ generate_terraform_tests: true
 When disabled (the default), no `tests/` directory is emitted, keeping the output minimal.
 
 **Generated test coverage**:
-- `run` blocks for Create, Update, Import, and Destroy operations.
-- `assert` blocks derived from OpenAPI response schemas and examples.
-- `variables` blocks populated from OpenAPI `example` and `x-examples` fields.
-- Mock HTTP server configuration via provider attributes (`host`, `port`).
-- Optional provider-level `log_file` assertions for trace-output verification.
+- One `run` block per resource (`create_<name>`) with `command = apply`; there are no Update, Import, or Destroy run blocks.
+- A `variables` block populated from the resource's required top-level primitive attributes, using placeholder values (not OpenAPI `example` fields).
+- A `module` block referencing the supporting `tests/modules/<name>` module.
+- An `assert` block checking that the generated resource id matches the placeholder value produced by the generated provider's Create implementation.
+- The supporting module declares `required_providers`, configures the provider with dummy placeholder values for its required attributes, declares variables for the resource's required primitives, and emits the resource plus an `output` for its identifier.
 
 ---
 
@@ -2874,16 +3010,22 @@ Eidos generates all artifacts required for Terraform Registry publishing:
 
 | Artifact | Purpose |
 |----------|---------|
-| `terraform-registry-manifest.json` | Registry metadata (`protocol_versions: ["6.0"]` or `["5.0"]`) |
-| `.goreleaser.yml` | Multi-OS/arch binary builds, SHA256SUMS, GPG signing |
-| `.github/workflows/release.yml` | CI/CD: tag → build → sign → publish |
+| `terraform-registry-manifest.json` | Registry metadata (`protocol_versions: ["6.0"]`; the `ProtocolVersions` build field can override it) |
+| `.goreleaser.yml` | Multi-OS/arch binary builds and SHA256SUMS; GPG signing is emitted only when `SignRelease` is enabled |
+| `.github/workflows/release.yml` | CI/CD: tag → build → publish; GPG key import/signing steps only when `SignRelease` is enabled |
 | `docs/` | Registry-rendered documentation |
 | `examples/` | Registry-rendered examples |
 | `README.md` | Provider overview with installation instructions |
 
 **Registry naming requirement**: The GitHub repository must be named `terraform-provider-<NAME>`, where `<NAME>` matches the provider type name.
 
-**Signing**: GPG key pairs must be generated and the public key uploaded to the Registry. `goreleaser` signs the SHA256SUMS file automatically.
+**Signing**: GPG signing is not automatic. The generator's `.goreleaser.yml` and
+release-workflow templates include a `signs:` block and GPG key-import step only
+when the `SignRelease` build option is enabled (which requires configuring
+`GPG_PRIVATE_KEY` and `GPG_PASSPHRASE` repository secrets and uploading the
+public key to the Registry). `SignRelease` is currently a `BuildConfig` field
+that is not wired to any `generator.yaml` key or CLI flag, so generated releases
+are unsigned by default.
 
 ---
 
@@ -2901,8 +3043,9 @@ is:
   acceptance tests exercise them against a stateful in-process mock server);
   only provider-defined functions remain honestly scaffolded by design (no
   remote endpoint). The reference corpus has been enriched so the checked-in
-  specs exercise wired bodies at scale (the mycloud spec wires 7 resources,
-  17 data sources, and 12 list resources; see
+  specs exercise wired bodies at scale (the mycloud spec wires 7 resources —
+  config, instance, network, project, secret, stack, workspace — to the
+  generated client, alongside 17 data sources and 12 list resources; see
   [§23](#23-remaining-gaps--accepted-limitations) for the resolution record).
 - **Heuristic auto-detection** — extend OpenAPI operation heuristics so that
   ephemeral resources and functions are inferred from specs that declare
@@ -2931,15 +3074,15 @@ by the implementation-status matrix and is no longer maintained as a checklist.
 | 3 | Large spec → huge generated provider (1000+ resources) | Medium | Medium | Support resource filtering via `generator.yaml` allow-list; code splitting per resource; lazy schema registration. |
 | 4 | Breaking changes in `terraform-plugin-framework` | Low | High | Pin framework version in generated `go.mod`; generate compatibility shims; test against multiple Terraform CLI versions. |
 | 5 | Security scheme complexity (OAuth2 authorization code, OIDC) | Medium | Medium | Generate provider config blocks for tokens; leave full interactive flows to user-supplied middleware; document manual setup steps. |
-| 6 | Circular `$ref` in specs | Medium | Low | Detect cycles during normalization; mark circular fields as `Computed` with opaque type; emit warning. |
+| 6 | Circular `$ref` in specs | Medium | Low | Detect cycles during parsing; mark cyclic schemas `Opaque` and emit a warning; the transformer treats them as an opaque boundary (scalar fields kept, nested properties dropped) so generation terminates. |
 | 7 | Ambiguous CRUD inference (multiple POST endpoints for same resource) | Medium | Medium | Require explicit `generator.yaml` override for ambiguous operations; emit error listing candidates. |
 | 8 | Non-RESTful APIs (GraphQL, gRPC, WebSocket) | Low | Low | Document that Eidos targets REST/HTTP APIs only; non-REST APIs produce warnings. |
 | 9 | Spec version incompatibilities (2.0 vs 3.0 vs 3.1 edge cases) | Medium | Medium | Dedicated in-house parser with a comprehensive version-specific test suite; no reliance on third-party parser behavior. |
-| 10 | Terraform state drift for PATCH-only APIs | Medium | Medium | Generate drift-correcting Read after Update; configurable via `generator.yaml`. |
+| 10 | Terraform state drift for PATCH-only APIs | Medium | Medium | Wired Update bodies call `preserveStateIntoPlan` to carry known state values (e.g. optimistic-concurrency versions) into the plan so the request body is complete (G20); the framework's post-Update Read refreshes state. |
 | 11 | Generated code readability and maintainability | Medium | High | Use `pkg/generator/astgen` (`go/ast` + `go/format`) for programmatic Go generation; follow HashiCorp's provider conventions; add comments with spec source references. |
-| 12 | Multi-file specs (`$ref` to external files/URLs`) | Medium | Medium | Support recursive resolution of local and remote `$ref` targets with caching and cycle detection. |
+| 12 | Multi-file specs (`$ref` to external files/URLs) | Medium | Medium | Local `$ref` resolution with cycle detection; external/remote `$ref` values are rejected with an error diagnostic rather than fetched. |
 | 13 | State Stores (experimental Terraform 1.15+) | Low | Low | State Stores are currently experimental and offered without compatibility promises. Eidos tracks the feature but does not generate State Store implementations until GA. Document as a future milestone. |
-| 14 | Actions, Ephemeral Resources, List Resources require Terraform CLI >= 1.10–1.14 | Low | Medium | Generated providers set minimum Terraform version constraints appropriately. Actions require >= 1.13, Ephemeral require >= 1.10, List Resources require >= 1.14. Providers targeting older Terraform versions will not include these constructs. |
+| 14 | Actions, Ephemeral Resources, List Resources require Terraform CLI >= 1.10–1.14 | Low | Medium | The generated provider does not set a minimum Terraform version constraint; these constructs are emitted whenever the spec/overrides infer them. Practitioners on older Terraform CLIs must pin a compatible provider version themselves. |
 
 ---
 
@@ -2963,7 +3106,7 @@ by the implementation-status matrix and is no longer maintained as a checklist.
 | **`.tftest.hcl`** | Terraform's native testing framework (1.6+) using HCL-based test files with `run` and `assert` blocks. |
 | **`dev_overrides`** | A Terraform CLI configuration in `~/.terraformrc` that redirects provider resolution to a local binary directory for development. |
 | **`TF_REATTACH_PROVIDERS`** | An environment variable used for debugging providers with Delve; contains a JSON string with the provider's gRPC connection details. |
-| **`go generate`** | A Go toolchain command that runs directives embedded in Go source files; used by Eidos to generate documentation and format examples. |
+| **`go generate`** | A Go toolchain command that runs directives embedded in Go source files. Eidos does not emit `//go:generate` directives; the generated `GNUmakefile` `generate` target runs `go generate` only when the operator adds a `tools/` directory (see §17.6). |
 | **`ldflags`** | Go linker flags used to inject version and commit information at build time via `-X main.version=...`. |
 | **Resource** | A Terraform construct representing an infrastructure object that can be created, read, updated, and deleted |
 | **Data Source** | A Terraform construct representing a read-only reference to external data |
@@ -2999,7 +3142,7 @@ implemented; `CHANGELOG.md` [Unreleased] records the detail:
 
 | Item | Resolution |
 |------|-----------|
-| Reference corpus barely wired | the mycloud reference spec (merging the two former external-shape reference specs) carries real response schemas exposing path params; list resources populate their config schema from the collection path's parameters (`transformer.ListResourceConfigSchema`). The mycloud spec wires 7 resources, 17 data sources, and 12 list resources; the corpus-wide wired share went 1→7 resources, 7→25 data sources, 1→12 list resources. `assertCorpusWiring` in the golden test guards per-spec wiring floors. |
+| Reference corpus barely wired | the mycloud reference spec (merging the two former external-shape reference specs) carries real response schemas exposing path params; list resources populate their config schema from the collection path's parameters (`transformer.ListResourceConfigSchema`). The mycloud spec wires 7 resources, 17 data sources, and 12 list resources; the corpus-wide wired share went 1→7 resources, 7→17 data sources, 1→12 list resources. `assertCorpusWiring` in the golden test guards per-spec wiring floors. |
 | Swagger 2.0 formData end-to-end | `paramsFromOperation` and `transformer.createFormDataParams` decompose the v2 request-body form schema back into per-field parameters; primitive fields wire as `application/x-www-form-urlencoded` and binary uploads as `multipart/form-data` (`swagger-formdata` reference spec). |
 | Ephemeral/function inference | `ephemeralFromOperation` populates config/result schemas and consumes lifecycle subpaths; `ephemeral-resources` and `provider-functions` reference specs exercise the inference end to end. |
 | Remote `--spec` URL fetching | `eidos generate`/`generate-config --spec` accept an http(s) URL with scheme allowlist, SSRF guard, size/timeout caps, and env-var-only auth. |

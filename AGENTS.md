@@ -144,7 +144,7 @@ See `docs/PROJECT_DESIGN.md` for the full architecture and IR design.
 - Generated Go follows `terraform-plugin-framework` conventions with comments
   derived from spec descriptions.
 - Generator panics on unexpected IR shapes must be returned as render errors via
-  `GoCodeSafe`, not crashed.
+  `renderFileSafely` (`pkg/generator/harness.go`), not crashed.
 - Unit tests live next to the code they exercise (`*_test.go` alongside source).
   `errcheck` stays active for unchecked function calls in tests; intentionally
   ignored errors need `//nolint:errcheck // <reason>`.

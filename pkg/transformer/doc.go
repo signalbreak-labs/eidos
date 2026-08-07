@@ -1,54 +1,58 @@
 // Package transformer maps normalized OpenAPI schemas to Terraform Plugin
 // Framework representations used by the Eidos provider generator.
 //
-// # Pipeline status — live vs. unwired API (REVIEW M-42, M-51)
+// # Pipeline role
 //
-// The transformer exposes a large exported surface, but only a small subset is
-// reached by the production generation path (cmd/eidos → parser → transformer →
-// ir → generator). The remainder is exercised solely by tests. This is
-// intentional scaffolding for auto-detection heuristics that are not yet wired
-// into the generator (see PROJECT_DESIGN.md §8.7–§8.10 and the "Important
-// current limitations" section of CLAUDE.md). It is preserved so the heuristics
-// can be switched on without re-deriving the API, but every bug in the unwired
-// surface is latent until that wiring lands.
+// The transformer is the second stage of the generation pipeline
+// (cmd/eidos → parser → transformer → ir → generator). It consumes the
+// parser's version-agnostic model, normalizes it (allOf flattening,
+// polymorphism, parameter/security/server composition, naming), infers
+// resources, data sources, list resources, actions, ephemeral resources, and
+// functions, maps OpenAPI types to Terraform Plugin Framework types, applies
+// generator.yaml overrides, and produces the ProviderIR consumed by the
+// generator.
 //
 // # Live exported API (production callers)
 //
-// Only these exported symbols have non-test, non-transformer callers today:
+// The production generation path (pkg/api/handler.go, pkg/generator) calls
+// these exported symbols:
 //
-//   - ToSnakeCase                 — naming normalization used by the generator.
-//   - NormalizeOperationID        — operation-id cleanup.
-//   - ApplyOverrides              — applies generator.yaml overrides to the IR.
-//   - ApplyWriteOnlyAttributes    — write-only attribute handling.
+//   - OperationsFromSpecWithDiagnostics — operation extraction from a spec.
+//   - InferResourceCRUD / InferListResources — CRUD and list-resource inference.
+//   - ManagedResourceSchema / DataSourceSchema / ListResourceConfigSchema —
+//     schema construction for inferred constructs.
+//   - ObjectSchemaFromSpec / ObjectSchemaFromOperation / ResultSchemaFromResponse
+//     / SchemaSpec — schema conversion helpers.
+//   - ApplyOverrides — applies generator.yaml overrides to the IR.
+//   - ApplyWriteOnlyAttributesWithDiagnostics — write-only attribute handling.
+//   - MapSecuritySchemeToProviderConfig — security scheme → provider config.
+//   - ApplyDynamicUnion — discriminated-union rendering for the generator.
+//   - ToSnakeCase / NormalizeOperationID / SanitizeAttributeName — naming.
+//   - RequestBodyKind — request media-type selection for wired CRUD bodies.
+//   - FilterSpecOperations — include/exclude operation filtering.
+//   - IsLifecycleSubpath / IsCRUDCreatePath / IDComposite — classification
+//     helpers shared with the api package's operation classification.
 //
-// # Unwired inference pipeline (M-42)
+// # Test-only exported API
 //
-// The following have zero production callers — only tests exercise them:
+// The following exported symbols have no non-test, non-transformer callers
+// today; only tests exercise them. They are preserved so the heuristics can be
+// switched on without re-deriving the API, but every bug in this surface is
+// latent until that wiring lands:
 //
-//   - OperationsFromSpec
-//   - InferResourceCRUD
-//   - InferActions
-//   - InferDataSources
-//   - InferListResources
-//   - InferEphemeralResources
+//   - OperationsFromSpec (the non-diagnostic variant)
+//   - InferActions / InferDataSources / InferEphemeralResources / InferFunctions
+//     — the api package classifies these constructs inline in addPathOperations,
+//     deliberately unified with the transformer's inference rules (see the
+//     comments in pkg/api/handler.go), so these entry points are not called
+//     directly.
 //   - FilterResources / ShouldInclude
 //   - NormalizeOneOf / NormalizeAnyOf
 //   - ToPascalCase
-//
-// ~2,300 lines of exported API sit behind these entry points. Bugs fixed in
-// this code (e.g. M-49's real stringvalidator.RegexMatches constructors) are
-// latent guarantees: they are correct-if-wired, not active behavior.
-//
-// # Unwired second-half API (M-51)
-//
-// The following also have zero non-test callers (verified by grep):
-//
-//   - MapSecuritySchemeToProviderConfig
-//   - SelectStrategy / ApplyDynamicUnion / SplitResources
+//   - SelectStrategy / SplitResources
 //   - InferPlanModifiers / ApplyPlanModifiers
 //   - InferValidators / ApplyValidators
-//   - NormalizeOperationSecurity
-//   - NormalizeOperationServers
+//   - NormalizeOperationSecurity / NormalizeOperationServers
 //
 // validator_inference.go additionally duplicates the live
 // keywords_advanced.go validator pipeline with a divergent output format.
@@ -57,8 +61,8 @@
 // TypeMapping.Validator, so the inferred validators are currently dead
 // metadata on the IR.
 //
-// Before relying on any of the above for runtime behavior, confirm the wiring
-// has landed (grep for non-test, non-transformer callers). Deleting or rewiring
-// this surface is a product decision; it is intentionally retained until that
-// decision is made.
+// Before relying on any of the test-only symbols for runtime behavior, confirm
+// the wiring has landed (grep for non-test, non-transformer callers). Deleting
+// or rewiring this surface is a product decision; it is intentionally retained
+// until that decision is made.
 package transformer

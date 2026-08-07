@@ -73,7 +73,7 @@ eidos generate --spec ./api.yaml --config ./generator.yaml --output ./terraform-
 | Flag | Default | Required | Description |
 |------|---------|----------|-------------|
 | `--spec` | — | **yes** | Path to the OpenAPI spec file (JSON or YAML), or an http(s) URL to fetch. |
-| `--output` | current working directory | no | Target directory for generated files. |
+| `--output` | — | **yes** (full generation) | Target directory for generated files. Required when not using `--dry-run`. |
 | `--config` | *(none)* | no | Path to a `generator.yaml` overrides file. |
 | `--dry-run` | `false` | no | Run the pipeline without writing files and print a summary. |
 | `--spec-allow-http` | `false` | no | Permit `http://` spec URLs (https is the default for remote specs). |
@@ -88,9 +88,9 @@ eidos generate --spec ./api.yaml --config ./generator.yaml --output ./terraform-
 | `--spec-client-secret-env` | *(none)* | no | Environment variable holding the OAuth2 client secret. |
 | `--dry-run-output` | stdout | no | Write the dry-run summary to a file. JSON is used when the path ends in `.json`; otherwise plain text is used. The path must be relative to the current working directory. |
 | `--generate-config` | `false` | no | Emit a starter `generator.yaml` into the output directory. Can be combined with `--dry-run`. |
+| `--provider-name` | *(spec title)* | no | Provider name for the starter config when used with `--generate-config`. |
+| `--force` | `false` | no | Overwrite an existing `generator.yaml` when used with `--generate-config`, or overwrite generated provider files in write mode. |
 | `--generate-terraform-tests` | `false` | no | Emit native `.tftest.hcl` suites in the output `tests/` directory. |
-| `--log-level` | `info` | no | One of `debug`, `info`, `warn`, `warning`, `error`, `fatal`. |
-| `--log-file` | *(none)* | no | Path to write structured logs. |
 
 ### Behavior
 
@@ -102,9 +102,10 @@ When `--dry-run` is set without `--generate-config`, Eidos runs the generator
 in record mode and prints the list of files that would be created. The pipeline
 does not modify the filesystem.
 
-Omitting `--dry-run` currently returns an error because full file writing is not
-yet implemented. Use `--dry-run` to preview the generated provider layout. See
-[Current limitations](#current-limitations) below for other known gaps.
+Omitting `--dry-run` runs the generator in write mode and writes the provider
+files to `--output` (which is required for full generation). Write mode refuses
+to overwrite existing files unless `--force` is supplied. Use `--dry-run` to
+preview the generated provider layout first.
 
 ## `eidos generate-config`
 
@@ -210,6 +211,8 @@ Generate a starter `generator.yaml` from a spec.
 | `spec` | `string` or `object` | **yes** | OpenAPI spec as a JSON/YAML string or parsed object. |
 | `format` | `string` | no | `yaml` (default) or `json`. |
 | `include_comments` | `boolean` | no | Add a leading comment to the generated YAML. |
+| `skip_operations` | `string[]` | no | Operation IDs or name patterns to omit from generated resources and data sources. |
+| `include_operations` | `string[]` | no | Operation IDs or name patterns that must be present for a resource or data source to be generated; when empty, all operations are candidates. |
 
 Returns an object with `config` (the generated `generator.yaml` contents) and
 `diagnostics` (parse and generation messages).
@@ -291,12 +294,16 @@ list_resource_overrides: []ListResourceOverride
 function_overrides:     []FunctionOverride
 logging:                LoggingConfig
 auth:                   []AuthConfig
+security:               SecurityConfig
 naming:                 NamingConfig
 skip_operations:        []string
+include_operations:    []string
 global_timeouts:        TimeoutConfig
 pagination:             PaginationConfig
 polymorphism:           PolymorphismConfig
 generate_terraform_tests: bool
+generation:             GenerationConfig
+spec:                   SpecConfig
 ```
 
 ### `provider`
@@ -405,8 +412,11 @@ datasource_overrides:
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `operation` | string | **Required.** OpenAPI operationId. |
+| `operation` | string | OpenAPI operationId to match. |
+| `name` | string | Data source name/type name to match (alternative to `operation`). |
 | `datasource_name` | string | Generated data source name. |
+
+Either `operation` or `name` is required to match a data source.
 
 ### `action_overrides`
 
@@ -551,6 +561,7 @@ auth:
 | `client_id_env` | string | Client ID environment variable. |
 | `client_secret_env` | string | Client secret environment variable. |
 | `token_url` | string | Token endpoint URL. |
+| `discovery_url` | string | OIDC discovery URL (overrides the spec's `openIdConnectUrl`). |
 
 Generated providers wire interceptors for `apiKey`, HTTP `basic`/`bearer`,
 OAuth2 `client_credentials` and `password` grants, OAuth2 `authorization_code`
@@ -561,6 +572,17 @@ override that skips discovery, then a client-credentials token fetch). The
 OAuth2 `implicit` flow is intentionally not wired — it requires an interactive
 browser redirect and is deprecated in OAuth 2.1 — and emits a runtime warning
 when configured.
+
+### `security`
+
+```yaml
+security:
+  scheme: apiKey
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `scheme` | string | Name of a declared security scheme to use when the spec declares multiple global security requirements (OpenAPI OR: any one suffices). When unset, eidos applies every declared scheme (AND) and emits a warning. |
 
 ### `naming`
 
@@ -573,6 +595,24 @@ naming:
 ```
 
 Allowed `transform` values: `snake_case` (default), `camelCase`, `PascalCase`.
+
+### `skip_operations` / `include_operations`
+
+```yaml
+skip_operations:
+  - deleteAdminPet
+  - "OPTIONS*"
+include_operations:
+  - getPet
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `skip_operations` | []string | Operation IDs to exclude from generation. |
+| `include_operations` | []string | Operation IDs to include; when non-empty, only matching operations are kept. |
+
+Patterns use glob-style wildcards (`*` matches zero or more characters, `?`
+matches exactly one) and are matched case-sensitively against the operation ID.
 
 ### `global_timeouts`
 
@@ -625,6 +665,55 @@ resource sharing the original CRUD mapping; declare a `resource_name` or
 `oneOf`/`anyOf` compositions (inside object properties or collection
 elements) render as Dynamic attributes and emit a warning.
 
+### `generation`
+
+```yaml
+generation:
+  resources:
+    include: [pet, server]
+    exclude: ["admin_*"]
+  datasources:
+    include: []
+  skip_tests: false
+  skip_docs: false
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `resources` | ResourceGenerationConfig | Include/exclude patterns and package splitting for managed resources. |
+| `datasources` | ResourceGenerationConfig | Same for data sources. |
+| `actions` | ResourceGenerationConfig | Same for actions. |
+| `ephemeral_resources` | ResourceGenerationConfig | Same for ephemeral resources. |
+| `list_resources` | ResourceGenerationConfig | Same for list resources. |
+| `functions` | ResourceGenerationConfig | Same for functions. |
+| `skip_tests` | bool | Skip generating test files. |
+| `skip_docs` | bool | Skip generating documentation. |
+
+Each `ResourceGenerationConfig`:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `include` | []string | Allow-list of construct name patterns; when non-empty, only matching constructs are retained. |
+| `exclude` | []string | Deny-list of construct name patterns; matching constructs are dropped regardless of the allow-list. |
+| `package` | string | Default sub-package for included constructs. |
+| `packages` | []PackageRuleConfig | Per-pattern package overrides. |
+
+### `spec`
+
+```yaml
+spec:
+  path: https://vendor.example/api/openapi.json
+  auth:
+    scheme: bearer
+    token_env: VENDOR_SPEC_TOKEN
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `path` | string | Path or http(s) URL of the OpenAPI spec. |
+| `format` | string | Spec format hint (`yaml` or `json`). |
+| `auth` | SpecAuthConfig | Authentication for a remote spec fetch (same fields as the `--spec-auth-*` CLI flags). |
+
 ## Generated provider layout
 
 The generated provider is a normal Go module with a standard Terraform provider
@@ -634,44 +723,53 @@ structure.
 <output-dir>/
 ├── main.go                         # provider server entrypoint
 ├── go.mod
-├── Makefile
+├── GNUmakefile
+├── .goreleaser.yml
+├── .github/workflows/release.yml
+├── terraform-registry-manifest.json
+├── README.md
 ├── generator.yaml                  # when config collection is enabled
 ├── internal/
 │   ├── provider/
 │   │   ├── provider.go             # provider schema and registration
 │   │   ├── provider_test.go
-│   │   ├── resource_<name>.go     # managed resources
+│   │   ├── resource_<name>.go      # managed resources
 │   │   ├── resource_<name>_test.go
 │   │   ├── resource_<name>_acceptance_test.go
 │   │   ├── data_source_<name>.go
 │   │   ├── data_source_<name>_test.go
 │   │   ├── action_<name>.go
-│   │   ├── action_<name>_test.go
 │   │   ├── ephemeral_<name>.go
-│   │   ├── ephemeral_<name>_test.go
 │   │   ├── list_<name>.go
-│   │   ├── list_<name>_test.go
 │   │   ├── function_<name>.go
-│   │   ├── function_<name>_test.go
+│   │   ├── model_<name>.go
+│   │   ├── json_convert.go         # when any resource, data source, or ephemeral resource is wired
 │   │   └── validators.go
 │   ├── client/
 │   │   ├── client.go
-│   │   ├── auth.go
+│   │   ├── auth.go                 # when the spec declares security schemes
 │   │   ├── models.go
-│   │   └── retry.go
+│   │   ├── errors.go
+│   │   ├── retry.go
+│   │   ├── pagination.go
+│   │   └── logging.go
 │   └── protocol/
-│       └── value_mappers.go
+│       ├── value_mappers.go
+│       └── value_mappers_test.go
 ├── docs/
 │   ├── index.md
 │   ├── resources/<name>.md
 │   ├── data-sources/<name>.md
 │   ├── actions/<name>.md
 │   ├── ephemeral-resources/<name>.md
+│   ├── list-resources/<name>.md
 │   └── functions/<name>.md
 ├── examples/
 │   ├── resources/<name>/resource.tf
-│   └── data-sources/<name>/data-source.tf
-└── tests/
+│   ├── data-sources/<name>/data-source.tf
+│   ├── actions/<name>/action.tf
+│   └── ephemeral-resources/<name>/ephemeral-resource.tf
+└── tests/                          # only with --generate-terraform-tests
     ├── <name>.tftest.hcl
     └── modules/<name>/main.tf
 ```
@@ -711,23 +809,29 @@ The JSON shape is stable and can be consumed by other tooling:
 ```json
 {
   "provider_name": "mycloud",
-  "spec_version": "3.0.3",
+  "spec": "test/specs/mycloud.yaml",
+  "spec_version": "3.0",
   "counts": {
-    "resources": 3,
-    "data_sources": 2,
-    "actions": 1,
+    "resources": 11,
+    "data_sources": 17,
+    "actions": 0,
     "ephemeral_resources": 0,
-    "list_resources": 1,
+    "list_resources": 12,
     "functions": 0,
     "security_schemes": 1,
-    "write_only_attributes": 2
+    "write_only_attributes": 0
   },
   "files": [
     { "path": "internal/provider/provider.go", "reason": "provider schema and registration" }
   ],
+  "written": false,
   "diagnostics": []
 }
 ```
+
+`config_path` is present only when a `generator.yaml` overrides file was
+supplied; `written` is `false` for a dry-run and `true` after a full generation
+run.
 
 ## Examples
 
@@ -788,11 +892,6 @@ See [`PROJECT_DESIGN.md`](PROJECT_DESIGN.md#11-implementation-status) for a feat
 [`PROJECT_DESIGN.md`](PROJECT_DESIGN.md#23-remaining-gaps--accepted-limitations) §23 for the canonical register of remaining gaps and accepted limitations.
 
 ## Troubleshooting
-
-### Invalid log level
-
-`--log-level` accepts only `debug`, `info`, `warn`, `warning`, `error`, or
-`fatal`. Any other value returns an error before the pipeline runs.
 
 ### Dry-run output path rejected
 

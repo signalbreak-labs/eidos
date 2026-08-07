@@ -228,6 +228,19 @@ func wiredActionInvokeBody(a ir.ActionIR, plan crudOperationPlan, modelName stri
 		),
 		clientGuardStmt("r"),
 	)
+	// progress_messages: true streams a progress update to the practitioner
+	// before the request is issued. The framework's InvokeResponse carries
+	// SendProgress, which takes an InvokeProgressEvent; the action package is
+	// already imported by the generated action file, so no new import is needed.
+	if a.ProgressMessages {
+		stmts = append(stmts, astgen.ExprStmt(astgen.Call(
+			astgen.Selector(astgen.Ident("resp"), "SendProgress"),
+			astgen.CompositeLit(
+				astgen.QualExpr("action", "InvokeProgressEvent"),
+				astgen.KeyValue("Message", astgen.Lit(fmt.Sprintf("Invoking %s", actionTypeName(a)))),
+			),
+		)))
+	}
 	stmts = append(stmts, requestPathStmts(plan, "config")...)
 	// An action has no state to drop on a 404; a non-success status is surfaced
 	// as an error by the generic non-success branch. There is no response body

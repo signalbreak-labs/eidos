@@ -99,8 +99,9 @@ These principles (from `PROJECT_DESIGN.md` §3) are binding on the generator:
 - Generated bodies that are not yet wired to a real API must emit a clear runtime
   diagnostic (`resp.Diagnostics.AddError`/`AddWarning`) — never an unconditional
   `TODO` stub, `panic`, or `NewFuncError("not implemented")`.
-- Generator panics on unexpected IR shapes are converted to returned render
-  errors via `GoCodeSafe` rather than crashing the run.
+- Generator panics on unexpected IR shapes are recovered by `renderFileSafely`
+  (`pkg/generator/harness.go`) and returned as render errors rather than crashing
+  the run.
 
 ## Release
 
