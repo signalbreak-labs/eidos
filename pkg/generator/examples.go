@@ -5,13 +5,15 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/signalbreak-labs/eidos/pkg/generator/internal/naming"
+	"github.com/signalbreak-labs/eidos/pkg/generator/internal/schema"
 	"github.com/signalbreak-labs/eidos/pkg/ir"
 )
 
 // ResourceExampleFile returns the generated examples/resources/<name>/resource.tf
 // file for a single Terraform managed resource built from the supplied ResourceIR.
 func ResourceExampleFile(r ir.ResourceIR) File {
-	path := filepath.Join("examples", "resources", snakeCase(r.Name), "resource.tf")
+	path := filepath.Join("examples", "resources", naming.SnakeCase(r.Name), "resource.tf")
 	return staticFile(path, generateResourceExampleHCL(r))
 }
 
@@ -29,7 +31,7 @@ func ResourceExampleFiles(resources []ir.ResourceIR) []File {
 // DataSourceExampleFile returns the generated examples/data-sources/<name>/data-source.tf
 // file for a single Terraform data source built from the supplied DataSourceIR.
 func DataSourceExampleFile(ds ir.DataSourceIR) File {
-	path := filepath.Join("examples", "data-sources", snakeCase(ds.Name), "data-source.tf")
+	path := filepath.Join("examples", "data-sources", naming.SnakeCase(ds.Name), "data-source.tf")
 	return staticFile(path, generateDataSourceExampleHCL(ds))
 }
 
@@ -47,7 +49,7 @@ func DataSourceExampleFiles(dataSources []ir.DataSourceIR) []File {
 // examples/ephemeral-resources/<name>/ephemeral-resource.tf file for a single
 // Terraform ephemeral resource built from the supplied EphemeralResourceIR.
 func EphemeralResourceExampleFile(er ir.EphemeralResourceIR) File {
-	path := filepath.Join("examples", "ephemeral-resources", snakeCase(er.Name), "ephemeral-resource.tf")
+	path := filepath.Join("examples", "ephemeral-resources", naming.SnakeCase(er.Name), "ephemeral-resource.tf")
 	return staticFile(path, generateEphemeralResourceExampleHCL(er))
 }
 
@@ -64,7 +66,7 @@ func EphemeralResourceExampleFiles(ers []ir.EphemeralResourceIR) []File {
 // ActionExampleFile returns the generated examples/actions/<name>/action.tf file
 // for a single Terraform action built from the supplied ActionIR.
 func ActionExampleFile(a ir.ActionIR) File {
-	path := filepath.Join("examples", "actions", snakeCase(a.Name), "action.tf")
+	path := filepath.Join("examples", "actions", naming.SnakeCase(a.Name), "action.tf")
 	return staticFile(path, generateActionExampleHCL(a))
 }
 
@@ -169,14 +171,14 @@ func actionExampleTypeName(a ir.ActionIR) string {
 
 // writeHCLBody renders configurable attributes and blocks for an object schema.
 // Computed-only attributes are omitted because they are set by the provider.
-func writeHCLBody(h *hclBuilder, schema ir.ObjectSchemaIR) {
-	for _, attr := range schema.Attributes {
+func writeHCLBody(h *hclBuilder, obj ir.ObjectSchemaIR) {
+	for _, attr := range obj.Attributes {
 		if !includeInExample(attr) {
 			continue
 		}
 		writeHCLAttribute(h, attr)
 	}
-	for _, block := range schema.Blocks {
+	for _, block := range obj.Blocks {
 		writeHCLBlock(h, block)
 	}
 }
@@ -202,7 +204,7 @@ func writeHCLAttribute(h *hclBuilder, attr ir.AttributeIR) {
 		return
 	}
 
-	if isObjectLike(s) {
+	if schema.IsObjectLike(s) {
 		// Single nested attribute: assignment syntax (SingleNestedAttribute).
 		h.writeLinef("%s = {", attr.Name)
 		h.indent++
@@ -227,13 +229,13 @@ func writeHCLCollectionAttribute(h *hclBuilder, attr ir.AttributeIR) {
 
 	switch s.Collection.Kind {
 	case ir.List, ir.Set:
-		if isPrimitiveSchema(elem) {
+		if schema.IsPrimitiveSchema(elem) {
 			// Primitive lists/sets render as compact single-line literals; keeping
 			// primitives on one line makes simple examples easier to scan.
 			h.writeLinef("%s = [ %s ]", attr.Name, primitiveExampleValue(elem.Type))
 			return
 		}
-		if isObjectLike(elem) {
+		if schema.IsObjectLike(elem) {
 			// Object collections (ListNestedAttribute/SetNestedAttribute) use a
 			// list-of-objects assignment literal.
 			h.writeLinef("%s = [{", attr.Name)
@@ -246,8 +248,8 @@ func writeHCLCollectionAttribute(h *hclBuilder, attr ir.AttributeIR) {
 	case ir.Map:
 		// Use a domain-relevant placeholder key derived from the attribute name
 		// rather than the generic "key" string.
-		key := snakeCase(attr.Name)
-		if isPrimitiveSchema(elem) {
+		key := naming.SnakeCase(attr.Name)
+		if schema.IsPrimitiveSchema(elem) {
 			h.writeLinef("%s = {", attr.Name)
 			h.indent++
 			h.writeLinef("%q = %s", key, primitiveExampleValue(elem.Type))
@@ -255,7 +257,7 @@ func writeHCLCollectionAttribute(h *hclBuilder, attr ir.AttributeIR) {
 			h.writeLinef("}")
 			return
 		}
-		if isObjectLike(elem) {
+		if schema.IsObjectLike(elem) {
 			h.writeLinef("%s = {", attr.Name)
 			h.indent++
 			h.writeLinef("%q = {", key)

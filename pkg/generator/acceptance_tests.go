@@ -10,6 +10,8 @@ import (
 	"strings"
 
 	"github.com/signalbreak-labs/eidos/pkg/generator/astgen"
+	"github.com/signalbreak-labs/eidos/pkg/generator/internal/naming"
+	"github.com/signalbreak-labs/eidos/pkg/generator/internal/schema"
 	"github.com/signalbreak-labs/eidos/pkg/ir"
 )
 
@@ -34,7 +36,7 @@ func caseWithBody(cases []ast.Expr, body ...ast.Stmt) *ast.CaseClause {
 // a generation error (ErrorFile) rather than silently dropping the import step
 // (L-26), mirroring the fail-loud validateImportIDFormat check in ResourceFile.
 func ResourceAcceptanceTestFile(pir ir.ProviderIR, r ir.ResourceIR, cfg BuildConfig) File {
-	path := filepath.Join("internal", "provider", fmt.Sprintf("resource_%s_acceptance_test.go", snakeCase(r.Name)))
+	path := filepath.Join("internal", "provider", fmt.Sprintf("resource_%s_acceptance_test.go", naming.SnakeCase(r.Name)))
 	file, err := func() (f *ast.File, err error) {
 		f, err = generateResourceAcceptanceTestFile(pir, r, cfg)
 		return
@@ -411,12 +413,12 @@ func writeProviderAcceptanceConfig(h *hclBuilder, pir ir.ProviderIR, hasTokenURL
 //
 // Attribute names are emitted directly as HCL identifiers. Terraform attribute
 // names are always valid HCL identifiers, so no additional escaping is needed.
-func writeHCLAcceptanceBody(h *hclBuilder, schema ir.ObjectSchemaIR, paramAttr string) {
-	for _, attr := range schema.Attributes {
+func writeHCLAcceptanceBody(h *hclBuilder, obj ir.ObjectSchemaIR, paramAttr string) {
+	for _, attr := range obj.Attributes {
 		if !includeInExample(attr) {
 			continue
 		}
-		if attr.Name == paramAttr && isPrimitiveSchema(attr.Schema) {
+		if attr.Name == paramAttr && schema.IsPrimitiveSchema(attr.Schema) {
 			if attr.Schema.Type == ir.TypeString {
 				h.writeLinef("%s = \"%%s\"", attr.Name)
 			} else {
@@ -426,7 +428,7 @@ func writeHCLAcceptanceBody(h *hclBuilder, schema ir.ObjectSchemaIR, paramAttr s
 		}
 		writeHCLAcceptanceAttribute(h, attr, "")
 	}
-	for _, block := range schema.Blocks {
+	for _, block := range obj.Blocks {
 		writeHCLAcceptanceBlock(h, block)
 	}
 }
@@ -437,7 +439,7 @@ func writeHCLAcceptanceAttribute(h *hclBuilder, attr ir.AttributeIR, _ string) {
 		writeHCLAcceptanceCollectionAttribute(h, attr)
 		return
 	}
-	if isObjectLike(s) {
+	if schema.IsObjectLike(s) {
 		h.writeLinef("%s = {", attr.Name)
 		h.indent++
 		writeHCLAcceptanceBody(h, ir.ObjectSchemaIR{Attributes: s.Attributes, Blocks: s.Blocks}, "")
@@ -454,11 +456,11 @@ func writeHCLAcceptanceCollectionAttribute(h *hclBuilder, attr ir.AttributeIR) {
 
 	switch s.Collection.Kind {
 	case ir.List, ir.Set:
-		if isPrimitiveSchema(elem) {
+		if schema.IsPrimitiveSchema(elem) {
 			h.writeLinef("%s = [ %s ]", attr.Name, primitiveExampleValue(elem.Type))
 			return
 		}
-		if isObjectLike(elem) {
+		if schema.IsObjectLike(elem) {
 			h.writeLinef("%s = [{", attr.Name)
 			h.indent++
 			writeHCLAcceptanceBody(h, ir.ObjectSchemaIR{Attributes: elem.Attributes, Blocks: elem.Blocks}, "")
@@ -467,7 +469,7 @@ func writeHCLAcceptanceCollectionAttribute(h *hclBuilder, attr ir.AttributeIR) {
 			return
 		}
 	case ir.Map:
-		if isPrimitiveSchema(elem) {
+		if schema.IsPrimitiveSchema(elem) {
 			h.writeLinef("%s = {", attr.Name)
 			h.indent++
 			h.writeLinef(`"key" = %s`, primitiveExampleValue(elem.Type))
@@ -475,7 +477,7 @@ func writeHCLAcceptanceCollectionAttribute(h *hclBuilder, attr ir.AttributeIR) {
 			h.writeLinef("}")
 			return
 		}
-		if isObjectLike(elem) {
+		if schema.IsObjectLike(elem) {
 			h.writeLinef("%s = {", attr.Name)
 			h.indent++
 			h.writeLinef(`"key" = {`)
@@ -508,7 +510,7 @@ func acceptanceParamAttribute(r ir.ResourceIR) (string, ir.PrimitiveType, bool) 
 		if !includeInExample(attr) {
 			continue
 		}
-		if attr.Schema.Collection != nil || isObjectLike(attr.Schema) {
+		if attr.Schema.Collection != nil || schema.IsObjectLike(attr.Schema) {
 			continue
 		}
 		if attr.Schema.Type == ir.TypeString {
@@ -519,7 +521,7 @@ func acceptanceParamAttribute(r ir.ResourceIR) (string, ir.PrimitiveType, bool) 
 		if !includeInExample(attr) {
 			continue
 		}
-		if attr.Schema.Collection != nil || isObjectLike(attr.Schema) {
+		if attr.Schema.Collection != nil || schema.IsObjectLike(attr.Schema) {
 			continue
 		}
 		if attr.Schema.Type != "" {

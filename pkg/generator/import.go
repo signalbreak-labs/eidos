@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/signalbreak-labs/eidos/pkg/generator/astgen"
+	"github.com/signalbreak-labs/eidos/pkg/generator/internal/naming"
 	"github.com/signalbreak-labs/eidos/pkg/ir"
 )
 
@@ -104,7 +105,7 @@ func importStateBody(r ir.ResourceIR) []ast.Stmt {
 // empty, a generic prefix is used so the variable never resolves to the bare
 // "ImportIDParts" suffix.
 func importPartsVar(r ir.ResourceIR) string {
-	name := camelCase(r.Name)
+	name := naming.CamelCase(r.Name)
 	if name == "" {
 		name = "resource"
 	}

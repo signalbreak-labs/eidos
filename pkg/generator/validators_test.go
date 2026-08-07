@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/signalbreak-labs/eidos/pkg/generator/internal/schema"
 	"github.com/signalbreak-labs/eidos/pkg/ir"
 )
 
@@ -392,7 +393,7 @@ func TestValidatorsFile_Int64NonIntegerBoundPanics(t *testing.T) {
 			t.Fatalf("unexpected panic message: %v", r)
 		}
 	}()
-	_ = int64ValidatorExprs(ir.SchemaIR{Type: ir.TypeInt, ExclusiveMinimum: &bound})
+	_ = schema.Int64ValidatorExprs(ir.SchemaIR{Type: ir.TypeInt, ExclusiveMinimum: &bound})
 }
 
 // TestValidatorsFile_InvalidPatternPropertiesPanics verifies that invalid
@@ -407,7 +408,7 @@ func TestValidatorsFile_InvalidPatternPropertiesPanics(t *testing.T) {
 			t.Fatalf("unexpected panic message: %v", r)
 		}
 	}()
-	_ = mapValidatorExprs(ir.SchemaIR{
+	_ = schema.MapValidatorExprs(ir.SchemaIR{
 		Collection: &ir.CollectionType{
 			Kind:        ir.Map,
 			ElementType: ir.SchemaIR{Type: ir.TypeString},

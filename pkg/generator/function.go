@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/signalbreak-labs/eidos/pkg/generator/astgen"
+	"github.com/signalbreak-labs/eidos/pkg/generator/internal/naming"
 	"github.com/signalbreak-labs/eidos/pkg/ir"
 )
 
@@ -15,7 +16,7 @@ import (
 // for a Terraform plugin-framework provider-defined function built from the
 // supplied FunctionIR.
 func FunctionFile(fn ir.FunctionIR) File {
-	path := filepath.Join("internal", "provider", fmt.Sprintf("function_%s.go", snakeCase(fn.Name)))
+	path := filepath.Join("internal", "provider", fmt.Sprintf("function_%s.go", naming.SnakeCase(fn.Name)))
 	return GoCodeAST(path, generateFunctionFile(fn))
 }
 

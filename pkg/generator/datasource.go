@@ -9,6 +9,8 @@ import (
 	"strings"
 
 	"github.com/signalbreak-labs/eidos/pkg/generator/astgen"
+	"github.com/signalbreak-labs/eidos/pkg/generator/internal/naming"
+	"github.com/signalbreak-labs/eidos/pkg/generator/internal/schema"
 	"github.com/signalbreak-labs/eidos/pkg/ir"
 )
 
@@ -25,7 +27,7 @@ var ErrUnknownDatasourceBlockNesting = errors.New("unknown data source block nes
 // DataSourceIR. clientImport is the import path of the generated internal/client
 // package, used when the data source Read is wired to the API client.
 func DataSourceFile(ds ir.DataSourceIR, clientImport string) File {
-	path := filepath.Join("internal", "provider", fmt.Sprintf("data_source_%s.go", snakeCase(ds.Name)))
+	path := filepath.Join("internal", "provider", fmt.Sprintf("data_source_%s.go", naming.SnakeCase(ds.Name)))
 	file, err := func() (f *ast.File, err error) {
 		defer func() {
 			if rec := recover(); rec != nil {
@@ -119,18 +121,18 @@ func generateDataSourceFile(ds ir.DataSourceIR, clientImport string) *ast.File {
 	f.AddCommentf("%s describes the data source state shape.", modelName)
 	modelFields := make([]*ast.Field, 0, len(ds.Schema.Attributes)+len(ds.Schema.Blocks))
 	for _, attr := range ds.Schema.Attributes {
-		if skipAttrForModel(attr) {
+		if schema.SkipAttrForModel(attr) {
 			continue
 		}
 		modelFields = append(modelFields, astgen.Field(
-			goFieldName(attr.Name),
+			naming.GoFieldName(attr.Name),
 			modelFieldType(attr),
 			modelFieldTags(attr),
 		))
 	}
 	for _, block := range ds.Schema.Blocks {
 		modelFields = append(modelFields, astgen.Field(
-			goFieldName(block.Name),
+			naming.GoFieldName(block.Name),
 			blockModelFieldType(block),
 			fmt.Sprintf("tfsdk:%q", block.Name),
 		))
@@ -247,7 +249,7 @@ func generateDataSourceFile(ds ir.DataSourceIR, clientImport string) *ast.File {
 	// schema/validator package is only referenced by block size validators
 	// ([]validator.List/Set). Gate the import on those conditions to avoid
 	// "imported and not used".
-	if objectSchemaNeedsBlockSizeValidators(ds.Schema) || objectSchemaHasDiscriminatedUnion(ds.Schema) {
+	if objectSchemaNeedsBlockSizeValidators(ds.Schema) || schema.ObjectSchemaHasDiscriminatedUnion(ds.Schema) {
 		f.AddImport("github.com/hashicorp/terraform-plugin-framework/schema/validator", "validator")
 	}
 	needsList, needsSet := blockValidatorPackageImports(ds.Schema)
@@ -392,18 +394,18 @@ func dataSourceFrameworkAttributeExpr(attr ir.AttributeIR, attrPath string) ast.
 	// plugin-framework datasource schema has no first-class union attribute.
 	// When a schema has both Type and Union set, the primitive Type branch wins.
 	if s.Union != nil {
-		if merged := mergedDiscriminatedUnion(s); merged != nil {
+		if merged := schema.MergedDiscriminatedUnion(s); merged != nil {
 			d := datasourceAttributeValues(attr, []ast.Expr{
 				astgen.KeyValue("Attributes", dataSourceNestedAttributesMapFromSchema(*merged, attrPath)),
 			})
-			d = append(d, discriminatedUnionValidators(s))
+			d = append(d, schema.DiscriminatedUnionValidators(s))
 			return astgen.CompositeLit(astgen.QualExpr("schema", "SingleNestedAttribute"), d...)
 		}
 		return astgen.CompositeLit(astgen.QualExpr("schema", "DynamicAttribute"), datasourceAttributeValues(attr, nil)...)
 	}
 
 	// Object-like types (Attributes or Blocks present without explicit primitive type).
-	if isObjectLike(s) {
+	if schema.IsObjectLike(s) {
 		d := datasourceAttributeValues(attr, []ast.Expr{
 			astgen.KeyValue("Attributes", dataSourceNestedAttributesMapFromSchema(s, attrPath)),
 		})
@@ -424,7 +426,7 @@ func dataSourceFrameworkAttributeExpr(attr ir.AttributeIR, attrPath string) ast.
 // framework attribute, or nil when the shape falls through to the
 // primitive/union/unrepresentable handling below (G12).
 func dataSourceCollectionAttributeExpr(attr ir.AttributeIR, attrPath string) ast.Expr {
-	elem := dynamicUnionElement(attr.Schema.Collection.ElementType)
+	elem := schema.DynamicUnionElement(attr.Schema.Collection.ElementType)
 	// A collection whose element is dynamic/null cannot be represented as a
 	// framework collection (List{ElementType: DynamicType} is rejected by the
 	// framework); treat it as an unrepresentable shape (G12).
@@ -448,13 +450,13 @@ func dataSourceCollectionAttributeExpr(attr ir.AttributeIR, attrPath string) ast
 // dataSourceListElementAttributeExpr maps a List/Set element to its framework
 // attribute (List*Attribute or Set*Attribute).
 func dataSourceListElementAttributeExpr(attr ir.AttributeIR, elem ir.SchemaIR, attrPath, kind string) ast.Expr {
-	if isPrimitiveSchema(elem) {
+	if schema.IsPrimitiveSchema(elem) {
 		d := datasourceAttributeValues(attr, []ast.Expr{
 			astgen.KeyValue("ElementType", primitiveAttrType(elem.Type)),
 		})
 		return astgen.CompositeLit(astgen.QualExpr("schema", kind+"Attribute"), d...)
 	}
-	if isObjectLike(elem) {
+	if schema.IsObjectLike(elem) {
 		d := datasourceAttributeValues(attr, []ast.Expr{
 			astgen.KeyValue("NestedObject", astgen.CompositeLit(
 				astgen.QualExpr("schema", "NestedAttributeObject"),
@@ -469,13 +471,13 @@ func dataSourceListElementAttributeExpr(attr ir.AttributeIR, elem ir.SchemaIR, a
 // dataSourceMapElementAttributeExpr maps a Map element to its framework
 // attribute (MapAttribute or MapNestedAttribute).
 func dataSourceMapElementAttributeExpr(attr ir.AttributeIR, elem ir.SchemaIR, attrPath string) ast.Expr {
-	if isPrimitiveSchema(elem) {
+	if schema.IsPrimitiveSchema(elem) {
 		d := datasourceAttributeValues(attr, []ast.Expr{
 			astgen.KeyValue("ElementType", primitiveAttrType(elem.Type)),
 		})
 		return astgen.CompositeLit(astgen.QualExpr("schema", "MapAttribute"), d...)
 	}
-	if isObjectLike(elem) {
+	if schema.IsObjectLike(elem) {
 		d := datasourceAttributeValues(attr, []ast.Expr{
 			astgen.KeyValue("NestedObject", astgen.CompositeLit(
 				astgen.QualExpr("schema", "NestedAttributeObject"),

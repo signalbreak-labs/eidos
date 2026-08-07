@@ -13,6 +13,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/signalbreak-labs/eidos/pkg/generator/internal/naming"
 	"github.com/signalbreak-labs/eidos/pkg/ir"
 )
 
@@ -334,18 +335,18 @@ func collectRootFiles(rec *Recorder, provider *ir.ProviderIR, opts CollectOption
 }
 
 // fileName converts an IR construct name into a safe file name segment. It
-// uses the same snakeCase helper the writers use (resource.go, datasource.go,
+// uses the same naming.SnakeCase helper the writers use (resource.go, datasource.go,
 // action.go, ...) so record mode and write mode agree on every output path
 // (H-11). It explicitly neutralizes path separators and ".." segments as
 // defense in depth so a future write mode cannot escape the configured
 // OutputDir.
 func fileName(name string) string {
 	name = strings.TrimSpace(name)
-	name = snakeCase(name)
+	name = naming.SnakeCase(name)
 	// Defense in depth for future write mode: replace any path separator and
-	// any ".." segment that may have survived as literal text. snakeCase
+	// any ".." segment that may have survived as literal text. naming.SnakeCase
 	// already splits on every non-alphanumeric rune, so these are no-ops today,
-	// but they guard against a future change to snakeCase.
+	// but they guard against a future change to naming.SnakeCase.
 	name = strings.ReplaceAll(name, string(filepath.Separator), "_")
 	name = strings.ReplaceAll(name, "/", "_")
 	name = strings.ReplaceAll(name, "\\", "_")

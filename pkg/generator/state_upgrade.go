@@ -8,6 +8,8 @@ import (
 	"strings"
 
 	"github.com/signalbreak-labs/eidos/pkg/generator/astgen"
+	"github.com/signalbreak-labs/eidos/pkg/generator/internal/naming"
+	"github.com/signalbreak-labs/eidos/pkg/generator/internal/schema"
 	"github.com/signalbreak-labs/eidos/pkg/ir"
 )
 
@@ -48,7 +50,7 @@ func stateUpgradeNeedsAttr(r ir.ResourceIR) bool {
 		// attr.Type only when the attribute's schema is object-like or contains an
 		// object-like collection element.
 		for _, attr := range r.Schema.Attributes {
-			if skipAttrForModel(attr) {
+			if schema.SkipAttrForModel(attr) {
 				continue
 			}
 			sourceName := attr.Name
@@ -82,7 +84,7 @@ func schemaReferencesAttr(s ir.SchemaIR) bool {
 	if s.Collection != nil {
 		return schemaReferencesAttr(s.Collection.ElementType)
 	}
-	return isObjectLike(s)
+	return schema.IsObjectLike(s)
 }
 
 // resourceSchemaVersion returns the schema version to emit for the resource.
@@ -661,7 +663,7 @@ func stateUpgraderFunc(r ir.ResourceIR, upgrade ir.StateUpgradeIR, priorSchema i
 	// null-initialize correctly. Required new fields must be populated by a
 	// subsequent apply.
 	for _, attr := range r.Schema.Attributes {
-		if skipAttrForModel(attr) {
+		if schema.SkipAttrForModel(attr) {
 			continue
 		}
 		currentName := attr.Name
@@ -670,11 +672,11 @@ func stateUpgraderFunc(r ir.ResourceIR, upgrade ir.StateUpgradeIR, priorSchema i
 			sourceName = oldName
 		}
 
-		currentField := goFieldName(currentName)
+		currentField := naming.GoFieldName(currentName)
 		if _, ok := priorNames[sourceName]; ok {
 			stmts = append(stmts, astgen.AssignStmt(
 				[]ast.Expr{astgen.Selector(astgen.Ident("upgraded"), currentField)},
-				[]ast.Expr{astgen.Selector(astgen.Ident("prior"), goFieldName(sourceName))},
+				[]ast.Expr{astgen.Selector(astgen.Ident("prior"), naming.GoFieldName(sourceName))},
 				token.ASSIGN,
 			))
 		} else {
@@ -694,7 +696,7 @@ func stateUpgraderFunc(r ir.ResourceIR, upgrade ir.StateUpgradeIR, priorSchema i
 	// current schema) and are dropped, having been decoded into a Dynamic prior
 	// field by priorSchemaForUpgrade.
 	for _, block := range r.Schema.Blocks {
-		currentField := goFieldName(block.Name)
+		currentField := naming.GoFieldName(block.Name)
 		sourceName := block.Name
 		if oldName, ok := reverseRename(upgrade.BlockRenames, block.Name); ok {
 			sourceName = oldName
@@ -702,7 +704,7 @@ func stateUpgraderFunc(r ir.ResourceIR, upgrade ir.StateUpgradeIR, priorSchema i
 		if _, ok := priorBlockNames[sourceName]; ok {
 			stmts = append(stmts, astgen.AssignStmt(
 				[]ast.Expr{astgen.Selector(astgen.Ident("upgraded"), currentField)},
-				[]ast.Expr{astgen.Selector(astgen.Ident("prior"), goFieldName(sourceName))},
+				[]ast.Expr{astgen.Selector(astgen.Ident("prior"), naming.GoFieldName(sourceName))},
 				token.ASSIGN,
 			))
 		} else {
@@ -768,18 +770,18 @@ func generatePriorModelStructs(f *astgen.File, r ir.ResourceIR) {
 		f.AddCommentf("%s describes the prior Terraform state shape for %s schema version %d.", name, resourceStructName(r), upgrade.FromVersion)
 		fields := make([]*ast.Field, 0, len(priorSchema.Attributes)+len(priorSchema.Blocks))
 		for _, attr := range priorSchema.Attributes {
-			if skipAttrForModel(attr) {
+			if schema.SkipAttrForModel(attr) {
 				continue
 			}
 			fields = append(fields, astgen.Field(
-				goFieldName(attr.Name),
+				naming.GoFieldName(attr.Name),
 				modelFieldType(attr),
 				modelFieldTags(attr),
 			))
 		}
 		for _, block := range priorSchema.Blocks {
 			fields = append(fields, astgen.Field(
-				goFieldName(block.Name),
+				naming.GoFieldName(block.Name),
 				blockModelFieldType(block),
 				fmt.Sprintf("tfsdk:%q", block.Name),
 			))
@@ -803,7 +805,7 @@ func nullValueForType(s ir.SchemaIR) ast.Expr {
 		case ir.Map:
 			return astgen.Call(astgen.QualExpr("types", "MapNull"), elemType)
 		}
-	case isObjectLike(s):
+	case schema.IsObjectLike(s):
 		return astgen.Call(astgen.QualExpr("types", "ObjectNull"), objectAttrTypesMap(ir.ObjectSchemaIR{Attributes: s.Attributes, Blocks: s.Blocks}))
 	case s.Type == ir.TypeString:
 		return astgen.Call(astgen.QualExpr("types", "StringNull"))
@@ -852,7 +854,7 @@ func schemaTypeExpr(s ir.SchemaIR) ast.Expr {
 			return astgen.CompositeLit(astgen.QualExpr("types", "MapType"), astgen.KeyValue("ElemType", elem))
 		}
 	}
-	if isObjectLike(s) {
+	if schema.IsObjectLike(s) {
 		return astgen.CompositeLit(astgen.QualExpr("types", "ObjectType"), astgen.KeyValue("AttrTypes", objectAttrTypesMap(ir.ObjectSchemaIR{Attributes: s.Attributes, Blocks: s.Blocks})))
 	}
 	return primitiveAttrType(s.Type)

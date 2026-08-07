@@ -9,6 +9,7 @@ import (
 	"unicode"
 
 	"github.com/signalbreak-labs/eidos/pkg/generator/astgen"
+	"github.com/signalbreak-labs/eidos/pkg/generator/internal/naming"
 	"github.com/signalbreak-labs/eidos/pkg/ir"
 )
 
@@ -284,7 +285,7 @@ func allRequiredConfigAttrsReferenced(attrs []ir.AttributeIR, plan crudOperation
 		if !attr.Required {
 			continue
 		}
-		if _, ok := referenced[goFieldName(attr.Name)]; !ok {
+		if _, ok := referenced[naming.GoFieldName(attr.Name)]; !ok {
 			return false
 		}
 	}

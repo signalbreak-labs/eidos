@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 
 	"github.com/signalbreak-labs/eidos/pkg/generator/astgen"
+	"github.com/signalbreak-labs/eidos/pkg/generator/internal/naming"
+	"github.com/signalbreak-labs/eidos/pkg/generator/internal/schema"
 	"github.com/signalbreak-labs/eidos/pkg/ir"
 )
 
@@ -83,7 +85,7 @@ func generateProviderTestFile(pir ir.ProviderIR) *ast.File {
 // ResourceTestFile returns the generated internal/provider/resource_<name>_test.go
 // file containing unit tests for a single managed resource.
 func ResourceTestFile(r ir.ResourceIR) File {
-	path := filepath.Join("internal", "provider", fmt.Sprintf("resource_%s_test.go", snakeCase(r.Name)))
+	path := filepath.Join("internal", "provider", fmt.Sprintf("resource_%s_test.go", naming.SnakeCase(r.Name)))
 	return GoCodeAST(path, generateResourceTestFile(r))
 }
 
@@ -165,7 +167,7 @@ func ResourceTestFiles(resources []ir.ResourceIR) []File {
 // DataSourceTestFile returns the generated internal/provider/data_source_<name>_test.go
 // file containing unit tests for a single data source.
 func DataSourceTestFile(ds ir.DataSourceIR) File {
-	path := filepath.Join("internal", "provider", fmt.Sprintf("data_source_%s_test.go", snakeCase(ds.Name)))
+	path := filepath.Join("internal", "provider", fmt.Sprintf("data_source_%s_test.go", naming.SnakeCase(ds.Name)))
 	return GoCodeAST(path, generateDataSourceTestFile(ds))
 }
 
@@ -261,7 +263,7 @@ func generateMapperTestFile(resources []ir.ResourceIR, providerImport string) *a
 
 	seen := make(map[string]struct{})
 	for _, r := range resources {
-		generateMapperModelTests(f, resourceAPIModelName(r), r.Schema, seen)
+		generateMapperModelTests(f, schema.ResourceAPIModelName(r), r.Schema, seen)
 	}
 
 	return f.AST()
@@ -293,7 +295,7 @@ func generateDataSourceMapperTestFile(dataSources []ir.DataSourceIR, providerImp
 // generateMapperModelTests emits type and round-trip tests for a single model
 // and its attribute-scoped nested children. The seen map prevents duplicate
 // test functions when the same nested type is reachable through multiple paths.
-func generateMapperModelTests(f *astgen.File, modelName string, schema ir.ObjectSchemaIR, seen map[string]struct{}) {
+func generateMapperModelTests(f *astgen.File, modelName string, obj ir.ObjectSchemaIR, seen map[string]struct{}) {
 	if _, ok := seen[modelName]; ok {
 		return
 	}
@@ -369,9 +371,9 @@ func generateMapperModelTests(f *astgen.File, modelName string, schema ir.Object
 
 	// Recursively emit tests for attribute-scoped nested children. Block-scoped
 	// nested mappers are not covered by this recursion.
-	scope := resolveFieldNames(schema.Attributes)
-	for _, attr := range schema.Attributes {
-		childSchema, childName := mapperChildSchema(scope, modelName, attr)
+	scope := schema.ResolveFieldNames(obj.Attributes)
+	for _, attr := range obj.Attributes {
+		childSchema, childName := schema.MapperChildSchema(scope, modelName, attr)
 		if childSchema == nil {
 			continue
 		}

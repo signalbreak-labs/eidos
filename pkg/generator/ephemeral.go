@@ -9,6 +9,8 @@ import (
 	"strings"
 
 	"github.com/signalbreak-labs/eidos/pkg/generator/astgen"
+	"github.com/signalbreak-labs/eidos/pkg/generator/internal/naming"
+	"github.com/signalbreak-labs/eidos/pkg/generator/internal/schema"
 	"github.com/signalbreak-labs/eidos/pkg/ir"
 )
 
@@ -17,7 +19,7 @@ import (
 // EphemeralResourceIR. clientImport is the import path of the generated
 // internal/client package, used when the Open body is wired to the API client.
 func EphemeralFile(er ir.EphemeralResourceIR, clientImport string) File {
-	path := filepath.Join("internal", "provider", fmt.Sprintf("ephemeral_%s.go", snakeCase(er.Name)))
+	path := filepath.Join("internal", "provider", fmt.Sprintf("ephemeral_%s.go", naming.SnakeCase(er.Name)))
 	file, err := func() (f *ast.File, err error) {
 		defer func() {
 			if rec := recover(); rec != nil {
@@ -123,11 +125,11 @@ func generateEphemeralFile(er ir.EphemeralResourceIR, clientImport string) *ast.
 	// seen before skipAttrForModel was applied, which could suppress a later
 	// same-name field (L-36).
 	for _, attr := range ephemeralModelAttributes(er) {
-		if skipAttrForModel(attr) {
+		if schema.SkipAttrForModel(attr) {
 			continue
 		}
 		modelFields = append(modelFields, astgen.Field(
-			goFieldName(attr.Name),
+			naming.GoFieldName(attr.Name),
 			modelFieldType(attr),
 			modelFieldTags(attr),
 		))
@@ -314,12 +316,12 @@ func ephemeralNeedsValidatorImport(er ir.EphemeralResourceIR) bool {
 			return true
 		}
 	}
-	return objectSchemaHasDiscriminatedUnion(er.ConfigSchema) || objectSchemaHasDiscriminatedUnion(er.ResultSchema)
+	return schema.ObjectSchemaHasDiscriminatedUnion(er.ConfigSchema) || schema.ObjectSchemaHasDiscriminatedUnion(er.ResultSchema)
 }
 
 // ephemeralResourceModelName returns the generated model struct name for an ephemeral resource.
 func ephemeralResourceModelName(er ir.EphemeralResourceIR) string {
-	return pascalCase(er.Name) + "EphemeralResourceModel"
+	return naming.PascalCase(er.Name) + "EphemeralResourceModel"
 }
 
 // ephemeralResourceTypeName returns the Terraform ephemeral resource type name. It prefers
@@ -476,8 +478,8 @@ func ephemeralSchemaTypesEqual(a, b ir.SchemaIR) bool {
 		return true
 	}
 
-	aObject := isObjectLike(a)
-	bObject := isObjectLike(b)
+	aObject := schema.IsObjectLike(a)
+	bObject := schema.IsObjectLike(b)
 	if aObject != bObject {
 		return false
 	}
@@ -584,18 +586,18 @@ func ephemeralFrameworkAttributeExpr(attr ir.AttributeIR, attrPath, resourceName
 	// plugin-framework ephemeral schema has no first-class union attribute.
 	// When a schema has both Type and Union set, the primitive Type branch wins.
 	if s.Union != nil {
-		if merged := mergedDiscriminatedUnion(s); merged != nil {
+		if merged := schema.MergedDiscriminatedUnion(s); merged != nil {
 			d := ephemeralAttributeValues(attr, []ast.Expr{
 				astgen.KeyValue("Attributes", ephemeralNestedAttributesMapFromSchema(*merged, attrPath, resourceName)),
 			})
-			d = append(d, discriminatedUnionValidators(s))
+			d = append(d, schema.DiscriminatedUnionValidators(s))
 			return astgen.CompositeLit(astgen.QualExpr("ephemeralschema", "SingleNestedAttribute"), d...)
 		}
 		return astgen.CompositeLit(astgen.QualExpr("ephemeralschema", "DynamicAttribute"), ephemeralAttributeValues(attr, nil)...)
 	}
 
 	// Object-like types (Attributes or Blocks present without explicit primitive type).
-	if isObjectLike(s) {
+	if schema.IsObjectLike(s) {
 		d := ephemeralAttributeValues(attr, []ast.Expr{
 			astgen.KeyValue("Attributes", ephemeralNestedAttributesMapFromSchema(s, attrPath, resourceName)),
 		})
@@ -616,7 +618,7 @@ func ephemeralFrameworkAttributeExpr(attr ir.AttributeIR, attrPath, resourceName
 // framework attribute, or nil when the shape falls through to the
 // primitive/union/unrepresentable handling below (G12).
 func ephemeralCollectionAttributeExpr(attr ir.AttributeIR, attrPath, resourceName string) ast.Expr {
-	elem := dynamicUnionElement(attr.Schema.Collection.ElementType)
+	elem := schema.DynamicUnionElement(attr.Schema.Collection.ElementType)
 	// A collection whose element is dynamic/null cannot be represented as a
 	// framework collection (List{ElementType: DynamicType} is rejected by
 	// the framework); treat it as an unrepresentable shape (G12).
@@ -640,13 +642,13 @@ func ephemeralCollectionAttributeExpr(attr ir.AttributeIR, attrPath, resourceNam
 // ephemeralListElementAttributeExpr maps a List/Set element to its framework
 // attribute (List*Attribute or Set*Attribute).
 func ephemeralListElementAttributeExpr(attr ir.AttributeIR, elem ir.SchemaIR, attrPath, resourceName, kind string) ast.Expr {
-	if isPrimitiveSchema(elem) {
+	if schema.IsPrimitiveSchema(elem) {
 		d := ephemeralAttributeValues(attr, []ast.Expr{
 			astgen.KeyValue("ElementType", primitiveAttrType(elem.Type)),
 		})
 		return astgen.CompositeLit(astgen.QualExpr("ephemeralschema", kind+"Attribute"), d...)
 	}
-	if isObjectLike(elem) {
+	if schema.IsObjectLike(elem) {
 		d := ephemeralAttributeValues(attr, []ast.Expr{
 			astgen.KeyValue("NestedObject", astgen.CompositeLit(
 				astgen.QualExpr("ephemeralschema", "NestedAttributeObject"),
@@ -661,13 +663,13 @@ func ephemeralListElementAttributeExpr(attr ir.AttributeIR, elem ir.SchemaIR, at
 // ephemeralMapElementAttributeExpr maps a Map element to its framework
 // attribute (MapAttribute or MapNestedAttribute).
 func ephemeralMapElementAttributeExpr(attr ir.AttributeIR, elem ir.SchemaIR, attrPath, resourceName string) ast.Expr {
-	if isPrimitiveSchema(elem) {
+	if schema.IsPrimitiveSchema(elem) {
 		d := ephemeralAttributeValues(attr, []ast.Expr{
 			astgen.KeyValue("ElementType", primitiveAttrType(elem.Type)),
 		})
 		return astgen.CompositeLit(astgen.QualExpr("ephemeralschema", "MapAttribute"), d...)
 	}
-	if isObjectLike(elem) {
+	if schema.IsObjectLike(elem) {
 		d := ephemeralAttributeValues(attr, []ast.Expr{
 			astgen.KeyValue("NestedObject", astgen.CompositeLit(
 				astgen.QualExpr("ephemeralschema", "NestedAttributeObject"),

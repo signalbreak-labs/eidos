@@ -370,7 +370,7 @@ func TestListResourceStructName(t *testing.T) {
 }
 
 // TestListResourceFile_SnakeCasePath verifies that the generated file path uses
-// snakeCase for the list resource name, matching the resource generator
+// naming.SnakeCase for the list resource name, matching the resource generator
 // convention.
 func TestListResourceFile_SnakeCasePath(t *testing.T) {
 	lr := ir.ListResourceIR{Name: "my pets"}

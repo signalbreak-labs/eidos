@@ -8,6 +8,8 @@ import (
 	"strings"
 
 	"github.com/signalbreak-labs/eidos/pkg/generator/astgen"
+	"github.com/signalbreak-labs/eidos/pkg/generator/internal/naming"
+	"github.com/signalbreak-labs/eidos/pkg/generator/internal/schema"
 	"github.com/signalbreak-labs/eidos/pkg/ir"
 	"github.com/signalbreak-labs/eidos/pkg/transformer"
 )
@@ -509,17 +511,17 @@ func isFormEncodablePrimitive(t ir.PrimitiveType) bool {
 // attribute such as "x_trace_id", which is the only valid attribute shape. It
 // returns the Go field name and primitive type.
 func matchParamAttribute(attrs []ir.AttributeIR, p ir.ParamIR) (string, ir.PrimitiveType, bool) {
-	want := goFieldName(p.Name)
+	want := naming.GoFieldName(p.Name)
 	for _, attr := range attrs {
 		// Match by the sanitized attribute name or its original wire name
 		// (G14): a param like SAMLRequest maps to the saml_request attribute.
-		if goFieldName(attr.Name) != want && (attr.WireName == "" || goFieldName(attr.WireName) != want) {
+		if naming.GoFieldName(attr.Name) != want && (attr.WireName == "" || naming.GoFieldName(attr.WireName) != want) {
 			continue
 		}
-		if !isPrimitiveSchema(attr.Schema) {
+		if !schema.IsPrimitiveSchema(attr.Schema) {
 			return "", "", false
 		}
-		return goFieldName(attr.Name), attr.Schema.Type, true
+		return naming.GoFieldName(attr.Name), attr.Schema.Type, true
 	}
 	return "", "", false
 }
@@ -559,10 +561,10 @@ func resolvePathSubstitution(r ir.ResourceIR, placeholder string, noIDFallback b
 		if attr.Name != placeholder {
 			continue
 		}
-		if !isPrimitiveSchema(attr.Schema) {
+		if !schema.IsPrimitiveSchema(attr.Schema) {
 			return pathSubstitution{}, false
 		}
-		return pathSubstitution{placeholder: placeholder, field: goFieldName(attr.Name), primitive: attr.Schema.Type}, true
+		return pathSubstitution{placeholder: placeholder, field: naming.GoFieldName(attr.Name), primitive: attr.Schema.Type}, true
 	}
 	// The placeholder names a UID-shaped identifier (e.g. "folder_uid",
 	// "library_element_uid") but no attribute carries that name. Prefer the
@@ -571,7 +573,7 @@ func resolvePathSubstitution(r ir.ResourceIR, placeholder string, noIDFallback b
 	// (G19). The MyCloud folder instance path is the motivating case.
 	if uidPlaceholder(placeholder) {
 		if attr, ok := uidAttribute(r); ok {
-			return pathSubstitution{placeholder: placeholder, field: goFieldName(attr.Name), primitive: attr.Schema.Type}, true
+			return pathSubstitution{placeholder: placeholder, field: naming.GoFieldName(attr.Name), primitive: attr.Schema.Type}, true
 		}
 	}
 	if noIDFallback {
@@ -600,7 +602,7 @@ func uidPlaceholder(placeholder string) bool {
 // matches by name (G19).
 func uidAttribute(r ir.ResourceIR) (ir.AttributeIR, bool) {
 	for _, attr := range r.Schema.Attributes {
-		if attr.Name == "uid" && attr.Schema.Type == ir.TypeString && isPrimitiveSchema(attr.Schema) {
+		if attr.Name == "uid" && attr.Schema.Type == ir.TypeString && schema.IsPrimitiveSchema(attr.Schema) {
 			return attr, true
 		}
 	}

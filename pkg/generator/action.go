@@ -9,6 +9,8 @@ import (
 	"strings"
 
 	"github.com/signalbreak-labs/eidos/pkg/generator/astgen"
+	"github.com/signalbreak-labs/eidos/pkg/generator/internal/naming"
+	"github.com/signalbreak-labs/eidos/pkg/generator/internal/schema"
 	"github.com/signalbreak-labs/eidos/pkg/ir"
 )
 
@@ -17,7 +19,7 @@ import (
 // clientImport is the import path of the generated internal/client package,
 // used when the Invoke body is wired to the API client.
 func ActionFile(a ir.ActionIR, clientImport string) File {
-	path := filepath.Join("internal", "provider", fmt.Sprintf("action_%s.go", snakeCase(a.Name)))
+	path := filepath.Join("internal", "provider", fmt.Sprintf("action_%s.go", naming.SnakeCase(a.Name)))
 	file, err := func() (f *ast.File, err error) {
 		defer func() {
 			if rec := recover(); rec != nil {
@@ -140,7 +142,7 @@ func generateActionFile(a ir.ActionIR, clientImport string) *ast.File {
 					astgen.Lit("_"),
 				),
 				token.ADD,
-				astgen.Lit(snakeCase(a.Name)),
+				astgen.Lit(naming.SnakeCase(a.Name)),
 			)},
 			token.ASSIGN,
 		)
@@ -295,7 +297,7 @@ func generateActionFile(a ir.ActionIR, clientImport string) *ast.File {
 	// The schema/validator package is referenced only by a discriminated
 	// union's DiscriminatorValidator ([]validator.Object, D2); gate the import
 	// on that condition to avoid "imported and not used".
-	if objectSchemaHasDiscriminatedUnion(a.ConfigSchema) {
+	if schema.ObjectSchemaHasDiscriminatedUnion(a.ConfigSchema) {
 		f.AddImport("github.com/hashicorp/terraform-plugin-framework/schema/validator", "validator")
 	}
 
@@ -310,11 +312,11 @@ func generateActionFile(a ir.ActionIR, clientImport string) *ast.File {
 func actionModelFields(a ir.ActionIR) []*ast.Field {
 	modelFields := make([]*ast.Field, 0, len(a.ConfigSchema.Attributes))
 	for _, attr := range a.ConfigSchema.Attributes {
-		if skipAttrForModel(attr) {
+		if schema.SkipAttrForModel(attr) {
 			continue
 		}
 		modelFields = append(modelFields, astgen.Field(
-			goFieldName(attr.Name),
+			naming.GoFieldName(attr.Name),
 			modelFieldType(attr),
 			modelFieldTags(attr),
 		))
@@ -361,7 +363,7 @@ func actionStructName(a ir.ActionIR) string {
 	if strings.TrimSpace(a.Name) == "" {
 		panic(fmt.Errorf("%w: name is empty", ErrEmptyActionName))
 	}
-	return pascalCase(a.Name) + "Action"
+	return naming.PascalCase(a.Name) + "Action"
 }
 
 // actionModelName returns the generated model struct name for an IR action.
@@ -369,7 +371,7 @@ func actionModelName(a ir.ActionIR) string {
 	if strings.TrimSpace(a.Name) == "" {
 		panic(fmt.Errorf("%w: name is empty", ErrEmptyActionName))
 	}
-	return pascalCase(a.Name) + "ActionModel"
+	return naming.PascalCase(a.Name) + "ActionModel"
 }
 
 // actionTypeName returns the Terraform action type name. It prefers
@@ -476,18 +478,18 @@ func frameworkActionAttributeExpr(attr ir.AttributeIR) ast.Expr {
 	// plugin-framework action schema has no first-class union attribute. When a
 	// schema has both Type and Union set, the primitive Type branch wins.
 	if s.Union != nil {
-		if merged := mergedDiscriminatedUnion(s); merged != nil {
+		if merged := schema.MergedDiscriminatedUnion(s); merged != nil {
 			d := actionAttributeValues(attr, []ast.Expr{
 				astgen.KeyValue("Attributes", nestedActionAttributesMapFromSchema(*merged)),
 			})
-			d = append(d, discriminatedUnionValidators(s))
+			d = append(d, schema.DiscriminatedUnionValidators(s))
 			return astgen.CompositeLit(astgen.QualExpr("schema", "SingleNestedAttribute"), d...)
 		}
 		return astgen.CompositeLit(astgen.QualExpr("schema", "DynamicAttribute"), actionAttributeValues(attr, nil)...)
 	}
 
 	// Object-like types (Attributes or Blocks present without explicit primitive type).
-	if isObjectLike(s) {
+	if schema.IsObjectLike(s) {
 		d := actionAttributeValues(attr, []ast.Expr{
 			astgen.KeyValue("Attributes", nestedActionAttributesMapFromSchema(s)),
 		})
@@ -503,7 +505,7 @@ func frameworkActionAttributeExpr(attr ir.AttributeIR) ast.Expr {
 // framework attribute, or DynamicAttribute when the element type is
 // unrepresentable in the framework (G12).
 func actionCollectionAttributeExpr(attr ir.AttributeIR) ast.Expr {
-	elem := dynamicUnionElement(attr.Schema.Collection.ElementType)
+	elem := schema.DynamicUnionElement(attr.Schema.Collection.ElementType)
 	// A collection whose element is dynamic/null cannot be represented as a
 	// framework collection (List{ElementType: DynamicType} is rejected by the
 	// framework); map it to a DynamicAttribute (G12).
@@ -525,13 +527,13 @@ func actionCollectionAttributeExpr(attr ir.AttributeIR) ast.Expr {
 // actionListElementAttributeExpr maps a List/Set element to its framework
 // attribute (List*Attribute or Set*Attribute).
 func actionListElementAttributeExpr(attr ir.AttributeIR, elem ir.SchemaIR, kind string) ast.Expr {
-	if isPrimitiveSchema(elem) {
+	if schema.IsPrimitiveSchema(elem) {
 		d := actionAttributeValues(attr, []ast.Expr{
 			astgen.KeyValue("ElementType", primitiveAttrType(elem.Type)),
 		})
 		return astgen.CompositeLit(astgen.QualExpr("schema", kind+"Attribute"), d...)
 	}
-	if isObjectLike(elem) {
+	if schema.IsObjectLike(elem) {
 		d := actionAttributeValues(attr, []ast.Expr{
 			astgen.KeyValue("NestedObject", astgen.CompositeLit(
 				astgen.QualExpr("schema", "NestedAttributeObject"),
@@ -546,13 +548,13 @@ func actionListElementAttributeExpr(attr ir.AttributeIR, elem ir.SchemaIR, kind 
 // actionMapElementAttributeExpr maps a Map element to its framework attribute
 // (MapAttribute or MapNestedAttribute).
 func actionMapElementAttributeExpr(attr ir.AttributeIR, elem ir.SchemaIR) ast.Expr {
-	if isPrimitiveSchema(elem) {
+	if schema.IsPrimitiveSchema(elem) {
 		d := actionAttributeValues(attr, []ast.Expr{
 			astgen.KeyValue("ElementType", primitiveAttrType(elem.Type)),
 		})
 		return astgen.CompositeLit(astgen.QualExpr("schema", "MapAttribute"), d...)
 	}
-	if isObjectLike(elem) {
+	if schema.IsObjectLike(elem) {
 		d := actionAttributeValues(attr, []ast.Expr{
 			astgen.KeyValue("NestedObject", astgen.CompositeLit(
 				astgen.QualExpr("schema", "NestedAttributeObject"),

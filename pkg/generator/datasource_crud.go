@@ -7,6 +7,8 @@ import (
 	"strings"
 
 	"github.com/signalbreak-labs/eidos/pkg/generator/astgen"
+	"github.com/signalbreak-labs/eidos/pkg/generator/internal/naming"
+	"github.com/signalbreak-labs/eidos/pkg/generator/internal/schema"
 	"github.com/signalbreak-labs/eidos/pkg/ir"
 )
 
@@ -165,15 +167,15 @@ func planDataSourceRead(ds ir.DataSourceIR) (crudOperationPlan, bool) {
 // through a declared path parameter, so an unresolvable placeholder means the
 // schema did not surface that filter and the data source is not wired.
 func resolveDataSourcePathSubstitution(attrs []ir.AttributeIR, placeholder string) (pathSubstitution, bool) {
-	want := goFieldName(placeholder)
+	want := naming.GoFieldName(placeholder)
 	for _, attr := range attrs {
-		if goFieldName(attr.Name) != want {
+		if naming.GoFieldName(attr.Name) != want {
 			continue
 		}
-		if !isPrimitiveSchema(attr.Schema) {
+		if !schema.IsPrimitiveSchema(attr.Schema) {
 			return pathSubstitution{}, false
 		}
-		return pathSubstitution{placeholder: placeholder, field: goFieldName(attr.Name), primitive: attr.Schema.Type}, true
+		return pathSubstitution{placeholder: placeholder, field: naming.GoFieldName(attr.Name), primitive: attr.Schema.Type}, true
 	}
 	return pathSubstitution{}, false
 }

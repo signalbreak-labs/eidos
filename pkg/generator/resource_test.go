@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/signalbreak-labs/eidos/pkg/generator/internal/naming"
 	"github.com/signalbreak-labs/eidos/pkg/ir"
 )
 
@@ -337,8 +338,8 @@ func TestSnakeCase(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.in, func(t *testing.T) {
-			if got := snakeCase(tc.in); got != tc.want {
-				t.Errorf("snakeCase(%q) = %q, want %q", tc.in, got, tc.want)
+			if got := naming.SnakeCase(tc.in); got != tc.want {
+				t.Errorf("naming.SnakeCase(%q) = %q, want %q", tc.in, got, tc.want)
 			}
 		})
 	}

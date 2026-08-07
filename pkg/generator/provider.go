@@ -4,11 +4,11 @@ import (
 	"fmt"
 	"go/ast"
 	"go/token"
-	"strconv"
 	"strings"
-	"unicode"
 
 	"github.com/signalbreak-labs/eidos/pkg/generator/astgen"
+	"github.com/signalbreak-labs/eidos/pkg/generator/internal/naming"
+	"github.com/signalbreak-labs/eidos/pkg/generator/internal/schema"
 	"github.com/signalbreak-labs/eidos/pkg/ir"
 )
 
@@ -56,13 +56,13 @@ func ProviderFileWithClient(pir ir.ProviderIR, clientImport string) (File, error
 // providerPackageName returns the Go identifier used for the provider struct.
 // It is lower-camelCase so the struct remains unexported, e.g. "mycloudProvider".
 func providerPackageName(pir ir.ProviderIR) string {
-	return camelCase(pir.Name) + "Provider"
+	return naming.CamelCase(pir.Name) + "Provider"
 }
 
 // providerModelName returns the Go identifier used for the provider config model
 // struct, e.g. "mycloudProviderModel".
 func providerModelName(pir ir.ProviderIR) string {
-	return camelCase(pir.Name) + "ProviderModel"
+	return naming.CamelCase(pir.Name) + "ProviderModel"
 }
 
 // providerTypeName returns the Terraform provider type name. It prefers
@@ -135,7 +135,7 @@ func generateProviderFile(pir ir.ProviderIR, clientImport string) (*ast.File, er
 	modelFields := make([]*ast.Field, 0, len(configAttrs))
 	for _, attr := range configAttrs {
 		modelFields = append(modelFields, astgen.Field(
-			goFieldName(attr.Name),
+			naming.GoFieldName(attr.Name),
 			modelFieldType(attr),
 			modelFieldTags(attr),
 		))
@@ -562,7 +562,7 @@ func validateProviderSchema(s ir.SchemaIR, ctx string) error {
 	if s.Collection != nil {
 		return validateProviderCollectionSchema(s, ctx)
 	}
-	if isObjectLike(s) {
+	if schema.IsObjectLike(s) {
 		return validateProviderObjectSchema(s, ctx)
 	}
 	return validateProviderPrimitiveType(s, ctx)
@@ -576,7 +576,7 @@ func validateProviderCollectionSchema(s ir.SchemaIR, ctx string) error {
 		}
 		// Object-like collection elements can carry provider-config attributes,
 		// so enforce the same Computed/WriteOnly constraints recursively.
-		if isObjectLike(s.Collection.ElementType) {
+		if schema.IsObjectLike(s.Collection.ElementType) {
 			elem := s.Collection.ElementType
 			if err := validateProviderConfig(ir.ObjectSchemaIR{
 				Attributes: elem.Attributes,
@@ -783,7 +783,7 @@ func loggingConfigureStmts(pir ir.ProviderIR) []ast.Stmt {
 		if declared[attrName] {
 			return
 		}
-		configField := astgen.Selector(astgen.Ident("config"), goFieldName(attrName))
+		configField := astgen.Selector(astgen.Ident("config"), naming.GoFieldName(attrName))
 		stmts = append(stmts, astgen.If(
 			astgen.Binary(
 				astgen.Unary(token.NOT, astgen.Call(astgen.Selector(configField, "IsNull"))),
@@ -851,17 +851,17 @@ func frameworkAttributeExpr(attr ir.AttributeIR, attrPath string) ast.Expr {
 
 	// Collection types.
 	if s.Collection != nil {
-		elem := dynamicUnionElement(s.Collection.ElementType)
+		elem := schema.DynamicUnionElement(s.Collection.ElementType)
 		switch s.Collection.Kind {
 		case ir.List:
-			if isPrimitiveSchema(elem) {
-				d := addValidators(attributeValues(attr, []ast.Expr{
+			if schema.IsPrimitiveSchema(elem) {
+				d := schema.AddValidators(attributeValues(attr, []ast.Expr{
 					astgen.KeyValue("ElementType", primitiveAttrType(elem.Type)),
 				}), attr, "List")
 				return astgen.CompositeLit(astgen.QualExpr("schema", "ListAttribute"), d...)
 			}
-			if isObjectLike(elem) {
-				d := addValidators(attributeValues(attr, []ast.Expr{
+			if schema.IsObjectLike(elem) {
+				d := schema.AddValidators(attributeValues(attr, []ast.Expr{
 					astgen.KeyValue("NestedObject", astgen.CompositeLit(
 						astgen.QualExpr("schema", "NestedAttributeObject"),
 						astgen.KeyValue("Attributes", nestedAttributesMapFromSchema(elem, attrPath)),
@@ -870,14 +870,14 @@ func frameworkAttributeExpr(attr ir.AttributeIR, attrPath string) ast.Expr {
 				return astgen.CompositeLit(astgen.QualExpr("schema", "ListNestedAttribute"), d...)
 			}
 		case ir.Set:
-			if isPrimitiveSchema(elem) {
-				d := addValidators(attributeValues(attr, []ast.Expr{
+			if schema.IsPrimitiveSchema(elem) {
+				d := schema.AddValidators(attributeValues(attr, []ast.Expr{
 					astgen.KeyValue("ElementType", primitiveAttrType(elem.Type)),
 				}), attr, "Set")
 				return astgen.CompositeLit(astgen.QualExpr("schema", "SetAttribute"), d...)
 			}
-			if isObjectLike(elem) {
-				d := addValidators(attributeValues(attr, []ast.Expr{
+			if schema.IsObjectLike(elem) {
+				d := schema.AddValidators(attributeValues(attr, []ast.Expr{
 					astgen.KeyValue("NestedObject", astgen.CompositeLit(
 						astgen.QualExpr("schema", "NestedAttributeObject"),
 						astgen.KeyValue("Attributes", nestedAttributesMapFromSchema(elem, attrPath)),
@@ -886,14 +886,14 @@ func frameworkAttributeExpr(attr ir.AttributeIR, attrPath string) ast.Expr {
 				return astgen.CompositeLit(astgen.QualExpr("schema", "SetNestedAttribute"), d...)
 			}
 		case ir.Map:
-			if isPrimitiveSchema(elem) {
-				d := addValidators(attributeValues(attr, []ast.Expr{
+			if schema.IsPrimitiveSchema(elem) {
+				d := schema.AddValidators(attributeValues(attr, []ast.Expr{
 					astgen.KeyValue("ElementType", primitiveAttrType(elem.Type)),
 				}), attr, "Map")
 				return astgen.CompositeLit(astgen.QualExpr("schema", "MapAttribute"), d...)
 			}
-			if isObjectLike(elem) {
-				d := addValidators(attributeValues(attr, []ast.Expr{
+			if schema.IsObjectLike(elem) {
+				d := schema.AddValidators(attributeValues(attr, []ast.Expr{
 					astgen.KeyValue("NestedObject", astgen.CompositeLit(
 						astgen.QualExpr("schema", "NestedAttributeObject"),
 						astgen.KeyValue("Attributes", nestedAttributesMapFromSchema(elem, attrPath)),
@@ -908,16 +908,16 @@ func frameworkAttributeExpr(attr ir.AttributeIR, attrPath string) ast.Expr {
 	if s.Type != "" {
 		switch s.Type {
 		case ir.TypeString:
-			d := addValidators(attributeValues(attr, nil), attr, "String")
+			d := schema.AddValidators(attributeValues(attr, nil), attr, "String")
 			return astgen.CompositeLit(astgen.QualExpr("schema", "StringAttribute"), d...)
 		case ir.TypeInt:
-			d := addValidators(attributeValues(attr, nil), attr, "Int64")
+			d := schema.AddValidators(attributeValues(attr, nil), attr, "Int64")
 			return astgen.CompositeLit(astgen.QualExpr("schema", "Int64Attribute"), d...)
 		case ir.TypeFloat:
-			d := addValidators(attributeValues(attr, nil), attr, "Float64")
+			d := schema.AddValidators(attributeValues(attr, nil), attr, "Float64")
 			return astgen.CompositeLit(astgen.QualExpr("schema", "Float64Attribute"), d...)
 		case ir.TypeBool:
-			d := addValidators(attributeValues(attr, nil), attr, "Bool")
+			d := schema.AddValidators(attributeValues(attr, nil), attr, "Bool")
 			return astgen.CompositeLit(astgen.QualExpr("schema", "BoolAttribute"), d...)
 		case ir.TypeDynamic:
 			return astgen.CompositeLit(astgen.QualExpr("schema", "DynamicAttribute"), attributeValues(attr, nil)...)
@@ -931,19 +931,19 @@ func frameworkAttributeExpr(attr ir.AttributeIR, attrPath string) ast.Expr {
 	// plugin-framework provider schema has no first-class union attribute. When
 	// a schema has both Type and Union set, the primitive Type branch wins.
 	if s.Union != nil {
-		if merged := mergedDiscriminatedUnion(s); merged != nil {
+		if merged := schema.MergedDiscriminatedUnion(s); merged != nil {
 			d := attributeValues(attr, []ast.Expr{
 				astgen.KeyValue("Attributes", nestedAttributesMapFromSchema(*merged, attrPath)),
 			})
-			d = append(d, discriminatedUnionValidators(s))
+			d = append(d, schema.DiscriminatedUnionValidators(s))
 			return astgen.CompositeLit(astgen.QualExpr("schema", "SingleNestedAttribute"), d...)
 		}
 		return astgen.CompositeLit(astgen.QualExpr("schema", "DynamicAttribute"), attributeValues(attr, nil)...)
 	}
 
 	// Object-like types (Attributes or Blocks present without explicit primitive type).
-	if isObjectLike(s) {
-		d := addValidators(attributeValues(attr, []ast.Expr{
+	if schema.IsObjectLike(s) {
+		d := schema.AddValidators(attributeValues(attr, []ast.Expr{
 			astgen.KeyValue("Attributes", nestedAttributesMapFromSchema(s, attrPath)),
 		}), attr, "Object")
 		return astgen.CompositeLit(astgen.QualExpr("schema", "SingleNestedAttribute"), d...)
@@ -1037,16 +1037,6 @@ func nestedAttributesMapFromSchema(s ir.SchemaIR, parentPath string) ast.Expr {
 	return nestedAttributesMap(ir.ObjectSchemaIR{Attributes: s.Attributes, Blocks: s.Blocks}, parentPath)
 }
 
-// isPrimitiveSchema reports whether the schema describes a primitive value.
-func isPrimitiveSchema(s ir.SchemaIR) bool {
-	return s.Type == ir.TypeString || s.Type == ir.TypeInt || s.Type == ir.TypeFloat || s.Type == ir.TypeBool || s.Type == ir.TypeDynamic
-}
-
-// isObjectLike reports whether the schema describes an object with attributes or blocks.
-func isObjectLike(s ir.SchemaIR) bool {
-	return len(s.Attributes) > 0 || len(s.Blocks) > 0
-}
-
 // objectSchemaNeedsValidators reports whether any attribute or nested block in
 // the object schema emits a Validators field. It is used to decide whether the
 // generated file needs the schema/validator package import.
@@ -1083,7 +1073,7 @@ func schemaIRNeedsValidators(s ir.SchemaIR) bool {
 	// nested attributes in a map, each of which may emit validators. Primitive
 	// collection elements are rendered as bare type references with no
 	// validators, so they are not recursed.
-	if s.Collection != nil && isObjectLike(s.Collection.ElementType) {
+	if s.Collection != nil && schema.IsObjectLike(s.Collection.ElementType) {
 		if objectSchemaNeedsValidators(ir.ObjectSchemaIR{
 			Attributes: s.Collection.ElementType.Attributes,
 			Blocks:     s.Collection.ElementType.Blocks,
@@ -1091,7 +1081,7 @@ func schemaIRNeedsValidators(s ir.SchemaIR) bool {
 			return true
 		}
 	}
-	if isObjectLike(s) {
+	if schema.IsObjectLike(s) {
 		return objectSchemaNeedsValidators(ir.ObjectSchemaIR{Attributes: s.Attributes, Blocks: s.Blocks})
 	}
 	return false
@@ -1105,13 +1095,13 @@ func schemaIRNeedsValidators(s ir.SchemaIR) bool {
 func schemaEmitsValidators(s ir.SchemaIR) bool {
 	switch attributeValidatorKind(s) {
 	case "Int64":
-		return len(int64ValidatorExprs(s)) > 0
+		return len(schema.Int64ValidatorExprs(s)) > 0
 	case "Float64":
-		return len(float64ValidatorExprs(s)) > 0
+		return len(schema.Float64ValidatorExprs(s)) > 0
 	case "Object":
-		return len(objectValidatorExprs(s)) > 0
+		return len(schema.ObjectValidatorExprs(s)) > 0
 	case "Map":
-		return len(mapValidatorExprs(s)) > 0
+		return len(schema.MapValidatorExprs(s)) > 0
 	}
 	return false
 }
@@ -1127,24 +1117,24 @@ func attributeValidatorKind(s ir.SchemaIR) string {
 		elem := s.Collection.ElementType
 		switch s.Collection.Kind {
 		case ir.List:
-			if isPrimitiveSchema(elem) {
+			if schema.IsPrimitiveSchema(elem) {
 				return "List"
 			}
-			if isObjectLike(elem) {
+			if schema.IsObjectLike(elem) {
 				return "Object"
 			}
 		case ir.Set:
-			if isPrimitiveSchema(elem) {
+			if schema.IsPrimitiveSchema(elem) {
 				return "Set"
 			}
-			if isObjectLike(elem) {
+			if schema.IsObjectLike(elem) {
 				return "Object"
 			}
 		case ir.Map:
-			if isPrimitiveSchema(elem) {
+			if schema.IsPrimitiveSchema(elem) {
 				return "Map"
 			}
-			if isObjectLike(elem) {
+			if schema.IsObjectLike(elem) {
 				return "Object"
 			}
 		}
@@ -1168,12 +1158,12 @@ func attributeValidatorKind(s ir.SchemaIR) string {
 		// dynamic-union strategy (D2), so its validators attach through the
 		// "Object" path; any other union renders as DynamicAttribute with no
 		// validators.
-		if mergedDiscriminatedUnion(s) != nil {
+		if schema.MergedDiscriminatedUnion(s) != nil {
 			return "Object"
 		}
 		return "Dynamic"
 	}
-	if isObjectLike(s) {
+	if schema.IsObjectLike(s) {
 		return "Object"
 	}
 	return ""
@@ -1265,7 +1255,7 @@ func modelFieldType(attr ir.AttributeIR) ast.Expr {
 	// discriminated union, which renders as a SingleNestedAttribute (D2) and
 	// therefore needs a types.Object model field.
 	if s.Union != nil || s.Type == ir.TypeNull {
-		if s.Union != nil && mergedDiscriminatedUnion(s) != nil {
+		if s.Union != nil && schema.MergedDiscriminatedUnion(s) != nil {
 			return astgen.QualExpr("types", "Object")
 		}
 		return astgen.QualExpr("types", "Dynamic")
@@ -1289,7 +1279,7 @@ func modelFieldType(attr ir.AttributeIR) ast.Expr {
 		}
 	}
 
-	if isObjectLike(s) {
+	if schema.IsObjectLike(s) {
 		return astgen.QualExpr("types", "Object")
 	}
 
@@ -1325,36 +1315,29 @@ func modelFieldTags(attr ir.AttributeIR) string {
 	return tags
 }
 
-// skipAttrForModel reports whether the attribute should be skipped in the model.
-// It is a no-op hook today; attribute-level filtering is not wired, and
-// all IR attributes are included in generated models.
-func skipAttrForModel(_ ir.AttributeIR) bool {
-	return false
-}
-
 // resourceStructName returns the generated resource struct name for an IR resource.
 func resourceStructName(r ir.ResourceIR) string {
-	return pascalCase(r.Name) + "Resource"
+	return naming.PascalCase(r.Name) + "Resource"
 }
 
 // dataSourceStructName returns the generated data source struct name.
 func dataSourceStructName(ds ir.DataSourceIR) string {
-	return pascalCase(ds.Name) + "DataSource"
+	return naming.PascalCase(ds.Name) + "DataSource"
 }
 
 // functionStructName returns the generated function struct name.
 func functionStructName(fn ir.FunctionIR) string {
-	return pascalCase(fn.Name) + "Function"
+	return naming.PascalCase(fn.Name) + "Function"
 }
 
 // ephemeralResourceStructName returns the generated ephemeral resource struct name.
 func ephemeralResourceStructName(er ir.EphemeralResourceIR) string {
-	return pascalCase(er.Name) + "EphemeralResource"
+	return naming.PascalCase(er.Name) + "EphemeralResource"
 }
 
 // listResourceStructName returns the generated list resource struct name.
 func listResourceStructName(lr ir.ListResourceIR) string {
-	return pascalCase(lr.Name) + "ListResource"
+	return naming.PascalCase(lr.Name) + "ListResource"
 }
 
 // litOrOmit returns the trimmed string as an ast.Expr, or nil when the input
@@ -1365,150 +1348,4 @@ func litOrOmit(s string) ast.Expr {
 		return nil
 	}
 	return astgen.Lit(strings.TrimSpace(s))
-}
-
-// pascalCase converts an identifier to PascalCase by splitting on
-// non-alphanumeric runes and title-casing each word. It performs no validation:
-// an empty or all-separator input yields "", and a digit-led input such as
-// "2fa" yields "2fa" (an invalid Go identifier). Callers that need a valid,
-// exportable identifier must route through goFieldName, which sanitizes the
-// result. Keeping sanitization out of pascalCase preserves the long-standing
-// contract that pascalCase("") == "" used by the *StructName/*ModelName helpers
-// (which append a suffix such as "Resource", so an empty name still produces a
-// valid "Resource").
-func pascalCase(s string) string {
-	parts := splitIdentifier(s)
-	var b strings.Builder
-	for _, p := range parts {
-		if p == "" {
-			continue
-		}
-		r := []rune(p)
-		r[0] = unicode.ToUpper(r[0])
-		b.WriteString(string(r))
-	}
-	return b.String()
-}
-
-// sanitizeGoIdentifier ensures s is a valid, exported Go identifier. An empty
-// result becomes "X"; a result beginning with a non-letter (e.g. a digit) is
-// prefixed with "X". splitIdentifier already strips everything except letters
-// and digits, so only the first rune and emptiness need correcting here.
-func sanitizeGoIdentifier(s string) string {
-	if s == "" {
-		return "X"
-	}
-	r := []rune(s)
-	if !unicode.IsLetter(r[0]) {
-		return "X" + s
-	}
-	return s
-}
-
-// camelCase converts an identifier to lower-camelCase.
-func camelCase(s string) string {
-	pc := pascalCase(s)
-	if pc == "" {
-		return ""
-	}
-	r := []rune(pc)
-	r[0] = unicode.ToLower(r[0])
-	return string(r)
-}
-
-// goFieldName returns a Go-exported field name from an attribute name. Unlike
-// pascalCase, it validates the result so hostile spec property names cannot
-// produce invalid Go identifiers: a property named "2fa" yields "X2fa" (not the
-// invalid "2fa"), and "---" or "" yield "X". This addresses H-6, where goFieldName
-// was bare pascalCase and go/format printed the invalid/empty names without
-// error, so eidos exited 0 while emitting a provider that cannot compile.
-func goFieldName(s string) string {
-	return sanitizeGoIdentifier(pascalCase(s))
-}
-
-// splitIdentifier breaks a string into words, splitting only on non-alphanumeric
-// runes (underscore, dash, space, dot, ...). It deliberately does not split
-// camelCase or digit/letter boundaries: snakeCase relies on this to leave
-// "MyCloud" as a single word (snakeCase("MyCloud") == "mycloud"), and the
-// H-7 foo_bar/fooBar collision is resolved by resolveFieldNames' collision
-// detection rather than by splitting, since camelCase splitting would not
-// disambiguate them anyway (both still normalize to "FooBar").
-func splitIdentifier(s string) []string {
-	var parts []string
-	var cur []rune
-	flush := func() {
-		if len(cur) > 0 {
-			parts = append(parts, string(cur))
-			cur = cur[:0]
-		}
-	}
-	for _, r := range s {
-		if unicode.IsLetter(r) || unicode.IsDigit(r) {
-			cur = append(cur, r)
-		} else {
-			flush()
-		}
-	}
-	flush()
-	return parts
-}
-
-// resolveFieldNames returns a map from each attribute's source Name to a unique
-// Go exported field name for the supplied attribute scope (one struct's
-// attribute list). Attributes whose pascalCase names collide get a numeric
-// suffix (Base2, Base3, ...) based on declaration order so the mapping is
-// deterministic and identical for any caller that iterates the same attribute
-// slice in the same order.
-//
-// This addresses H-7: properties that differ only in separator style (for
-// example "foo_bar" and "fooBar") both normalize to "FooBar" and would produce
-// duplicate struct fields, duplicate nested types, and duplicate
-// FooBarType/FromValue/ToValue functions. resolveFieldNames keeps them
-// distinct while leaving non-colliding names unchanged. Both model.go (the
-// plain API model) and mapper.go (value_mappers.go) call this for the same
-// attribute scope, so the resolved field and nested-type names stay consistent
-// across the two generated files.
-func resolveFieldNames(attrs []ir.AttributeIR) map[string]string {
-	resolved := make(map[string]string, len(attrs))
-	taken := make(map[string]struct{}, len(attrs))
-	baseCount := make(map[string]int)
-
-	assign := func(base string) string {
-		baseCount[base]++
-		name := base
-		if baseCount[base] > 1 {
-			name = base + strconv.Itoa(baseCount[base])
-		}
-		// If the chosen name was already taken (for example a real attribute
-		// named "foo_bar_2" already claimed "FooBar2"), keep incrementing.
-		for {
-			if _, dup := taken[name]; !dup {
-				break
-			}
-			baseCount[base]++
-			name = base + strconv.Itoa(baseCount[base])
-		}
-		taken[name] = struct{}{}
-		return name
-	}
-
-	for _, attr := range attrs {
-		if skipAttrForModel(attr) {
-			continue
-		}
-		resolved[attr.Name] = assign(goFieldName(attr.Name))
-	}
-	return resolved
-}
-
-// resolvedFieldName returns the unique Go field name for attr within the given
-// resolved-names scope. It falls back to the unsuffixed goFieldName when the
-// attribute is absent from the scope (for example, a block's nested schema
-// resolved independently), which is safe because such lookups never share a scope
-// with a colliding sibling.
-func resolvedFieldName(scope map[string]string, attr ir.AttributeIR) string {
-	if name, ok := scope[attr.Name]; ok {
-		return name
-	}
-	return goFieldName(attr.Name)
 }

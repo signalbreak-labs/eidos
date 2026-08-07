@@ -8,6 +8,8 @@ import (
 	"strings"
 
 	"github.com/signalbreak-labs/eidos/pkg/generator/astgen"
+	"github.com/signalbreak-labs/eidos/pkg/generator/internal/naming"
+	"github.com/signalbreak-labs/eidos/pkg/generator/internal/schema"
 	"github.com/signalbreak-labs/eidos/pkg/ir"
 )
 
@@ -28,7 +30,7 @@ const listResourceSetBlockFallbackComment = "Set-nested blocks are not supported
 // (planListResourceWiring), the generated List method streams real instances
 // from the API instead of the honest scaffold diagnostic.
 func ListResourceFile(lr ir.ListResourceIR, clientImport string) File {
-	path := filepath.Join("internal", "provider", fmt.Sprintf("list_%s.go", snakeCase(lr.Name)))
+	path := filepath.Join("internal", "provider", fmt.Sprintf("list_%s.go", naming.SnakeCase(lr.Name)))
 	file, err := func() (f *ast.File, err error) {
 		defer func() {
 			if rec := recover(); rec != nil {
@@ -115,7 +117,7 @@ func listResourceTypeDecls(f *astgen.File, lr ir.ListResourceIR, wiring listReso
 		modelFields := make([]*ast.Field, 0, len(lr.ConfigSchema.Attributes))
 		for _, attr := range lr.ConfigSchema.Attributes {
 			modelFields = append(modelFields, astgen.Field(
-				goFieldName(attr.Name),
+				naming.GoFieldName(attr.Name),
 				modelFieldType(attr),
 				modelFieldTags(attr),
 			))
@@ -159,11 +161,11 @@ func listResourceNeedsTypesImport(lr ir.ListResourceIR) bool {
 // reference types when rendered as list resource attributes.
 func schemaReferencesTypes(s ir.SchemaIR) bool {
 	if s.Collection != nil {
-		elem := dynamicUnionElement(s.Collection.ElementType)
-		if isPrimitiveSchema(elem) {
+		elem := schema.DynamicUnionElement(s.Collection.ElementType)
+		if schema.IsPrimitiveSchema(elem) {
 			return true
 		}
-		if isObjectLike(elem) {
+		if schema.IsObjectLike(elem) {
 			return objectSchemaReferencesTypes(ir.ObjectSchemaIR{
 				Attributes: elem.Attributes,
 				Blocks:     elem.Blocks,
@@ -171,7 +173,7 @@ func schemaReferencesTypes(s ir.SchemaIR) bool {
 		}
 		return false
 	}
-	if isObjectLike(s) {
+	if schema.IsObjectLike(s) {
 		return objectSchemaReferencesTypes(ir.ObjectSchemaIR{Attributes: s.Attributes, Blocks: s.Blocks})
 	}
 	return false
@@ -326,7 +328,7 @@ func generateListResourceFile(lr ir.ListResourceIR, clientImport string) *ast.Fi
 			}
 		}
 	}
-	if needsBlockValidators || objectSchemaHasDiscriminatedUnion(lr.ConfigSchema) {
+	if needsBlockValidators || schema.ObjectSchemaHasDiscriminatedUnion(lr.ConfigSchema) {
 		f.AddImport("github.com/hashicorp/terraform-plugin-framework/schema/validator", "validator")
 	}
 	if needsBlockValidators {
@@ -488,18 +490,18 @@ func listResourceFrameworkAttributeExpr(attr ir.AttributeIR, attrPath, resourceN
 	// plugin-framework list resource schema has no first-class union attribute.
 	// When a schema has both Type and Union set, the primitive Type branch wins.
 	if s.Union != nil {
-		if merged := mergedDiscriminatedUnion(s); merged != nil {
+		if merged := schema.MergedDiscriminatedUnion(s); merged != nil {
 			d := listResourceAttributeValues(attr, []ast.Expr{
 				astgen.KeyValue("Attributes", listResourceNestedAttributesMapFromSchema(*merged, attrPath, resourceName)),
 			})
-			d = append(d, discriminatedUnionValidators(s))
+			d = append(d, schema.DiscriminatedUnionValidators(s))
 			return astgen.CompositeLit(astgen.QualExpr("listschema", "SingleNestedAttribute"), d...)
 		}
 		return astgen.CompositeLit(astgen.QualExpr("listschema", "DynamicAttribute"), listResourceAttributeValues(attr, nil)...)
 	}
 
 	// Object-like types (Attributes or Blocks present without explicit primitive type).
-	if isObjectLike(s) {
+	if schema.IsObjectLike(s) {
 		d := listResourceAttributeValues(attr, []ast.Expr{
 			astgen.KeyValue("Attributes", listResourceNestedAttributesMapFromSchema(s, attrPath, resourceName)),
 		})
@@ -521,7 +523,7 @@ func listResourceFrameworkAttributeExpr(attr ir.AttributeIR, attrPath, resourceN
 // primitive/union/unrepresentable handling below (G12). Set is not supported by
 // list/schema, so it falls back to List.
 func listResourceCollectionAttributeExpr(attr ir.AttributeIR, attrPath, resourceName string) ast.Expr {
-	elem := dynamicUnionElement(attr.Schema.Collection.ElementType)
+	elem := schema.DynamicUnionElement(attr.Schema.Collection.ElementType)
 	// A collection whose element is dynamic/null cannot be represented as a
 	// framework collection (List{ElementType: DynamicType} is rejected by
 	// the framework); treat it as an unrepresentable shape (G12).
@@ -543,13 +545,13 @@ func listResourceCollectionAttributeExpr(attr ir.AttributeIR, attrPath, resource
 // listResourceListElementAttributeExpr maps a List/Set element to its framework
 // attribute (ListAttribute or ListNestedAttribute; Set falls back to List).
 func listResourceListElementAttributeExpr(attr ir.AttributeIR, elem ir.SchemaIR, attrPath, resourceName string) ast.Expr {
-	if isPrimitiveSchema(elem) {
+	if schema.IsPrimitiveSchema(elem) {
 		d := listResourceAttributeValues(attr, []ast.Expr{
 			astgen.KeyValue("ElementType", primitiveAttrType(elem.Type)),
 		})
 		return astgen.CompositeLit(astgen.QualExpr("listschema", "ListAttribute"), d...)
 	}
-	if isObjectLike(elem) {
+	if schema.IsObjectLike(elem) {
 		d := listResourceAttributeValues(attr, []ast.Expr{
 			astgen.KeyValue("NestedObject", astgen.CompositeLit(
 				astgen.QualExpr("listschema", "NestedAttributeObject"),
@@ -564,13 +566,13 @@ func listResourceListElementAttributeExpr(attr ir.AttributeIR, elem ir.SchemaIR,
 // listResourceMapElementAttributeExpr maps a Map element to its framework
 // attribute (MapAttribute or MapNestedAttribute).
 func listResourceMapElementAttributeExpr(attr ir.AttributeIR, elem ir.SchemaIR, attrPath, resourceName string) ast.Expr {
-	if isPrimitiveSchema(elem) {
+	if schema.IsPrimitiveSchema(elem) {
 		d := listResourceAttributeValues(attr, []ast.Expr{
 			astgen.KeyValue("ElementType", primitiveAttrType(elem.Type)),
 		})
 		return astgen.CompositeLit(astgen.QualExpr("listschema", "MapAttribute"), d...)
 	}
-	if isObjectLike(elem) {
+	if schema.IsObjectLike(elem) {
 		d := listResourceAttributeValues(attr, []ast.Expr{
 			astgen.KeyValue("NestedObject", astgen.CompositeLit(
 				astgen.QualExpr("listschema", "NestedAttributeObject"),

@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"path/filepath"
 
+	"github.com/signalbreak-labs/eidos/pkg/generator/internal/naming"
+	"github.com/signalbreak-labs/eidos/pkg/generator/internal/schema"
 	"github.com/signalbreak-labs/eidos/pkg/ir"
 )
 
@@ -13,7 +15,7 @@ import (
 // matches the placeholder value produced by the generated provider's stub
 // Create implementation.
 func TerraformTestFile(pir ir.ProviderIR, r ir.ResourceIR, _ BuildConfig) File {
-	path := fmt.Sprintf("tests/%s.tftest.hcl", snakeCase(r.Name))
+	path := fmt.Sprintf("tests/%s.tftest.hcl", naming.SnakeCase(r.Name))
 	return staticFile(path, generateTerraformTestHCL(pir, r))
 }
 
@@ -23,7 +25,7 @@ func TerraformTestFile(pir ir.ProviderIR, r ir.ResourceIR, _ BuildConfig) File {
 // the resource's required primitive attributes, and emits the resource under
 // test along with an output for its identifier.
 func TerraformTestModuleFile(pir ir.ProviderIR, r ir.ResourceIR, cfg BuildConfig) File {
-	path := filepath.Join("tests", "modules", snakeCase(r.Name), "main.tf")
+	path := filepath.Join("tests", "modules", naming.SnakeCase(r.Name), "main.tf")
 	return staticFile(path, generateTerraformTestModuleHCL(pir, r, cfg))
 }
 
@@ -42,7 +44,7 @@ func TerraformTestFiles(pir ir.ProviderIR, cfg BuildConfig) []File {
 func generateTerraformTestHCL(_ ir.ProviderIR, r ir.ResourceIR) string {
 	var h hclBuilder
 
-	runName := fmt.Sprintf("create_%s", snakeCase(r.Name))
+	runName := fmt.Sprintf("create_%s", naming.SnakeCase(r.Name))
 	h.writeLinef(`run %q {`, runName)
 	h.indent++
 	h.writeLinef("command = apply")
@@ -62,7 +64,7 @@ func generateTerraformTestHCL(_ ir.ProviderIR, r ir.ResourceIR) string {
 	h.writeLinef("")
 	h.writeLinef("module {")
 	h.indent++
-	h.writeLinef("source = \"./tests/modules/%s\"", snakeCase(r.Name))
+	h.writeLinef("source = \"./tests/modules/%s\"", naming.SnakeCase(r.Name))
 	h.indent--
 	h.writeLinef("}")
 
@@ -163,7 +165,7 @@ func writeTerraformTestProviderAttribute(h *hclBuilder, attr ir.AttributeIR) {
 		return
 	}
 
-	if isObjectLike(s) {
+	if schema.IsObjectLike(s) {
 		h.writeLinef("%s = {", attr.Name)
 		h.indent++
 		writeTerraformTestProviderBody(h, ir.ObjectSchemaIR{Attributes: s.Attributes, Blocks: s.Blocks})
@@ -175,11 +177,11 @@ func writeTerraformTestProviderAttribute(h *hclBuilder, attr ir.AttributeIR) {
 	h.writeLinef("%s = %s", attr.Name, terraformTestPrimitiveValue(s.Type))
 }
 
-func writeTerraformTestProviderBody(h *hclBuilder, schema ir.ObjectSchemaIR) {
-	for _, attr := range schema.Attributes {
+func writeTerraformTestProviderBody(h *hclBuilder, obj ir.ObjectSchemaIR) {
+	for _, attr := range obj.Attributes {
 		writeTerraformTestProviderAttribute(h, attr)
 	}
-	for _, block := range schema.Blocks {
+	for _, block := range obj.Blocks {
 		writeTerraformTestProviderBlock(h, block)
 	}
 }
@@ -205,12 +207,12 @@ func writeTerraformTestProviderBlock(h *hclBuilder, block ir.BlockIR) {
 // Attributes), so nested primitives — inside objects, blocks, or collections —
 // must use inline placeholder values to avoid "Reference to undeclared
 // variable" errors (M-55).
-func writeTerraformTestResourceBody(h *hclBuilder, schema ir.ObjectSchemaIR, useVars bool) {
-	for _, attr := range schema.Attributes {
+func writeTerraformTestResourceBody(h *hclBuilder, obj ir.ObjectSchemaIR, useVars bool) {
+	for _, attr := range obj.Attributes {
 		if !attr.Required {
 			continue
 		}
-		if attr.Schema.Collection != nil || isObjectLike(attr.Schema) {
+		if attr.Schema.Collection != nil || schema.IsObjectLike(attr.Schema) {
 			writeTerraformTestResourceAttribute(h, attr)
 			continue
 		}
@@ -220,7 +222,7 @@ func writeTerraformTestResourceBody(h *hclBuilder, schema ir.ObjectSchemaIR, use
 			h.writeLinef("%s = %s", attr.Name, terraformTestPrimitiveValue(attr.Schema.Type))
 		}
 	}
-	for _, block := range schema.Blocks {
+	for _, block := range obj.Blocks {
 		if block.Schema.Attributes == nil && block.Schema.Blocks == nil {
 			continue
 		}
@@ -236,7 +238,7 @@ func writeTerraformTestResourceAttribute(h *hclBuilder, attr ir.AttributeIR) {
 		return
 	}
 
-	if isObjectLike(s) {
+	if schema.IsObjectLike(s) {
 		h.writeLinef("%s {", attr.Name)
 		h.indent++
 		// Nested object attributes are never wired to variables (M-55).
@@ -264,11 +266,11 @@ func writeTerraformTestCollectionAttribute(h *hclBuilder, attr ir.AttributeIR, _
 
 	switch s.Collection.Kind {
 	case ir.List, ir.Set:
-		if isPrimitiveSchema(elem) {
+		if schema.IsPrimitiveSchema(elem) {
 			h.writeLinef("%s = [ %s ]", attr.Name, terraformTestPrimitiveValue(elem.Type))
 			return
 		}
-		if isObjectLike(elem) {
+		if schema.IsObjectLike(elem) {
 			h.writeLinef("%s = [{", attr.Name)
 			h.indent++
 			// Collection elements are nested and never wired to variables (M-55).
@@ -278,7 +280,7 @@ func writeTerraformTestCollectionAttribute(h *hclBuilder, attr ir.AttributeIR, _
 			return
 		}
 	case ir.Map:
-		if isPrimitiveSchema(elem) {
+		if schema.IsPrimitiveSchema(elem) {
 			h.writeLinef("%s = {", attr.Name)
 			h.indent++
 			h.writeLinef("\"key\" = %s", terraformTestPrimitiveValue(elem.Type))
@@ -286,7 +288,7 @@ func writeTerraformTestCollectionAttribute(h *hclBuilder, attr ir.AttributeIR, _
 			h.writeLinef("}")
 			return
 		}
-		if isObjectLike(elem) {
+		if schema.IsObjectLike(elem) {
 			h.writeLinef("%s = {", attr.Name)
 			h.indent++
 			h.writeLinef("\"key\" = {")
@@ -312,19 +314,19 @@ func writeTerraformTestCollectionAttribute(h *hclBuilder, attr ir.AttributeIR, _
 // terraformTestRequiredPrimitiveAttributes returns the primitive (or primitive
 // collection) attributes that are required by the schema and can be supplied
 // through a Terraform variable.
-func terraformTestRequiredPrimitiveAttributes(schema ir.ObjectSchemaIR) []ir.AttributeIR {
+func terraformTestRequiredPrimitiveAttributes(obj ir.ObjectSchemaIR) []ir.AttributeIR {
 	var attrs []ir.AttributeIR
-	for _, attr := range schema.Attributes {
+	for _, attr := range obj.Attributes {
 		if !attr.Required {
 			continue
 		}
 		if attr.Schema.Collection != nil {
-			if isPrimitiveSchema(attr.Schema.Collection.ElementType) {
+			if schema.IsPrimitiveSchema(attr.Schema.Collection.ElementType) {
 				attrs = append(attrs, attr)
 			}
 			continue
 		}
-		if isPrimitiveSchema(attr.Schema) {
+		if schema.IsPrimitiveSchema(attr.Schema) {
 			attrs = append(attrs, attr)
 		}
 	}
@@ -372,11 +374,11 @@ func terraformTestVariableValue(attr ir.AttributeIR) string {
 		elem := s.Collection.ElementType
 		switch s.Collection.Kind {
 		case ir.List, ir.Set:
-			if isPrimitiveSchema(elem) {
+			if schema.IsPrimitiveSchema(elem) {
 				return fmt.Sprintf("[ %s ]", terraformTestPrimitiveValue(elem.Type))
 			}
 		case ir.Map:
-			if isPrimitiveSchema(elem) {
+			if schema.IsPrimitiveSchema(elem) {
 				return fmt.Sprintf("{ key = %s }", terraformTestPrimitiveValue(elem.Type))
 			}
 		}

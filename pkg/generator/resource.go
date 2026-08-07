@@ -8,6 +8,8 @@ import (
 	"strings"
 
 	"github.com/signalbreak-labs/eidos/pkg/generator/astgen"
+	"github.com/signalbreak-labs/eidos/pkg/generator/internal/naming"
+	"github.com/signalbreak-labs/eidos/pkg/generator/internal/schema"
 	"github.com/signalbreak-labs/eidos/pkg/ir"
 )
 
@@ -26,7 +28,7 @@ var ErrUnknownResourceBlockNesting = errors.New("unknown resource block nesting 
 // used by resources whose CRUD mapping is complete enough to wire their
 // Create/Read/Update/Delete bodies to the generated API client.
 func ResourceFile(r ir.ResourceIR, clientImport string) File {
-	path := fmt.Sprintf("internal/provider/resource_%s.go", snakeCase(r.Name))
+	path := fmt.Sprintf("internal/provider/resource_%s.go", naming.SnakeCase(r.Name))
 	file, err := func() (f *ast.File, err error) {
 		defer func() {
 			if rec := recover(); rec != nil {
@@ -90,11 +92,11 @@ func generateResourceFile(r ir.ResourceIR, clientImport string) (*ast.File, erro
 	f.AddCommentf("%s describes the Terraform state and plan shape for %s.", modelName, structName)
 	modelFields := make([]*ast.Field, 0, len(r.Schema.Attributes)+len(r.Schema.Blocks))
 	for _, attr := range r.Schema.Attributes {
-		if skipAttrForModel(attr) {
+		if schema.SkipAttrForModel(attr) {
 			continue
 		}
 		modelFields = append(modelFields, astgen.Field(
-			goFieldName(attr.Name),
+			naming.GoFieldName(attr.Name),
 			modelFieldType(attr),
 			modelFieldTags(attr),
 		))
@@ -104,7 +106,7 @@ func generateResourceFile(r ir.ResourceIR, clientImport string) (*ast.File, erro
 	// blocks because there is no corresponding skipBlockForModel helper yet.
 	for _, block := range r.Schema.Blocks {
 		modelFields = append(modelFields, astgen.Field(
-			goFieldName(block.Name),
+			naming.GoFieldName(block.Name),
 			blockModelFieldType(block),
 			fmt.Sprintf("tfsdk:%q", block.Name),
 		))
@@ -368,7 +370,7 @@ func registerResourceImports(f *astgen.File, r ir.ResourceIR, wiring resourceWir
 
 // resourceModelName returns the generated model struct name for a resource.
 func resourceModelName(r ir.ResourceIR) string {
-	return pascalCase(r.Name) + "ResourceModel"
+	return naming.PascalCase(r.Name) + "ResourceModel"
 }
 
 // blockModelFieldType returns the Terraform Plugin Framework model field type for
@@ -419,7 +421,7 @@ func resourceIDFieldInfo(r ir.ResourceIR) idFieldInfo {
 		}
 		return idFieldInfo{
 			attr:      attr,
-			field:     goFieldName(attr),
+			field:     naming.GoFieldName(attr),
 			primitive: a.Schema.Type,
 			found:     true,
 		}
@@ -631,22 +633,22 @@ func frameworkResourceAttributeExpr(attr ir.AttributeIR, attrPath string) ast.Ex
 	// plugin-framework resource schema has no first-class union attribute. When
 	// a schema has both Type and Union set, the primitive Type branch wins.
 	if s.Union != nil {
-		if merged := mergedDiscriminatedUnion(s); merged != nil {
+		if merged := schema.MergedDiscriminatedUnion(s); merged != nil {
 			d := resourceAttributeValues(attr, []ast.Expr{
 				astgen.KeyValue("Attributes", nestedResourceAttributesMapFromSchema(*merged, attrPath)),
 			})
-			d = append(d, discriminatedUnionValidators(s))
+			d = append(d, schema.DiscriminatedUnionValidators(s))
 			return astgen.CompositeLit(astgen.QualExpr("schema", "SingleNestedAttribute"), d...)
 		}
 		return astgen.CompositeLit(astgen.QualExpr("schema", "DynamicAttribute"), resourceAttributeValues(attr, nil)...)
 	}
 
 	// Object-like types (Attributes or Blocks present without explicit primitive type).
-	if isObjectLike(s) {
+	if schema.IsObjectLike(s) {
 		d := resourceAttributeValues(attr, []ast.Expr{
 			astgen.KeyValue("Attributes", nestedResourceAttributesMapFromSchema(s, attrPath)),
 		})
-		d = addValidators(d, attr, "Object")
+		d = schema.AddValidators(d, attr, "Object")
 		return astgen.CompositeLit(astgen.QualExpr("schema", "SingleNestedAttribute"), d...)
 	}
 
@@ -664,7 +666,7 @@ func frameworkResourceAttributeExpr(attr ir.AttributeIR, attrPath string) ast.Ex
 // framework attribute, or nil when the shape falls through to the
 // primitive/union/unrepresentable handling below (G12).
 func resourceCollectionAttributeExpr(attr ir.AttributeIR, attrPath string) ast.Expr {
-	elem := dynamicUnionElement(attr.Schema.Collection.ElementType)
+	elem := schema.DynamicUnionElement(attr.Schema.Collection.ElementType)
 	// A collection whose element is dynamic/null cannot be represented as a
 	// framework collection (List{ElementType: DynamicType} is rejected by the
 	// framework); treat it as an unrepresentable shape (G12).
@@ -688,21 +690,21 @@ func resourceCollectionAttributeExpr(attr ir.AttributeIR, attrPath string) ast.E
 // resourceListElementAttributeExpr maps a List/Set element to its framework
 // attribute (List*Attribute or Set*Attribute).
 func resourceListElementAttributeExpr(attr ir.AttributeIR, elem ir.SchemaIR, attrPath, kind string) ast.Expr {
-	if isPrimitiveSchema(elem) {
+	if schema.IsPrimitiveSchema(elem) {
 		d := resourceAttributeValues(attr, []ast.Expr{
 			astgen.KeyValue("ElementType", primitiveAttrType(elem.Type)),
 		})
-		d = addValidators(d, attr, kind)
+		d = schema.AddValidators(d, attr, kind)
 		return astgen.CompositeLit(astgen.QualExpr("schema", kind+"Attribute"), d...)
 	}
-	if isObjectLike(elem) {
+	if schema.IsObjectLike(elem) {
 		d := resourceAttributeValues(attr, []ast.Expr{
 			astgen.KeyValue("NestedObject", astgen.CompositeLit(
 				astgen.QualExpr("schema", "NestedAttributeObject"),
 				astgen.KeyValue("Attributes", nestedResourceAttributesMapFromSchema(elem, attrPath)),
 			)),
 		})
-		d = addValidators(d, attr, "Object")
+		d = schema.AddValidators(d, attr, "Object")
 		return astgen.CompositeLit(astgen.QualExpr("schema", kind+"NestedAttribute"), d...)
 	}
 	return nil
@@ -711,21 +713,21 @@ func resourceListElementAttributeExpr(attr ir.AttributeIR, elem ir.SchemaIR, att
 // resourceMapElementAttributeExpr maps a Map element to its framework
 // attribute (MapAttribute or MapNestedAttribute).
 func resourceMapElementAttributeExpr(attr ir.AttributeIR, elem ir.SchemaIR, attrPath string) ast.Expr {
-	if isPrimitiveSchema(elem) {
+	if schema.IsPrimitiveSchema(elem) {
 		d := resourceAttributeValues(attr, []ast.Expr{
 			astgen.KeyValue("ElementType", primitiveAttrType(elem.Type)),
 		})
-		d = addValidators(d, attr, "Map")
+		d = schema.AddValidators(d, attr, "Map")
 		return astgen.CompositeLit(astgen.QualExpr("schema", "MapAttribute"), d...)
 	}
-	if isObjectLike(elem) {
+	if schema.IsObjectLike(elem) {
 		d := resourceAttributeValues(attr, []ast.Expr{
 			astgen.KeyValue("NestedObject", astgen.CompositeLit(
 				astgen.QualExpr("schema", "NestedAttributeObject"),
 				astgen.KeyValue("Attributes", nestedResourceAttributesMapFromSchema(elem, attrPath)),
 			)),
 		})
-		d = addValidators(d, attr, "Object")
+		d = schema.AddValidators(d, attr, "Object")
 		return astgen.CompositeLit(astgen.QualExpr("schema", "MapNestedAttribute"), d...)
 	}
 	return nil
@@ -737,19 +739,19 @@ func resourcePrimitiveAttributeExpr(attr ir.AttributeIR, attrPath string) ast.Ex
 	switch attr.Schema.Type {
 	case ir.TypeString:
 		d := resourceAttributeValues(attr, nil)
-		d = addValidators(d, attr, "String")
+		d = schema.AddValidators(d, attr, "String")
 		return astgen.CompositeLit(astgen.QualExpr("schema", "StringAttribute"), d...)
 	case ir.TypeInt:
 		d := resourceAttributeValues(attr, nil)
-		d = addValidators(d, attr, "Int64")
+		d = schema.AddValidators(d, attr, "Int64")
 		return astgen.CompositeLit(astgen.QualExpr("schema", "Int64Attribute"), d...)
 	case ir.TypeFloat:
 		d := resourceAttributeValues(attr, nil)
-		d = addValidators(d, attr, "Float64")
+		d = schema.AddValidators(d, attr, "Float64")
 		return astgen.CompositeLit(astgen.QualExpr("schema", "Float64Attribute"), d...)
 	case ir.TypeBool:
 		d := resourceAttributeValues(attr, nil)
-		d = addValidators(d, attr, "Bool")
+		d = schema.AddValidators(d, attr, "Bool")
 		return astgen.CompositeLit(astgen.QualExpr("schema", "BoolAttribute"), d...)
 	case ir.TypeDynamic:
 		// A DynamicAttribute is only valid at the top level; nested inside a
@@ -907,19 +909,9 @@ func nestedResourceAttributesMapFromSchema(s ir.SchemaIR, parentPath string) ast
 	return nestedResourceAttributesMap(ir.ObjectSchemaIR{Attributes: s.Attributes}, parentPath)
 }
 
-// snakeCase converts an identifier to lower_snake_case, splitting on non-alphanumeric
-// characters and underscores.
-func snakeCase(s string) string {
-	parts := splitIdentifier(s)
-	for i, p := range parts {
-		parts[i] = strings.ToLower(p)
-	}
-	return strings.Join(parts, "_")
-}
-
 // typeNameFallback returns a normalized Terraform type name for an IR entity
 // when no explicit TypeName is provided. It trims surrounding whitespace and
 // snake_cases the name so the generated identifier is always valid HCL.
 func typeNameFallback(name string) string {
-	return snakeCase(strings.TrimSpace(name))
+	return naming.SnakeCase(strings.TrimSpace(name))
 }

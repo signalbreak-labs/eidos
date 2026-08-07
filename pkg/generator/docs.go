@@ -5,6 +5,8 @@ import (
 	"strings"
 	"unicode"
 
+	"github.com/signalbreak-labs/eidos/pkg/generator/internal/naming"
+	"github.com/signalbreak-labs/eidos/pkg/generator/internal/schema"
 	"github.com/signalbreak-labs/eidos/pkg/ir"
 )
 
@@ -15,42 +17,42 @@ func ProviderDocsIndex(pir ir.ProviderIR) File {
 	for _, r := range pir.Resources {
 		resources = append(resources, docsResourceRef{
 			TypeName: resourceDocsTypeName(r),
-			FileName: snakeCase(r.Name) + ".md",
+			FileName: naming.SnakeCase(r.Name) + ".md",
 		})
 	}
 	dataSources := make([]docsDataSourceRef, 0, len(pir.DataSources))
 	for _, ds := range pir.DataSources {
 		dataSources = append(dataSources, docsDataSourceRef{
 			TypeName: dataSourceDocsTypeName(ds),
-			FileName: snakeCase(ds.Name) + ".md",
+			FileName: naming.SnakeCase(ds.Name) + ".md",
 		})
 	}
 	actions := make([]docsActionRef, 0, len(pir.Actions))
 	for _, a := range pir.Actions {
 		actions = append(actions, docsActionRef{
 			TypeName: actionDocsTypeName(a),
-			FileName: snakeCase(a.Name) + ".md",
+			FileName: naming.SnakeCase(a.Name) + ".md",
 		})
 	}
 	ephemeralResources := make([]docsEphemeralResourceRef, 0, len(pir.EphemeralResources))
 	for _, er := range pir.EphemeralResources {
 		ephemeralResources = append(ephemeralResources, docsEphemeralResourceRef{
 			TypeName: ephemeralResourceDocsTypeName(er),
-			FileName: snakeCase(er.Name) + ".md",
+			FileName: naming.SnakeCase(er.Name) + ".md",
 		})
 	}
 	listResources := make([]docsListResourceRef, 0, len(pir.ListResources))
 	for _, lr := range pir.ListResources {
 		listResources = append(listResources, docsListResourceRef{
 			TypeName: listResourceDocsTypeName(lr),
-			FileName: snakeCase(lr.Name) + ".md",
+			FileName: naming.SnakeCase(lr.Name) + ".md",
 		})
 	}
 	functions := make([]docsFunctionRef, 0, len(pir.Functions))
 	for _, fn := range pir.Functions {
 		functions = append(functions, docsFunctionRef{
 			TypeName: functionDocsTypeName(fn),
-			FileName: snakeCase(fn.Name) + ".md",
+			FileName: naming.SnakeCase(fn.Name) + ".md",
 		})
 	}
 
@@ -85,7 +87,7 @@ func ProviderDocsFiles(pir ir.ProviderIR) []File {
 // ResourceDocsFile returns the generated docs/resources/<name>.md file for a
 // single managed resource.
 func ResourceDocsFile(r ir.ResourceIR) File {
-	path := fmt.Sprintf("docs/resources/%s.md", snakeCase(r.Name))
+	path := fmt.Sprintf("docs/resources/%s.md", naming.SnakeCase(r.Name))
 	data := map[string]any{
 		"ResourceName": resourceDocsTypeName(r),
 		"ProviderName": providerDocsTypeNameFromResource(r),
@@ -113,7 +115,7 @@ func ResourceDocsFiles(resources []ir.ResourceIR) []File {
 // DataSourceDocsFile returns the generated docs/data-sources/<name>.md file for
 // a single data source.
 func DataSourceDocsFile(ds ir.DataSourceIR) File {
-	path := fmt.Sprintf("docs/data-sources/%s.md", snakeCase(ds.Name))
+	path := fmt.Sprintf("docs/data-sources/%s.md", naming.SnakeCase(ds.Name))
 	data := map[string]any{
 		"DataSourceName": dataSourceDocsTypeName(ds),
 		"ProviderName":   providerDocsTypeNameFromDataSource(ds),
@@ -368,7 +370,7 @@ func renderExampleArguments(attrs []ir.AttributeIR) string {
 			}
 			continue
 		}
-		if isObjectLike(attr.Schema) {
+		if schema.IsObjectLike(attr.Schema) {
 			fmt.Fprintf(&b, "  %s = {}\n", attr.Name)
 			continue
 		}
@@ -421,7 +423,7 @@ func writeAttributeRow(b *strings.Builder, attr ir.AttributeIR, depth int, quali
 		fmt.Fprintf(b, " - %s", escapeDescription(attr.Description))
 	}
 	fmt.Fprintln(b)
-	if isObjectLike(attr.Schema) {
+	if schema.IsObjectLike(attr.Schema) {
 		writeObjectRows(b, ir.ObjectSchemaIR{Attributes: attr.Schema.Attributes, Blocks: attr.Schema.Blocks}, depth+1)
 	}
 }
@@ -442,7 +444,7 @@ func writeObjectRows(b *strings.Builder, obj ir.ObjectSchemaIR, depth int) {
 			fmt.Fprintf(b, " - %s", escapeDescription(attr.Description))
 		}
 		fmt.Fprintln(b)
-		if isObjectLike(attr.Schema) {
+		if schema.IsObjectLike(attr.Schema) {
 			writeObjectRows(b, ir.ObjectSchemaIR{Attributes: attr.Schema.Attributes, Blocks: attr.Schema.Blocks}, depth+1)
 		}
 	}
@@ -494,7 +496,7 @@ func schemaTypeName(s ir.SchemaIR) string {
 		return "Dynamic"
 	}
 
-	if isObjectLike(s) {
+	if schema.IsObjectLike(s) {
 		return objectSchemaTypeName(s)
 	}
 
@@ -505,7 +507,7 @@ func schemaTypeName(s ir.SchemaIR) string {
 // listing its attribute and block names. If the schema has no fields, it falls
 // back to the bare "Object" label.
 func objectSchemaTypeName(s ir.SchemaIR) string {
-	if !isObjectLike(s) {
+	if !schema.IsObjectLike(s) {
 		return "Object"
 	}
 	names := make([]string, 0, len(s.Attributes)+len(s.Blocks))

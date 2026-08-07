@@ -4,13 +4,15 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/signalbreak-labs/eidos/pkg/generator/internal/naming"
+	"github.com/signalbreak-labs/eidos/pkg/generator/internal/schema"
 	"github.com/signalbreak-labs/eidos/pkg/ir"
 )
 
 // ActionDocsFile returns the generated docs/actions/<name>.md file for a single
 // Terraform action.
 func ActionDocsFile(a ir.ActionIR) File {
-	path := fmt.Sprintf("docs/actions/%s.md", snakeCase(a.Name))
+	path := fmt.Sprintf("docs/actions/%s.md", naming.SnakeCase(a.Name))
 	data := map[string]any{
 		"ActionName":   actionDocsTypeName(a),
 		"ProviderName": providerDocsTypeNameFromAction(a),
@@ -36,7 +38,7 @@ func ActionDocsFiles(actions []ir.ActionIR) []File {
 // docs/ephemeral-resources/<name>.md file for a single Terraform ephemeral
 // resource.
 func EphemeralResourceDocsFile(er ir.EphemeralResourceIR) File {
-	path := fmt.Sprintf("docs/ephemeral-resources/%s.md", snakeCase(er.Name))
+	path := fmt.Sprintf("docs/ephemeral-resources/%s.md", naming.SnakeCase(er.Name))
 	merged := ephemeralMergedAttributes(er)
 	mergedBlocks := ephemeralMergedBlocks(er)
 	data := map[string]any{
@@ -65,7 +67,7 @@ func EphemeralResourceDocsFiles(ers []ir.EphemeralResourceIR) []File {
 // ListResourceDocsFile returns the generated docs/list-resources/<name>.md file
 // for a single Terraform list resource.
 func ListResourceDocsFile(lr ir.ListResourceIR) File {
-	path := fmt.Sprintf("docs/list-resources/%s.md", snakeCase(lr.Name))
+	path := fmt.Sprintf("docs/list-resources/%s.md", naming.SnakeCase(lr.Name))
 	data := map[string]any{
 		"ListResourceName": listResourceDocsTypeName(lr),
 		"ProviderName":     providerDocsTypeNameFromListResource(lr),
@@ -93,7 +95,7 @@ func ListResourceDocsFiles(lrs []ir.ListResourceIR) []File {
 // "mycloud") and is used for the example invocation because function type
 // names are not required to include a provider prefix.
 func FunctionDocsFile(fn ir.FunctionIR, providerName string) File {
-	path := fmt.Sprintf("docs/functions/%s.md", snakeCase(fn.Name))
+	path := fmt.Sprintf("docs/functions/%s.md", naming.SnakeCase(fn.Name))
 	data := map[string]any{
 		"FunctionName":    functionDocsTypeName(fn),
 		"ProviderName":    strings.TrimSpace(providerName),
@@ -141,7 +143,7 @@ type docsFunctionRef struct {
 
 // actionDocsTypeName returns the Terraform action type name for docs.
 func actionDocsTypeName(a ir.ActionIR) string {
-	return docsTypeNameOrFallback(a.TypeName, a.Name, snakeCase)
+	return docsTypeNameOrFallback(a.TypeName, a.Name, naming.SnakeCase)
 }
 
 // providerDocsTypeNameFromAction returns the provider portion of an action type
@@ -153,7 +155,7 @@ func providerDocsTypeNameFromAction(a ir.ActionIR) string {
 // ephemeralResourceDocsTypeName returns the Terraform ephemeral resource type
 // name for docs.
 func ephemeralResourceDocsTypeName(er ir.EphemeralResourceIR) string {
-	return docsTypeNameOrFallback(er.TypeName, er.Name, snakeCase)
+	return docsTypeNameOrFallback(er.TypeName, er.Name, naming.SnakeCase)
 }
 
 // providerDocsTypeNameFromEphemeralResource returns the provider portion of an
@@ -166,7 +168,7 @@ func providerDocsTypeNameFromEphemeralResource(er ir.EphemeralResourceIR) string
 // listResourceDocsTypeName returns the Terraform list resource type name for
 // docs.
 func listResourceDocsTypeName(lr ir.ListResourceIR) string {
-	return docsTypeNameOrFallback(lr.TypeName, lr.Name, snakeCase)
+	return docsTypeNameOrFallback(lr.TypeName, lr.Name, naming.SnakeCase)
 }
 
 // providerDocsTypeNameFromListResource returns the provider portion of a list
@@ -178,7 +180,7 @@ func providerDocsTypeNameFromListResource(lr ir.ListResourceIR) string {
 
 // functionDocsTypeName returns the Terraform function name for docs.
 func functionDocsTypeName(fn ir.FunctionIR) string {
-	return docsTypeNameOrFallback(fn.TypeName, fn.Name, snakeCase)
+	return docsTypeNameOrFallback(fn.TypeName, fn.Name, naming.SnakeCase)
 }
 
 // actionTemplate is the Terraform Registry-compatible frontmatter and body for
@@ -381,7 +383,7 @@ func functionArgumentPlaceholder(s ir.SchemaIR, label string) string {
 	if s.Collection != nil {
 		return collectionArgumentPlaceholder(s.Collection, label)
 	}
-	if isObjectLike(s) {
+	if schema.IsObjectLike(s) {
 		return objectArgumentPlaceholder(s, label)
 	}
 	if s.Type == ir.TypeDynamic {
@@ -410,7 +412,7 @@ func collectionArgumentPlaceholder(c *ir.CollectionType, label string) string {
 // object-like schema, with one field per attribute and block. Labels are passed
 // down so string fields are rendered as angle-bracket placeholders.
 func objectArgumentPlaceholder(s ir.SchemaIR, label string) string {
-	if !isObjectLike(s) {
+	if !schema.IsObjectLike(s) {
 		return "null"
 	}
 	var b strings.Builder

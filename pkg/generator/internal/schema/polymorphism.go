@@ -1,4 +1,4 @@
-package generator
+package schema
 
 import (
 	"go/ast"
@@ -9,30 +9,17 @@ import (
 	"github.com/signalbreak-labs/eidos/pkg/transformer"
 )
 
-// This file holds the shared generation support for polymorphic (oneOf/anyOf)
-// union attributes (Workstream D). A union without a discriminator renders as
-// a DynamicAttribute (the framework has no first-class union attribute); a
-// discriminated union renders via the dynamic-union strategy as a
-// SingleNestedAttribute merging every variant's fields plus the discriminator
-// attribute, with a DiscriminatorValidator attached through the "Object"
-// validator path. The merged shape comes from
-// transformer.ApplyDynamicUnion; when the merge fails (e.g. duplicate
-// attribute names across variants) the attribute falls back to
-// DynamicAttribute.
-
-// mergedDiscriminatedUnion returns the merged object schema for a
-// discriminated union via the dynamic-union strategy, or nil when the schema
-// is not a discriminated union or the variants cannot merge (duplicate
-// fields, empty discriminator property name). A nil result means the caller
-// must fall back to DynamicAttribute. When the union schema is Computed (an
-// output shape, e.g. a data-source response), every merged child is Computed
-// too — the framework rejects Required children inside a Computed object.
-func mergedDiscriminatedUnion(s ir.SchemaIR) *ir.SchemaIR {
+// MergedDiscriminatedUnion returns the merged object schema for a discriminated
+// union via the dynamic-union strategy, or nil when the schema is not a
+// discriminated union or the variants cannot merge (duplicate attribute names
+// across variants). Merged attributes are marked Computed and stripped of
+// Required/Optional when the source schema was Computed.
+func MergedDiscriminatedUnion(s ir.SchemaIR) *ir.SchemaIR {
 	if s.Union == nil || s.Union.Discriminator == nil {
 		return nil
 	}
 	merged, err := transformer.ApplyDynamicUnion(&s)
-	if err != nil || !isObjectLike(*merged) {
+	if err != nil || !IsObjectLike(*merged) {
 		return nil
 	}
 	if s.Computed {
@@ -45,12 +32,12 @@ func mergedDiscriminatedUnion(s ir.SchemaIR) *ir.SchemaIR {
 	return merged
 }
 
-// discriminatedUnionValidators returns the Validators field element carrying
+// DiscriminatedUnionValidators returns the Validators field element carrying
 // the DiscriminatorValidator call for a discriminated union, attached through
 // the "Object" validator path (validator.Object on the rendered
 // SingleNestedAttribute). The discriminator property name is snake_cased to
 // match the merged attribute's name.
-func discriminatedUnionValidators(s ir.SchemaIR) ast.Expr {
+func DiscriminatedUnionValidators(s ir.SchemaIR) ast.Expr {
 	disc := s.Union.Discriminator
 	keys := make([]string, 0, len(disc.Mapping))
 	for k := range disc.Mapping {
@@ -71,28 +58,28 @@ func discriminatedUnionValidators(s ir.SchemaIR) ast.Expr {
 	)
 }
 
-// dynamicUnionElement normalizes a collection element type that is a union:
+// DynamicUnionElement normalizes a collection element type that is a union:
 // unions render as Dynamic elements because a typed collection element cannot
 // switch on alternatives (nested unions stay Dynamic by design, D2).
-func dynamicUnionElement(elem ir.SchemaIR) ir.SchemaIR {
+func DynamicUnionElement(elem ir.SchemaIR) ir.SchemaIR {
 	if elem.Union != nil {
 		return ir.SchemaIR{Type: ir.TypeDynamic}
 	}
 	return elem
 }
 
-// objectSchemaHasDiscriminatedUnion reports whether any attribute or nested
+// ObjectSchemaHasDiscriminatedUnion reports whether any attribute or nested
 // block attribute in the schema is a discriminated union that renders as a
 // SingleNestedAttribute with a DiscriminatorValidator, so the generated file
 // imports the schema/validator package exactly when it is referenced.
-func objectSchemaHasDiscriminatedUnion(s ir.ObjectSchemaIR) bool {
+func ObjectSchemaHasDiscriminatedUnion(s ir.ObjectSchemaIR) bool {
 	for _, attr := range s.Attributes {
 		if schemaHasDiscriminatedUnion(attr.Schema) {
 			return true
 		}
 	}
 	for _, block := range s.Blocks {
-		if objectSchemaHasDiscriminatedUnion(block.Schema) {
+		if ObjectSchemaHasDiscriminatedUnion(block.Schema) {
 			return true
 		}
 	}
@@ -103,7 +90,7 @@ func objectSchemaHasDiscriminatedUnion(s ir.ObjectSchemaIR) bool {
 // attribute it contains) is a discriminated union renderable via the
 // dynamic-union strategy.
 func schemaHasDiscriminatedUnion(s ir.SchemaIR) bool {
-	if mergedDiscriminatedUnion(s) != nil {
+	if MergedDiscriminatedUnion(s) != nil {
 		return true
 	}
 	if s.Collection != nil {

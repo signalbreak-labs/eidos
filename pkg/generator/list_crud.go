@@ -8,6 +8,7 @@ import (
 	"unicode"
 
 	"github.com/signalbreak-labs/eidos/pkg/generator/astgen"
+	"github.com/signalbreak-labs/eidos/pkg/generator/internal/naming"
 	"github.com/signalbreak-labs/eidos/pkg/ir"
 )
 
@@ -559,7 +560,7 @@ func listItemResultStmts(lr ir.ListResourceIR, summary string) []ast.Stmt {
 // identityValueVar returns the local variable name holding an identity
 // attribute's probed JSON value, e.g. "petIdValue" for the pet_id attribute.
 func identityValueVar(attrName string) string {
-	v := goFieldName(attrName) + "Value"
+	v := naming.GoFieldName(attrName) + "Value"
 	if v == "" {
 		return "identityValue"
 	}

@@ -6,6 +6,7 @@ import (
 	"go/token"
 
 	"github.com/signalbreak-labs/eidos/pkg/generator/astgen"
+	"github.com/signalbreak-labs/eidos/pkg/generator/internal/naming"
 	"github.com/signalbreak-labs/eidos/pkg/ir"
 	"github.com/signalbreak-labs/eidos/pkg/transformer"
 )
@@ -369,7 +370,7 @@ func authFieldName(byName map[string]ir.AttributeIR, attr string) (string, bool)
 	if !ok {
 		return "", false
 	}
-	return goFieldName(a.Name), true
+	return naming.GoFieldName(a.Name), true
 }
 
 // configField returns the config.<field> selector expression.

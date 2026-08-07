@@ -6,6 +6,8 @@ import (
 	"testing"
 	"unicode"
 
+	"github.com/signalbreak-labs/eidos/pkg/generator/internal/naming"
+	"github.com/signalbreak-labs/eidos/pkg/generator/internal/schema"
 	"github.com/signalbreak-labs/eidos/pkg/ir"
 )
 
@@ -115,8 +117,8 @@ func TestModelJSONTag(t *testing.T) {
 		{attr: ir.AttributeIR{Name: `a"b`, Required: false}, want: `a_b,omitempty`},
 	}
 	for _, tc := range cases {
-		if got := modelJSONTag(tc.attr); got != tc.want {
-			t.Errorf("modelJSONTag(%+v) = %q, want %q", tc.attr, got, tc.want)
+		if got := schema.ModelJSONTag(tc.attr); got != tc.want {
+			t.Errorf("schema.ModelJSONTag(%+v) = %q, want %q", tc.attr, got, tc.want)
 		}
 	}
 }
@@ -146,18 +148,18 @@ func TestGoFieldName_ValidIdentifiers(t *testing.T) {
 		{"URLPath", "URLPath"}, // acronym + word kept whole
 	}
 	for _, tc := range cases {
-		got := goFieldName(tc.in)
+		got := naming.GoFieldName(tc.in)
 		if got != tc.want {
-			t.Errorf("goFieldName(%q) = %q, want %q", tc.in, got, tc.want)
+			t.Errorf("naming.GoFieldName(%q) = %q, want %q", tc.in, got, tc.want)
 		}
 		// Every result must be a valid, exportable Go identifier.
 		if got == "" {
-			t.Errorf("goFieldName(%q) returned empty", tc.in)
+			t.Errorf("naming.GoFieldName(%q) returned empty", tc.in)
 			continue
 		}
 		r := []rune(got)
 		if !unicode.IsUpper(r[0]) {
-			t.Errorf("goFieldName(%q) = %q must start with an uppercase letter", tc.in, got)
+			t.Errorf("naming.GoFieldName(%q) = %q must start with an uppercase letter", tc.in, got)
 		}
 	}
 }
@@ -173,7 +175,7 @@ func TestResolveFieldNames_Collisions(t *testing.T) {
 		{Name: "fooBar", Schema: ir.SchemaIR{Type: ir.TypeString}},
 		{Name: "id", Schema: ir.SchemaIR{Type: ir.TypeString}},
 	}
-	got := resolveFieldNames(attrs)
+	got := schema.ResolveFieldNames(attrs)
 
 	// First occurrence keeps the base name; the collision gets a numeric suffix.
 	if got["foo_bar"] != "FooBar" {
