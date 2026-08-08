@@ -44,7 +44,7 @@ jobs:
       # load the config). v2.12.2 is built with go 1.26. Bump this pin when
       # go.mod's `go` directive advances past the linter's build Go.
       - name: Run golangci-lint
-        uses: golangci/golangci-lint-action@9fae48acfc02a90574d7c304a1758ef9895495fa # v7
+        uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9
         with:
           version: v2.12.2
           args: ./...
@@ -108,7 +108,7 @@ jobs:
       # Tokenless upload works for public repos; never let coverage reporting
       # gate the build.
       - name: Upload to Codecov
-        uses: codecov/codecov-action@0fb7174895f61a3b6b78fc075e0cd60383518dac # v5
+        uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v7
         with:
           files: ./coverage.out
           fail_ci_if_error: false
