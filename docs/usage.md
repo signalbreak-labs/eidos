@@ -23,7 +23,14 @@ For design and architecture details, see [`PROJECT_DESIGN.md`](PROJECT_DESIGN.md
 
 ## Installation
 
-Eidos is built with Go. From the repository root:
+Install via Homebrew (recommended):
+
+```bash
+brew tap signalbreak-labs/tap
+brew install eidos
+```
+
+Or build from source. From the repository root:
 
 ```bash
 go build -o eidos ./cmd/eidos

@@ -3,8 +3,10 @@ name: Release Please
 # Maintains a running release PR (`release-please-release` branch) that
 # aggregates Conventional Commits and proposes the next version plus a
 # generated CHANGELOG.md. On merge of the release PR, release-please creates a
-# v* tag and a GitHub Release, and this workflow then runs GoReleaser to attach
-# cross-compiled binaries to the Release.
+# v* tag and a GitHub Release. The tag push is authored by the
+# signalbreak-release-bot GitHub App, so it re-triggers release.yml (app-token
+# pushes are not suppressed like GITHUB_TOKEN pushes), which runs GoReleaser to
+# attach cross-compiled binaries and publish the Homebrew formula.
 #
 # This workflow replaces auto-release.yml (the in-repo Conventional-Commits
 # detector and hand-rolled tag pusher). release.yml remains for human-pushed
@@ -18,13 +20,6 @@ name: Release Please
 #                                    -> no release (skipped)
 # The highest bump across the new commits wins. This is the same mapping the
 # retired auto-release.yml documented; release-please enforces it directly.
-#
-# GoReleaser runs HERE rather than in a separate tag-triggered workflow because
-# the tag release-please pushes with GITHUB_TOKEN does not re-trigger other
-# workflows (GitHub suppresses GITHUB_TOKEN-triggered runs). If a PAT
-# (`RELEASE_PLEASE_TOKEN`) is configured, release-please could instead push the
-# tag with the PAT and release.yml would serve both paths — see the `token`
-# input below.
 on:
   push:
     branches:
@@ -49,6 +44,18 @@ jobs:
         with:
           fetch-depth: 0
 
+      # Mint a token for the signalbreak-release-bot GitHub App. Unlike
+      # GITHUB_TOKEN, app-token PRs trigger pull_request workflows (so CI runs
+      # on the release PR) and the tag push re-triggers release.yml. The token
+      # is scoped to the repos the app is installed on.
+      - name: Get GitHub App token
+        id: app-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ vars.RELEASE_PLEASE_APP_ID }}
+          private-key: ${{ secrets.RELEASE_PLEASE_APP_PRIVATE_KEY }}
+          repositories: "eidos,homebrew-tap"
+
       # Versioning + CHANGELOG ownership. `release-type: go` derives the module
       # version from go.mod; the v* tag prefix is the default for `go`. Config
       # and version history live in release-please-config.json and
@@ -57,37 +64,9 @@ jobs:
         id: release
         uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7 # v5.0.0
         with:
-          # Use a PAT (e.g. `RELEASE_PLEASE_TOKEN`) instead of GITHUB_TOKEN if
-          # you want the tag pushed here to re-trigger release.yml's tag-push
-          # event; with GITHUB_TOKEN that event is suppressed, which is why
-          # GoReleaser runs in this workflow instead.
-          token: ${{ secrets.GITHUB_TOKEN }}
+          token: ${{ steps.app-token.outputs.token }}
           # ONE-TIME BOOTSTRAP: force the first release to be exactly v0.1.0
           # (the manifest baseline has no tag yet, so release-please would
           # otherwise bump to 0.2.0 on a feat). REMOVE THIS LINE after the
           # v0.1.0 release lands so subsequent releases bump normally.
           release-as: 0.1.0
-
-      - name: Checkout (release commit)
-        if: ${{ steps.release.outputs.releases_created }}
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-        with:
-          ref: ${{ steps.release.outputs.tag_name }}
-          fetch-depth: 0
-
-      - name: Set up Go
-        if: ${{ steps.release.outputs.releases_created }}
-        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
-        with:
-          go-version-file: go.mod
-          cache: true
-
-      # Pin the GoReleaser version so release artifacts are reproducible.
-      - name: Run GoReleaser
-        if: ${{ steps.release.outputs.releases_created }}
-        uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7
-        with:
-          version: v2.17.0
-          args: release --clean
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

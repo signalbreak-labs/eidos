@@ -107,8 +107,10 @@ These principles (from `PROJECT_DESIGN.md` §3) are binding on the generator:
 
 - Release artifacts are produced by GoReleaser (`.goreleaser.yml`). Versioning
   and changelog generation are handled by the `release-please` GitHub Actions
-  workflow (Google's release-please); `release.yml` handles human-pushed `v*`
-  tags (manual/explicit releases).
+  workflow (Google's release-please), which runs as the `signalbreak-release-bot`
+  GitHub App so its PRs trigger CI and its tag pushes re-trigger `release.yml`.
+  `release.yml` handles all `v*` tag pushes (human or bot) and, via GoReleaser's
+  `brews:` block, publishes the Homebrew formula to `signalbreak-labs/tap`.
 - Generated providers ship with a registry manifest, GoReleaser config, and
   release workflow as scaffolding. This project does **not** publish to the real
   Terraform Registry.

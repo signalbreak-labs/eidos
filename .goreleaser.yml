@@ -65,6 +65,27 @@ release:
   # injected main.version. Homebrew formulas reference the v-prefixed tag.
   name_template: "{{ .ProjectName }} {{ .Tag }}"
 
+# Publish a Homebrew formula to the org tap (signalbreak-labs/homebrew-tap →
+# `brew tap signalbreak-labs/tap`). The formula is generated on release; the
+# push is authorized by the signalbreak-release-bot app token passed as
+# HOMEBREW_TAP_GITHUB_TOKEN from release.yml. `brews` is deprecated-but-
+# functional in v2 (homebrew_casks is Pro-only); it is removed in v3.
+brews:
+  - name: eidos
+    repository:
+      owner: signalbreak-labs
+      name: homebrew-tap
+      token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
+    directory: Formula
+    homepage: "https://github.com/signalbreak-labs/eidos"
+    description: "Generate Terraform providers from OpenAPI 2.0/3.0/3.1 specs"
+    license: "Apache-2.0"
+    install: |
+      bin.install "eidos"
+    commit_author:
+      name: "signalbreak-release-bot[bot]"
+      email: "signalbreak-release-bot@users.noreply.github.com"
+
 changelog:
   use: github
   sort: asc

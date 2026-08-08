@@ -1,0 +1,41 @@
+name: Dependabot auto-merge
+
+# Auto-merges green dependabot PRs so routine dependency updates land without a
+# human. Uses the signalbreak-release-bot app token (not GITHUB_TOKEN) so the
+# merge is authorized by an identity on the main ruleset's bypass list.
+#
+# `pull_request_target` is required: dependabot PRs from a fork of a private
+# repo cannot run normal pull_request workflows with secrets. The only thing
+# this workflow does with the PR is read its metadata and enable auto-merge —
+# it never checks out or executes PR code, so the target event is safe here.
+on: pull_request_target
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  auto-merge:
+    if: github.actor == 'dependabot[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Get GitHub App token
+        id: app-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ vars.RELEASE_PLEASE_APP_ID }}
+          private-key: ${{ secrets.RELEASE_PLEASE_APP_PRIVATE_KEY }}
+
+      - name: Fetch dependabot metadata
+        id: meta
+        uses: dependabot/fetch-metadata@25dd0e34f4fe68f24cc83900b1fe3fe149efef98 # v3.1.0
+
+      # Auto-merge patch and minor updates only; drop the `update-type` gate to
+      # also auto-merge major bumps.
+      - name: Enable auto-merge
+        if: ${{ steps.meta.outputs.update-type == 'version-update:semver-patch' || steps.meta.outputs.update-type == 'version-update:semver-minor' }}
+        uses: peter-evans/enable-pull-request-automerge@a660677d5469627102a1c1e11409dd063606628d # v3.0.0
+        with:
+          token: ${{ steps.app-token.outputs.token }}
+          pull-request-number: ${{ github.event.pull_request.number }}
+          merge-method: squash

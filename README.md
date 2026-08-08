@@ -104,7 +104,11 @@ Files that would be written (180):
 ## Quick start
 
 ```bash
-# Install (latest, or pin a release: @v0.2.5)
+# Install via Homebrew (recommended)
+brew tap signalbreak-labs/tap
+brew install eidos
+
+# Or install with Go (latest, or pin a release: @v0.2.5)
 go install github.com/signalbreak-labs/eidos/cmd/eidos@latest
 
 # Generate a starter build config
@@ -145,5 +149,6 @@ Toolchain, lint, formatting, and testing conventions live in
 `toolchain go1.26.5` (CI reads the version from `go.mod`), golangci-lint v2
 pinned to Go 1.26, and `goimports` with local prefix
 `github.com/signalbreak-labs/eidos`. Releases are versioned with release-please and
-shipped as cross-compiled GitHub Release binaries by GoReleaser; `v*` tags
-follow Semantic Versioning so the tool is installable via Homebrew.
+shipped as cross-compiled GitHub Release binaries by GoReleaser, which also
+publishes the Homebrew formula to `signalbreak-labs/tap`; `v*` tags follow
+Semantic Versioning.
