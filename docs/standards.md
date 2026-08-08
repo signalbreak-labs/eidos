@@ -23,17 +23,19 @@ For using the CLI, see [`docs/usage.md`](usage.md).
 ## Lint
 
 - Config: `.golangci.yml`, version `"2"`. Requires golangci-lint v2.x; an older
-  binary will fail to parse the config. CI uses `golangci-lint-action@v7` with
+  binary will fail to parse the config. CI uses `golangci-lint-action@v9` with
   `version: v2.12.2` (built with Go 1.26; versions built with Go < the `go`
   directive in `go.mod`, e.g. v2.2.1, cannot load the config).
 - Run: `golangci-lint run ./...`. Note `golangci-lint` is not assumed to be
   installed in local environments, so the lint suite is effectively enforced
   in CI.
 - Enabled linters include `revive`, `gocritic`, `gosec`, `errorlint`,
-  `gocognit`, `nolintlint`, `errcheck` (with `check-type-assertions: true` and
-  `check-blank: true`), `predeclared`, `unparam`, `usestdlibvars`, `copyloopvar`,
-  `makezero`, `prealloc`, `bodyclose`, `noctx`, `misspell` (locale US), and
-  `whitespace`.
+  `gocognit`, `nolintlint`, `errcheck` (via the default standard set, with
+  `check-type-assertions: true` and `check-blank: true`), `predeclared`,
+  `unparam`, `usestdlibvars`, `copyloopvar`, `makezero`, `prealloc`, `bodyclose`,
+  `noctx`, `misspell` (locale US), `whitespace`, `errname`, `reassign`,
+  `unconvert`, `gocheckcompilerdirectives`, `gochecksumtype`, and
+  `goprintffuncname`.
 - `//nolint` directives are governed by `nolintlint`: `allow-unused: false`,
   `require-explanation: true`, `require-specific: true`. Every `//nolint` must
   name the specific linter and carry a reason comment. Review the per-path

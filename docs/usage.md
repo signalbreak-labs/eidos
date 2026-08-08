@@ -55,9 +55,11 @@ Usage:
   eidos [command]
 
 Available Commands:
+  api             Start the Eidos HTTP API server
+  completion      Generate the autocompletion script for the specified shell
   generate        Generate a Terraform provider from an OpenAPI spec
   generate-config Generate a starter generator.yaml from an OpenAPI spec
-  api             Start the Eidos HTTP API server
+  help            Help about any command
   mcp             Start the Eidos MCP server
 
 Flags:
@@ -131,6 +133,16 @@ eidos generate-config --spec ./api.yaml --output ./generator.yaml --provider-nam
 | `--output` | `generator.yaml` | no | Path to write the starter config. |
 | `--provider-name` | `generated` | no | Provider short name used in the config. |
 | `--force` | `false` | no | Overwrite the output file if it already exists. |
+| `--spec-allow-http` | `false` | no | Permit `http://` spec URLs (https is the default for remote specs). |
+| `--spec-auth-scheme` | *(none)* | no | Authenticate a remote spec fetch: `bearer`, `basic`, `apiKey`, or `oauth2-client-credentials`. Credential *values* come from environment variables (see below). |
+| `--spec-token-env` | *(none)* | no | Environment variable holding the bearer token for `--spec-auth-scheme bearer`. |
+| `--spec-username-env` | *(none)* | no | Environment variable holding the username for `--spec-auth-scheme basic`. |
+| `--spec-password-env` | *(none)* | no | Environment variable holding the password for `--spec-auth-scheme basic`. |
+| `--spec-key-env` | *(none)* | no | Environment variable holding the API key for `--spec-auth-scheme apiKey`. |
+| `--spec-header-name` | *(none)* | no | Header name the `apiKey` scheme sends the key in. |
+| `--spec-token-url` | *(none)* | no | OAuth2 token endpoint for `--spec-auth-scheme oauth2-client-credentials`. |
+| `--spec-client-id-env` | *(none)* | no | Environment variable holding the OAuth2 client ID. |
+| `--spec-client-secret-env` | *(none)* | no | Environment variable holding the OAuth2 client secret. |
 
 The command fails with a clear message if the output file exists and `--force`
 is not set.
@@ -159,7 +171,7 @@ Accepts an OpenAPI document (JSON or YAML) with an optional top-level
 |-------|---------|
 | `valid` | `true` if no error-level diagnostics were produced. |
 | `diagnostics` | Parse, validation, and generation messages. |
-| `detected` | Counts of paths, schemas, operations, resources, data sources, actions, ephemeral resources, list resources, functions, security schemes, write/read-only/nullable attributes, pagination style, importable resources, and state upgraders. |
+| `detected` | Counts of paths, schemas, operations, resources, data sources, actions, ephemeral resources, list resources, functions, security schemes, schemas using `oneOf`/`allOf`/`anyOf`, write/read-only/nullable attributes, pagination style, importable resources, and state upgraders, plus `generate_terraform_tests`, `logging_enabled`, and `polymorphism_strategy`. |
 | `ir_preview` | A preview of the `ProviderIR` that would drive generation. |
 | `suggested_config` | A starter `generator.yaml` derived from the spec. |
 
@@ -221,8 +233,9 @@ Generate a starter `generator.yaml` from a spec.
 | `skip_operations` | `string[]` | no | Operation IDs or name patterns to omit from generated resources and data sources. |
 | `include_operations` | `string[]` | no | Operation IDs or name patterns that must be present for a resource or data source to be generated; when empty, all operations are candidates. |
 
-Returns an object with `config` (the generated `generator.yaml` contents) and
-`diagnostics` (parse and generation messages).
+Returns `valid` (`false` when the spec produced error-level diagnostics, in
+which case `config` is empty), `config` (the generated `generator.yaml`
+contents), and `diagnostics` (parse and generation messages).
 
 ### `eidos/inspect`
 
@@ -313,6 +326,10 @@ generation:             GenerationConfig
 spec:                   SpecConfig
 ```
 
+`generate_terraform_tests` is honored via the `eidos generate
+--generate-terraform-tests` flag. The config key is surfaced in the API
+`detected` summary but does not yet control generation output.
+
 ### `provider`
 
 | Field | Type | Description |
@@ -325,7 +342,7 @@ spec:                   SpecConfig
 | `contact_email` | string | Contact email. |
 | `license` | string | License identifier. |
 | `repository` | string | Provider repository URL. |
-| `protocol_version` | int | `5` or `6`. Defaults to `6` when generated. |
+| `protocol_version` | int | `5` or `6`. Validated when set and re-emitted into starter configs; the generated provider targets protocol 6 (changeable at runtime via the generated binary's `--protocol-version` flag), so this key does not currently change generated output. |
 
 ### `servers`
 
@@ -360,6 +377,7 @@ resource_overrides:
     sensitive_attributes: [api_secret]
     write_only_attributes:
       - name: password
+        path: password
         sensitive: true
     skip: false
     generate_datasource: true
@@ -408,6 +426,25 @@ an override manage an entity whose create path does not match its read/delete
 path — for example MyCloud dashboards (create on `POST /dashboards/db`, read/
 delete on `/dashboards/uid/{uid}`). Without them, a promoted resource would have
 its create wired but no read/delete (staying scaffolded).
+
+Each `write_only_attributes` entry:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `name` | string | The attribute's leaf name (snake_cased by the consumer). |
+| `path` | string | Dotted location within the resource schema (e.g. `owner.password` for a nested attribute); for a top-level attribute `path` equals `name`. |
+| `sensitive` | bool | Mark the attribute sensitive in the generated schema. |
+| `description` | string | Override the attribute's description. |
+
+Each `state_upgrades` entry supports, in addition to `from` and `renames`:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `block_renames` | map | Prior → current block name renames. |
+| `added_attributes` | []string | Attributes added in the current schema (null-initialized during upgrade). |
+| `added_blocks` | []string | Blocks added in the current schema. |
+| `removed_attributes` | []string | Prior attributes dropped from the current schema (kept in the prior schema so historical state decodes, then dropped during upgrade). |
+| `removed_blocks` | []string | Prior blocks dropped from the current schema. |
 
 ### `datasource_overrides`
 
@@ -672,6 +709,11 @@ resource sharing the original CRUD mapping; declare a `resource_name` or
 `oneOf`/`anyOf` compositions (inside object properties or collection
 elements) render as Dynamic attributes and emit a warning.
 
+Each `oneOf` entry may declare a `discriminator` with `property_name` (the
+discriminator property in the payload) and `mapping` (discriminator value →
+variant schema name). Each `variant` may carry its own `discriminator` plus
+`resource_name`/`datasource_name` overrides.
+
 ### `generation`
 
 ```yaml
@@ -693,8 +735,8 @@ generation:
 | `ephemeral_resources` | ResourceGenerationConfig | Same for ephemeral resources. |
 | `list_resources` | ResourceGenerationConfig | Same for list resources. |
 | `functions` | ResourceGenerationConfig | Same for functions. |
-| `skip_tests` | bool | Skip generating test files. |
-| `skip_docs` | bool | Skip generating documentation. |
+| `skip_tests` | bool | Skip generating test files. *(Currently has no effect on generation output.)* |
+| `skip_docs` | bool | Skip generating documentation. *(Currently has no effect on generation output.)* |
 
 Each `ResourceGenerationConfig`:
 
@@ -702,8 +744,8 @@ Each `ResourceGenerationConfig`:
 |-------|------|-------------|
 | `include` | []string | Allow-list of construct name patterns; when non-empty, only matching constructs are retained. |
 | `exclude` | []string | Deny-list of construct name patterns; matching constructs are dropped regardless of the allow-list. |
-| `package` | string | Default sub-package for included constructs. |
-| `packages` | []PackageRuleConfig | Per-pattern package overrides. |
+| `package` | string | Default sub-package for included constructs. *(Currently has no effect on generation output.)* |
+| `packages` | []PackageRuleConfig | Per-pattern package overrides. *(Currently has no effect on generation output.)* |
 
 ### `spec`
 
@@ -718,7 +760,7 @@ spec:
 | Field | Type | Description |
 |-------|------|-------------|
 | `path` | string | Path or http(s) URL of the OpenAPI spec. |
-| `format` | string | Spec format hint (`yaml` or `json`). |
+| `format` | string | Detected OpenAPI version (`openapi2`, `openapi3`, or `openapi31`) recorded in starter configs; not consumed by generation. |
 | `auth` | SpecAuthConfig | Authentication for a remote spec fetch (same fields as the `--spec-auth-*` CLI flags). |
 
 ## Generated provider layout
@@ -735,7 +777,7 @@ structure.
 ├── .github/workflows/release.yml
 ├── terraform-registry-manifest.json
 ├── README.md
-├── generator.yaml                  # when config collection is enabled
+├── generator.yaml                  # written in write mode
 ├── internal/
 │   ├── provider/
 │   │   ├── provider.go             # provider schema and registration

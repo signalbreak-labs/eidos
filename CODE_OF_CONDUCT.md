@@ -51,8 +51,11 @@ an individual is officially representing the community in public spaces.
 ## Enforcement
 
 Instances of abusive, harassing, or otherwise unacceptable behavior may be
-reported to the community leaders responsible for enforcement. All complaints
-will be reviewed and investigated promptly and fairly.
+reported to the community leaders responsible for enforcement via a
+[GitHub issue](https://github.com/signalbreak-labs/eidos/issues). Note that
+issues are public; reporters who need to stay anonymous should use a
+throwaway account. All complaints will be reviewed and investigated promptly
+and fairly.
 
 ## Attribution
 

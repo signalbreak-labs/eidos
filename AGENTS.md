@@ -153,7 +153,7 @@ See `docs/PROJECT_DESIGN.md` for the full architecture and IR design.
 
 - `go.mod`: `go 1.26.0`, `toolchain go1.26.5`. CI uses `go-version-file: go.mod`.
 - `.golangci.yml` is a v2 config, lint Go version pinned to `1.26`. CI uses
-  `golangci-lint-action@v7` (`v2.12.2`). An older binary will fail to parse it
+  `golangci-lint-action@v9` (`v2.12.2`). An older binary will fail to parse it
   (and versions built with Go < the `go` directive in `go.mod`, e.g. v2.2.1,
   cannot load the config).
 - Enabled linters include `revive`, `gocritic`, `gosec`, `errorlint`, `gocognit`,

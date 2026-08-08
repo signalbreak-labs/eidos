@@ -55,9 +55,14 @@
    - 9.2 [Protocol Version 5 (Fallback)](#92-protocol-version-5-fallback)
    - 9.3 [gRPC Server Lifecycle](#93-grpc-server-lifecycle)
    - 9.4 [DynamicValue Serialization](#94-dynamicvalue-serialization)
+   - 9.5 [Dedicated OpenAPI Parser](#95-dedicated-openapi-parser)
 10. [OpenAPI-to-Terraform Type Mapping](#10-openapi-to-terraform-type-mapping)
 11. [Security Scheme Handling](#11-security-scheme-handling)
 12. [Polymorphism & Complex Schemas](#12-polymorphism--complex-schemas)
+   - 12.1 [allOf (Composition)](#121-allof-composition)
+   - 12.2 [oneOf (Exclusive Union)](#122-oneof-exclusive-union)
+   - 12.3 [anyOf (Inclusive Union)](#123-anyof-inclusive-union)
+   - 12.4 [Circular References](#124-circular-references)
 13. [Error Handling & Diagnostics](#13-error-handling--diagnostics)
 14. [Configuration & Overrides System](#14-configuration--overrides-system)
 15. [Output Directory Structure](#15-output-directory-structure)
@@ -112,7 +117,7 @@ Eidos is under active development. The architecture, intermediate representation
 
 | Capability | Status | Notes |
 |------------|--------|-------|
-| OpenAPI 2.0 / 3.0.x / 3.1 parsing | Implemented | All three versions are parsed. Scalar type-mismatch diagnostics are emitted for OpenAPI 3.0.x/3.1.x and for Swagger 2.0 scalar fields at every depth (response `$ref`/description, `collectionFormat`, `externalDocs` description/URL, `additionalProperties` boolean, and the schema string/bool keywords). Any-value fields (`default`/`example`/`const`/`exclusiveMaximum`/`exclusiveMinimum`) are preserved via `nodeToNative` without warning, matching the 3.x converter and avoiding false positives on legitimate array/object values. Unquoted `openapi`/`swagger` version values are preserved as strings by the lexer. |
+| OpenAPI 2.0 / 3.0.x / 3.1 parsing | Implemented | All three versions are parsed. Scalar type-mismatch diagnostics are emitted for OpenAPI 3.0.x/3.1.x and for Swagger 2.0 scalar fields at every depth (response `$ref`/description, `collectionFormat`, `externalDocs` description/URL, `additionalProperties` boolean, and the schema string/bool keywords). Any-value fields (`default`/`example`/`const`/`exclusiveMaximum`/`exclusiveMinimum`) are preserved via `nodeToNative` without warning, avoiding false positives on legitimate array/object values. Unquoted `openapi`/`swagger` version values are preserved as strings by the lexer. |
 | `$ref` resolution (local) | Implemented | Only local (same-document) JSON Pointer `$ref`s resolve. File and remote URL refs are rejected with a fail-loud error diagnostic rather than fetched (the remote-fetch `RefResolver` was removed; fetching a remote *spec* is handled separately by `cmd/eidos/remote_spec.go`, which never resolves `$ref`s inside it). |
 | IR normalization and transformation | Mostly implemented | Type mapping, CRUD inference, overrides, security mapping, and validator inference are functional. |
 | `eidos generate --dry-run` | Implemented | Produces a file list and summary from the real parsed `ProviderIR`. |
@@ -131,7 +136,7 @@ Eidos is under active development. The architecture, intermediate representation
 | Terraform Registry publishing artifacts | Implemented (scaffold) | Registry manifest, GoReleaser config, and release workflow are emitted. This project does **not** publish to the real Terraform Registry. |
 | Live-API end-to-end validation | Validated | Generated providers from the reference Mycloud spec build, load their schemas, and pass a full connectivity/CRUD lifecycle against a local deterministic mock server (`testfixtures/live`, `TF_ACC=1`); no external system is involved. See §18.4. |
 
-Features marked **Not implemented** or **Not functional** are explicitly accepted as current limitations and are summarized in `docs/usage.md` §Current limitations.
+Features marked **Partial**, **Mostly wired**, or **Partially scaffolded** are explicitly accepted as current limitations and are summarized in `docs/usage.md` §Current limitations.
 
 ---
 
@@ -170,7 +175,7 @@ For APIs that already publish OpenAPI specs, most of this work is mechanical and
 6. **Spec-version parity**: OpenAPI 2.0, 3.0, and 3.1 are normalized into a single IR; the generator never needs to know which version the original spec was.
 7. **Human-readable output**: generated Go code follows the conventions of `terraform-plugin-framework`, uses idiomatic naming, and includes comments derived from spec descriptions.
 8. **Fail loud, never silently**: unsupported or ambiguous OpenAPI constructs produce warnings or errors — never silently dropped.
-9. **Full Terraform surface**: Eidos targets every Terraform Plugin Framework construct — Resources, Data Sources, Actions, Ephemeral Resources, List Resources, Functions, and State Stores — not just CRUD resources.
+9. **Full Terraform surface**: Eidos targets every Terraform Plugin Framework construct it generates — Resources, Data Sources, Actions, Ephemeral Resources, List Resources, and Provider-Defined Functions — not just CRUD resources. Experimental constructs it does not generate (e.g. Terraform State Stores, §23.2) are tracked as limitations rather than targets.
 
 ---
 
@@ -276,14 +281,6 @@ OpenAPI 3.0 introduced significant structural changes over 2.0:
 | `deprecated: true` | Deprecation markers | Attribute deprecation messages |
 | `oneOf` / `anyOf` / `allOf` | Schema composition | See [Section 12](#12-polymorphism--complex-schemas) |
 | `discriminator` | Polymorphic type switching | See [Section 12](#12-polymorphism--complex-schemas) |
-| `not` / `const` / `if`-`then`-`else` | JSON Schema 2020-12 keywords (3.1) | See [Section 5.4 Feature Mapping Matrix](#54-feature-mapping-matrix) |
-| `dependentRequired` / `dependentSchemas` | Conditional constraints (3.1) | See [Section 5.4 Feature Mapping Matrix](#54-feature-mapping-matrix) |
-| `patternProperties` / `propertyNames` | Pattern-based property constraints (3.1) | See [Section 5.4 Feature Mapping Matrix](#54-feature-mapping-matrix) |
-| `minProperties` / `maxProperties` | Object property count limits (3.1) | See [Section 5.4 Feature Mapping Matrix](#54-feature-mapping-matrix) |
-| `exclusiveMinimum` / `exclusiveMaximum` | Strict numeric bounds (3.1) | See [Section 5.4 Feature Mapping Matrix](#54-feature-mapping-matrix) |
-| `multipleOf` | Numeric multiple constraint (3.1) | See [Section 5.4 Feature Mapping Matrix](#54-feature-mapping-matrix) |
-| `unevaluatedProperties` | Controls unevaluated properties (3.1) | See [Section 5.4 Feature Mapping Matrix](#54-feature-mapping-matrix) |
-| `webhooks` (3.1 only) | Event-driven API descriptions | Parsed but not mapped to a Terraform construct |
 
 ### 5.3 OpenAPI 3.1.x
 
@@ -1118,7 +1115,7 @@ The validation endpoint is intentionally designed to exercise every feature defi
 | `writeOnly` / `readOnly` / `nullable` | Flags detected attributes in `ir_preview` |
 | Security schemes | Lists detected schemes and mapped provider config attributes |
 | Resources, data sources, actions, ephemeral resources, list resources, functions | Counts and names each generated construct |
-| Pagination | Reports the pagination style from `generator.yaml` (`pagination_style`) |
+| Pagination | Reports the pagination style from `generator.yaml` (`pagination.style`) |
 | Import support | Reports importable resources and import formats |
 | State upgraders | Reports version history if configured |
 | Provider-defined functions | Lists detected/declared functions |
@@ -1217,7 +1214,7 @@ eidos generate-config \
 
 The CLI does not emit explanatory comments; the MCP `eidos/generate-config` tool accepts an `include_comments` parameter for that.
 
-**Example generated config** (trimmed from the reference `test/specs/mycloud.yaml`; the `provider.name`/`display_name` and `auth.env_var` values assume `--provider-name mycloud` — the default provider name is `generated`):
+**Example generated config** (trimmed from the reference `test/specs/mycloud.yaml`; the `provider.name`/`display_name` and `auth.env_var` values assume `--provider-name mycloud` — the default for `eidos generate-config` is `generated`, while `eidos generate --generate-config` defaults to the spec title):
 
 ```yaml
 provider:
@@ -2099,11 +2096,15 @@ Terraform transmits resource state between CLI and provider as `DynamicValue` �
 
 ---
 
-## 9.5 Dedicated OpenAPI Parser
+### 9.5 Dedicated OpenAPI Parser
 
-Eidos does **not** depend on third-party OpenAPI parsing libraries such as `libopenapi` or `kin-openapi`. Instead, it ships a purpose-built parser inside `pkg/parser/` that is tailored to the needs of Terraform provider generation.
+§7.2 introduces the parser's role in the pipeline; this section details the
+design. Eidos does **not** depend on third-party OpenAPI parsing libraries such
+as `libopenapi` or `kin-openapi`. Instead, it ships a purpose-built parser
+inside `pkg/parser/` that is tailored to the needs of Terraform provider
+generation.
 
-### Why a dedicated parser?
+#### Why a dedicated parser?
 
 | Concern | Dedicated parser approach |
 |---------|---------------------------|
@@ -2113,7 +2114,7 @@ Eidos does **not** depend on third-party OpenAPI parsing libraries such as `libo
 | Feature control | Add support for new JSON Schema / OpenAPI keywords on Eidos's own schedule |
 | Performance | Streaming YAML/JSON decode with optional memory budget and recursion limits |
 
-### Parser structure
+#### Parser structure
 
 ```text
 pkg/parser/
@@ -2131,7 +2132,7 @@ pkg/parser/
 └── v31.go              # OpenAPI 3.1.x → generic spec model
 ```
 
-### Parsing pipeline
+#### Parsing pipeline
 
 1. **Detect version** from `swagger` (2.0) or `openapi` (3.0.x / 3.1.x).
 2. **Decode raw bytes** into a thin, typed YAML/JSON AST.
@@ -2139,21 +2140,21 @@ pkg/parser/
 4. **Generic resolution** dereferences local `$ref` values, detects circular schema refs (marking participants `Opaque`), and validates structural correctness. `allOf` merging and polymorphism resolution happen later in the transformer, not in the parser.
 5. **Return normalized model** to the transformer.
 
-### Supported inputs
+#### Supported inputs
 
 | Format | Detection |
 |--------|-----------|
 | YAML | File extension `.yaml`/`.yml` or leading `---` |
 | JSON | File extension `.json` or leading `{`/`[` |
 
-### `$ref` resolution
+#### `$ref` resolution
 
 - Local JSON Pointers (`#/components/schemas/Pet`) are resolved against the in-memory spec.
 - External file references (`./models.yaml#/Pet`) are rejected with a fail-loud error diagnostic; only same-document refs resolve.
 - Remote references (`https://example.com/spec.yaml#/Pet`) are rejected with a fail-loud error diagnostic rather than fetched.
 - Circular references are detected and reported as warnings; the parser marks the participating schemas `Opaque` so downstream phases treat them as opaque boundaries instead of expanding them.
 
-### Validation
+#### Validation
 
 The parser reports diagnostics at the source location rather than failing silently:
 
@@ -2165,14 +2166,15 @@ The parser reports diagnostics at the source location rather than failing silent
 | Unsupported keyword | Warning describing limitation |
 | Circular `$ref` | Warning; field marked opaque |
 
-### Technology stack update
+#### Technology stack update
 
-Because the parser is dedicated, the following items are removed from the technology stack and architecture diagram:
-
-- `github.com/pb33f/libopenapi`
-- `github.com/getkin/kin-openapi`
-
-These are replaced by the in-house parser packages. Parser unit tests use embedded fixtures in `pkg/parser/testdata/`; the reference specs in `test/specs/` drive the end-to-end golden tests in `pkg/generator/golden_test.go`, which assert on the resulting IR and generated file list.
+Because the parser is dedicated, Eidos has no third-party OpenAPI parsing
+dependency: `github.com/pb33f/libopenapi` and `github.com/getkin/kin-openapi`
+are not part of the technology stack (see §16). They are replaced by the
+in-house parser packages. Parser unit tests use embedded fixtures in
+`pkg/parser/testdata/`; the reference specs in `test/specs/` drive the
+end-to-end golden tests in `pkg/generator/golden_test.go`, which assert on the
+resulting IR and generated file list.
 
 ---
 
@@ -2275,7 +2277,13 @@ This logging is **not** a replacement for `terraform-plugin-log`; it is an addit
 
 ## 12. Polymorphism & Complex Schemas
 
-### `allOf` (Composition)
+OpenAPI models polymorphic types with `allOf` (composition), `oneOf`
+(exclusive union), and `anyOf` (inclusive union), plus `discriminator` for
+variant switching. This section covers how each maps into the IR and generated
+Terraform attributes; the `generator.yaml` `polymorphism` settings that control
+these mappings are documented in `docs/usage.md` §`polymorphism`.
+
+### 12.1 `allOf` (Composition)
 
 All schemas in `allOf` are merged into a single flat object. Property conflicts produce an error. Required fields from any subschema are combined.
 
@@ -2290,7 +2298,7 @@ allOf:
 
 → A single flat object schema with all properties from `BasePet` plus `status`.
 
-### `oneOf` (Exclusive Union)
+### 12.2 `oneOf` (Exclusive Union)
 
 `oneOf` is the most polymorphic OpenAPI construct and has no single Terraform equivalent. Eidos supports **two generation strategies** that the user can control globally or per-schema via `generator.yaml`.
 
@@ -2363,11 +2371,11 @@ When `strategy: split_resources` is chosen, Eidos also generates:
 
 The default remains the existing dynamic-union behavior, so existing specs and configs continue to work unchanged.
 
-### `anyOf` (Inclusive Union)
+### 12.3 `anyOf` (Inclusive Union)
 
 A top-level `anyOf` reaches the IR as a union (kind `AnyOf`) and renders with the same `dynamic_union` strategy as `oneOf`: a discriminated `anyOf` renders as a `SingleNestedAttribute` with a `DiscriminatorValidator`, and an undiscriminated one renders as a `DynamicAttribute`. Nested `anyOf` (inside properties, collection elements) is fail-loud: it emits a `warnCompositionNotModeled` Warning and falls back to `DynamicAttribute` because the flat Terraform attribute model cannot represent alternatives. No `AnyOfValidator` is emitted — the `DiscriminatorValidator` (allowed-keys check) is the only validator produced for a discriminated union.
 
-### Circular References
+### 12.4 Circular References
 
 When `$ref` forms a cycle (e.g., `Person` → `children: Person[]`), the parser's
 `DetectCircularSchemaRefs` detects it and emits a `Warning` diagnostic
@@ -2376,7 +2384,7 @@ schema, forming a cycle"). Every schema whose `$ref` participates in a cycle is
 then marked `Opaque` (`markCircularSchemaRefs`). The transformer treats an
 Opaque schema as an opaque boundary: it keeps the schema's scalar fields (type,
 format, nullable, required, …) but does not descend into nested properties or
-items, so the cycle terminates instead of recursing forever (M-41). The
+items, so the cycle terminates instead of recursing forever. The
 recursive nested property is therefore dropped from the generated model rather
 than rendered as a self-referential attribute.
 
@@ -2908,8 +2916,8 @@ The generated provider is compatible with all standard Terraform meta-arguments:
 
 ### 18.4 End-to-End Integration Tests
 
-- **Real API tests** (opt-in): Against a live API with a test account, using `TF_ACC=1`.
-- **Multi-spec regression**: Run the generator against 10+ real-world OpenAPI specs and verify the generated code compiles and passes `go vet`.
+- **Acceptance tests** (opt-in): generated acceptance suites run under `TF_ACC=1` against a local deterministic mock server (`testfixtures/live`) — no external API is involved, and `TF_ACC=1` gates them out of the default `go test ./...` run.
+- **Multi-spec regression**: Run the generator against the reference corpus in `test/specs/` (14 specs) and verify the generated code compiles and passes `go vet`.
 - **Reference live e2e (Mycloud)**: the strongest validation case run so far. Eidos generates a provider from the reference Mycloud spec (`test/specs/mycloud.yaml`), injects a live connectivity test, and runs the generated acceptance suite with `TF_ACC=1` against a local deterministic mock server that validates the generated client's auth plumbing (`testfixtures/live`). No external system is involved.
 
 ### 18.5 Test Infrastructure
@@ -3147,8 +3155,8 @@ implemented; `CHANGELOG.md` [Unreleased] records the detail:
 | Ephemeral/function inference | `ephemeralFromOperation` populates config/result schemas and consumes lifecycle subpaths; `ephemeral-resources` and `provider-functions` reference specs exercise the inference end to end. |
 | Remote `--spec` URL fetching | `eidos generate`/`generate-config --spec` accept an http(s) URL with scheme allowlist, SSRF guard, size/timeout caps, and env-var-only auth. |
 | Release-please migration | Versioning and changelog generation moved to Google's release-please; GoReleaser runs in the release-please workflow. |
-| Stale documentation | `CHANGELOG.md` §Known limitations and this roadmap corrected. |
-| Live-API e2e validation | Generated providers from the reference Mycloud spec build, load their schemas, and pass a full connectivity/CRUD lifecycle against a local deterministic mock server (`testfixtures/live`, `TF_ACC=1`); no external system is involved. The G1–G21 gap register is closed (rows below). |
+| Stale documentation | The former `CHANGELOG.md` §Known limitations and this roadmap were corrected (the changelog no longer carries a limitations section; limitations now live in §23 and `docs/usage.md`). |
+| Live-API e2e validation | Generated providers from the reference Mycloud spec build, load their schemas, and pass a full connectivity/CRUD lifecycle against a local deterministic mock server (`testfixtures/live`, `TF_ACC=1`); no external system is involved. The G1–G21 gap register is closed; the rows below itemize the closures by category, with G-numbers in parentheses identifying the register items each row closes (G5, G6, G7, G13, G16, and G17 are folded into these categories rather than itemized individually). |
 | Framework-valid generated schemas (G2/G3/G4/G11/G12/G15) | Unrepresentable nested response shapes render as a top-level `DynamicAttribute` (dropped when nested inside a collection, where the framework rejects Dynamic); model files with `[]tftypes.Value` fields import `tftypes` and the mapper copies raw values instead of decoding to a primitive; the framework-rejected classes — dynamic-element collections, `DynamicAttribute` inside a `NestedAttributeObject`, invalid attribute names, and `Computed`+`Required` — are all fixed. |
 | Wire fidelity: camelCase keys + uid path substitution (G14/G18/G19/G20) | `ir.AttributeIR` carries `WireName` (the original property/param name) and model fields emit a `json:"<wireName>"` tag so snake_cased attribute names round-trip against specs that use camelCase property names; `applyJSONToModel` null-defaults attributes the response did not carry and echoed request inputs become Optional+Computed; `resolvePathSubstitution` prefers the resource's `uid` attribute for UID-shaped path placeholders (`uid`, `*_uid`); every wired Update calls `preserveStateIntoPlan` to carry known state values (e.g. optimistic-concurrency `version`) into the plan. |
 | `resource_overrides` per-CRUD promotion (G8/G9) | `generate_resource` plus explicit `create_operation`/`read_operation`/`update_operation`/`delete_operation` fields promote an action to a managed resource wired to the specified operations (MyCloud dashboards: create on `POST /dashboards/db`, read/delete on `/dashboards/uid/{uid}`); `ManagedResourceSchema` appends request-body inputs the response does not echo as Optional attributes. |

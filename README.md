@@ -32,7 +32,8 @@ by a `generator.yaml` build config, scaffolded with `eidos generate-config`:
 
 - provider name, namespace, module path, and protocol version
 - `resource_overrides`, `datasource_overrides`, `action_overrides`,
-  `ephemeral_overrides`, `list_overrides`, and `function_overrides` — promote an
+  `ephemeral_resource_overrides`, `list_resource_overrides`, and
+  `function_overrides` — promote an
   inference-classified operation, rename a construct, wire explicit
   create/read/update/delete operations, mark write-only or sensitive
   attributes, and more
@@ -108,7 +109,7 @@ Files that would be written (180):
 brew tap signalbreak-labs/tap
 brew install eidos
 
-# Or install with Go (latest, or pin a release: @v0.2.5)
+# Or install with Go (latest, or pin a release: @v0.3.0)
 go install github.com/signalbreak-labs/eidos/cmd/eidos@latest
 
 # Generate a starter build config
