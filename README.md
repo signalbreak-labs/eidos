@@ -150,5 +150,5 @@ Toolchain, lint, formatting, and testing conventions live in
 pinned to Go 1.26, and `goimports` with local prefix
 `github.com/signalbreak-labs/eidos`. Releases are versioned with release-please and
 shipped as cross-compiled GitHub Release binaries by GoReleaser, which also
-publishes the Homebrew formula to `signalbreak-labs/tap`; `v*` tags follow
+publishes the Homebrew cask to `signalbreak-labs/tap`; `v*` tags follow
 Semantic Versioning.

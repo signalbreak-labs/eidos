@@ -6,7 +6,7 @@ name: Release Please
 # v* tag and a GitHub Release. The tag push is authored by the
 # signalbreak-release-bot GitHub App, so it re-triggers release.yml (app-token
 # pushes are not suppressed like GITHUB_TOKEN pushes), which runs GoReleaser to
-# attach cross-compiled binaries and publish the Homebrew formula.
+# attach cross-compiled binaries and publish the Homebrew cask.
 #
 # This workflow replaces auto-release.yml (the in-repo Conventional-Commits
 # detector and hand-rolled tag pusher). release.yml remains for human-pushed

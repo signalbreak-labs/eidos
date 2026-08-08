@@ -62,26 +62,26 @@ release:
   prerelease: auto
   # .Tag carries the leading v (v2.1.5) so the release title displays proper
   # Semantic Versioning; .Version (2.1.5) is used for asset names and the
-  # injected main.version. Homebrew formulas reference the v-prefixed tag.
+  # injected main.version. Homebrew casks reference the v-prefixed tag.
   name_template: "{{ .ProjectName }} {{ .Tag }}"
 
-# Publish a Homebrew formula to the org tap (signalbreak-labs/homebrew-tap →
-# `brew tap signalbreak-labs/tap`). The formula is generated on release; the
-# push is authorized by the signalbreak-release-bot app token passed as
-# HOMEBREW_TAP_GITHUB_TOKEN from release.yml. `brews` is deprecated-but-
-# functional in v2 (homebrew_casks is Pro-only); it is removed in v3.
-brews:
+# Publish a Homebrew cask to the org tap (signalbreak-labs/homebrew-tap →
+# `brew tap signalbreak-labs/tap`). The cask is generated on release; the push
+# is authorized by the signalbreak-release-bot app token passed as
+# HOMEBREW_TAP_GITHUB_TOKEN from release.yml. `homebrew_casks` replaced the
+# deprecated `brews` section (v2.16+); casks are macOS-only, so Linux users
+# install via `go install` or the release binaries.
+homebrew_casks:
   - name: eidos
     repository:
       owner: signalbreak-labs
       name: homebrew-tap
       token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
-    directory: Formula
+    directory: Casks
     homepage: "https://github.com/signalbreak-labs/eidos"
     description: "Generate Terraform providers from OpenAPI 2.0/3.0/3.1 specs"
-    license: "Apache-2.0"
-    install: |
-      bin.install "eidos"
+    binaries:
+      - eidos
     commit_author:
       name: "signalbreak-release-bot[bot]"
       email: "signalbreak-release-bot@users.noreply.github.com"

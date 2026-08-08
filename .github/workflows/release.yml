@@ -1,7 +1,7 @@
 name: Release
 
 # Ships the eidos CLI to end users as a GitHub Release with cross-compiled
-# binaries, archives, and checksums, and publishes the Homebrew formula to
+# binaries, archives, and checksums, and publishes the Homebrew cask to
 # signalbreak-labs/homebrew-tap. This is the distribution path for the eidos
 # tool itself; it does NOT publish to the Terraform Registry (eidos is a
 # generator, not a provider). The .goreleaser.yml at the repo root drives the
@@ -38,7 +38,7 @@ jobs:
           cache: true
 
       # Mint a token for the signalbreak-release-bot GitHub App. This is what
-      # lets GoReleaser push the formula to signalbreak-labs/homebrew-tap (the
+      # lets GoReleaser push the cask to signalbreak-labs/homebrew-tap (the
       # app is on the tap's ruleset bypass list). GITHUB_TOKEN below handles the
       # GitHub Release on this repo.
       - name: Get GitHub App token
