@@ -140,6 +140,12 @@ jobs:
   changes:
     name: Detect changes
     runs-on: ubuntu-latest
+    # dorny/paths-filter calls the pull-request files API on pull_request
+    # events, which requires pull-requests: read on the token. Without it the
+    # action fails with "Resource not accessible by integration".
+    permissions:
+      contents: read
+      pull-requests: read
     outputs:
       release-tooling: ${{ steps.filter.outputs.release-tooling }}
     steps:
