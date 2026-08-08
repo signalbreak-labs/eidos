@@ -98,7 +98,12 @@ jobs:
           go run ./cmd/eidos generate --spec test/specs/mycloud.yaml --output examples/mycloud-provider
           git diff --exit-code -- examples/mycloud-provider/
 
+      # upload-artifact needs actions:write, which fork PRs don't get (their
+      # token is read-only), so the upload would fail and redden external
+      # contributors' PRs. Skip it on fork PRs; the Codecov step below still
+      # runs (tokenless, fail_ci_if_error: false).
       - name: Upload coverage artifact
+        if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: coverage-report
