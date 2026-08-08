@@ -65,8 +65,3 @@ jobs:
         uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7 # v5.0.0
         with:
           token: ${{ steps.app-token.outputs.token }}
-          # ONE-TIME BOOTSTRAP: force the first release to be exactly v0.1.0
-          # (the manifest baseline has no tag yet, so release-please would
-          # otherwise bump to 0.2.0 on a feat). REMOVE THIS LINE after the
-          # v0.1.0 release lands so subsequent releases bump normally.
-          release-as: 0.1.0
