@@ -1,0 +1,41 @@
+# Codecov coverage policy for eidos.
+#
+# Coverage is produced by the build-and-test job in .github/workflows/ci.yml:
+#   go test -v -race -coverprofile=coverage.out ./...
+# and uploaded via codecov/codecov-action using the CODECOV_TOKEN secret.
+# Measured aggregate coverage is ~80% (local `go test -coverprofile`); the
+# targets below sit just under that so the first uploads report cleanly while
+# still gating regressions.
+
+coverage:
+  range: 60...90          # below 60 red, 60-90 yellow, above 90 green (badge)
+  round: down
+  precision: 2            # two decimal places in reported percentages
+  status:
+    project:
+      default:
+        # Overall-coverage gate. 78% with a 1% threshold: a PR fails only if
+        # total coverage drops more than a point below 78%.
+        target: 78%
+        threshold: 1%
+        if_ci_failed: error    # coverage check fails if CI itself failed
+    patch:
+      default:
+        # New-code gate: code added in a PR must keep patch coverage >= 75%.
+        target: 75%
+        threshold: 2%
+        if_ci_failed: error
+
+# examples/mycloud-provider is a nested Go module (never part of `./...`) and
+# testfixtures holds golden snapshots plus opt-in TF_ACC=1 live tests; neither
+# contributes to coverage, so they are excluded here for clarity. Go's
+# -coverprofile already excludes *_test.go files, so no test-file ignore is
+# needed.
+ignore:
+  - "examples/mycloud-provider/**"
+  - "testfixtures/**"
+
+comment:
+  layout: "reach, diff, flags, files"
+  behavior: default       # comment on new PRs, update on pushes to existing ones
+  require_changes: false  # comment even when coverage is unchanged

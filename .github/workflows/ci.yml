@@ -110,12 +110,16 @@ jobs:
           path: coverage.out
           if-no-files-found: error
 
-      # Tokenless upload works for public repos; never let coverage reporting
-      # gate the build.
+      # Upload coverage with the CODECOV_TOKEN repository secret (Codecov's
+      # token-based flow; the app install provides the same repo activation).
+      # Fork PRs cannot read secrets, so the action falls back to tokenless
+      # there; fail_ci_if_error stays false so coverage reporting never gates
+      # the build for external contributors.
       - name: Upload to Codecov
         uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v7
         with:
           files: ./coverage.out
+          token: ${{ secrets.CODECOV_TOKEN }}
           fail_ci_if_error: false
 
   # End-to-end: generates a provider module from a fixture IR and runs
