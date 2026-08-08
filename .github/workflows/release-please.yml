@@ -57,9 +57,12 @@ jobs:
           repositories: "eidos,homebrew-tap"
 
       # Versioning + CHANGELOG ownership. `release-type: go` derives the module
-      # version from go.mod; the v* tag prefix is the default for `go`. Config
-      # and version history live in release-please-config.json and
-      # .release-please-manifest.json at the repo root.
+      # version from go.mod. Tags are vX.Y.Z because release-please-config.json
+      # sets `include-component-in-tag: false` — the manifest default would be
+      # `eidos-v0.2.0` (component name from the module path), which would not
+      # match release.yml's `v*` trigger. Config and version history live in
+      # release-please-config.json and .release-please-manifest.json at the
+      # repo root.
       - name: Run release-please
         id: release
         uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7 # v5.0.0

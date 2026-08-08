@@ -10,13 +10,18 @@ name: Release
 #
 # This workflow fires on any v* tag push — human-pushed (manual/explicit
 # releases) or pushed by release-please via the signalbreak-release-bot app
-# token. App-token pushes are not suppressed like GITHUB_TOKEN pushes, so the
-# release-please tag re-triggers this workflow; GoReleaser is idempotent on an
-# existing release, so a double run is harmless.
+# token (tags are vX.Y.Z because release-please-config.json sets
+# `include-component-in-tag: false`). App-token pushes are not suppressed like
+# GITHUB_TOKEN pushes, so the release-please tag re-triggers this workflow;
+# GoReleaser is
+# idempotent on an existing release, so a double run is harmless. It can also
+# be triggered manually (workflow_dispatch) to backfill binaries/cask for an
+# existing tag.
 on:
   push:
     tags:
       - "v*"
+  workflow_dispatch:
 
 permissions:
   contents: write
