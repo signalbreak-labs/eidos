@@ -574,12 +574,12 @@ func ArrayType(length, elem ast.Expr) *ast.ArrayType {
 
 // InterfaceType returns an interface type with the given methods. An empty
 // method set renders as interface{}.
+//
+// Methods is always a non-nil (possibly empty) FieldList: go/printer
+// dereferences x.Methods.List unconditionally when rendering an interface, so a
+// nil Methods panics go/format instead of rendering interface{} (L-60).
 func InterfaceType(methods ...*ast.Field) *ast.InterfaceType {
-	var fl *ast.FieldList
-	if len(methods) > 0 {
-		fl = FieldGroup(methods...)
-	}
-	return &ast.InterfaceType{Methods: fl}
+	return &ast.InterfaceType{Methods: FieldGroup(methods...)}
 }
 
 // CompositeLit returns a composite literal for the given type and key/value
