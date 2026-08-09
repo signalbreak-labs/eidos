@@ -5,6 +5,24 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.1](https://github.com/signalbreak-labs/eidos/compare/v0.3.0...v0.3.1) (2026-08-09)
+
+
+### Bug Fixes
+
+* corrections from codecov improvements ([4bab24b](https://github.com/signalbreak-labs/eidos/commit/4bab24beeb3b8b1a21e4e8c2d0236791888b4601))
+
+
+### Miscellaneous Chores
+
+* add codeowners ([32ac87b](https://github.com/signalbreak-labs/eidos/commit/32ac87b75fc29d01d21b227f7871433a213dad34))
+* bump ci versions ([b5e1ac6](https://github.com/signalbreak-labs/eidos/commit/b5e1ac662f2b15c2d1b03fe45223fde2efb99e29))
+* bump ci versions ([9ba1ddb](https://github.com/signalbreak-labs/eidos/commit/9ba1ddb3391a5cdef5f1bcd65be549a95614a050))
+* ci cleanup ([b550386](https://github.com/signalbreak-labs/eidos/commit/b5503864c1a2b0a78ceeb5331626acdf657a024f))
+* improve codecov by adding tests ([3d30a5d](https://github.com/signalbreak-labs/eidos/commit/3d30a5d3fe1dc1226192e3ff727270738b4c5572))
+* update codecov ([6ec7be6](https://github.com/signalbreak-labs/eidos/commit/6ec7be673a92c743583247de55e833d37b71c2b4))
+* update docs for accuracy ([af73f1a](https://github.com/signalbreak-labs/eidos/commit/af73f1a67bc6abf63e2c7a4cfc4efcbd1d0d77fd))
+
 ## [0.3.0](https://github.com/signalbreak-labs/eidos/compare/v0.2.0...v0.3.0) (2026-08-08)
 
 
