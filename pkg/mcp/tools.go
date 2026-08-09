@@ -428,10 +428,13 @@ var reservedRootNames = map[string]bool{
 }
 
 // schemaIssues walks an object schema and reports framework-invalid attribute
-// shapes (G12/G14/G15).
+// shapes (G12/G14/G15). Each root attribute is checked for its own
+// attribute-level violations (invalid identifier, reserved root name,
+// Computed+Required) at depth 0, then its schema is walked for nested shapes.
 func schemaIssues(entity string, schema ir.ObjectSchemaIR) []SchemaIssue {
-	var issues []SchemaIssue
+	issues := make([]SchemaIssue, 0, len(schema.Attributes))
 	for _, a := range schema.Attributes {
+		issues = append(issues, attributeSchemaIssues(entity, a, a.Name, 0)...)
 		walkSchemaIssues(&issues, entity, a.Schema, a.Name, 0)
 	}
 	return issues
