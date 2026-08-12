@@ -338,11 +338,16 @@ func wiredListBody(lr ir.ListResourceIR, plan listResourceWiringPlan, modelName 
 		astgen.CompositeLit(astgen.QualExpr("url", "Values")),
 	))
 	for _, p := range plan.read.queryParams {
-		body = append(body, astgen.ExprStmt(astgen.Call(
+		setCall := astgen.Call(
 			astgen.Selector(astgen.Ident("params"), "Set"),
 			astgen.Lit(p.name),
 			paramValueExpr("config", p),
-		)))
+		)
+		// Gate optional query parameters on a non-null model value so an unset
+		// optional parameter is omitted from the request rather than sent as the
+		// zero-value empty string/0. Required parameters pass through ungated.
+		// Mirrors requestHeaderStmts and the list data source wiring.
+		body = append(body, gateParamStmts(p, "config", astgen.ExprStmt(setCall))...)
 	}
 	if style == ir.PaginationStyleOffset {
 		body = append(body, astgen.ExprStmt(astgen.Call(

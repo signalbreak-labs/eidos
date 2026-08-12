@@ -492,11 +492,6 @@ func FilesForProviderIR(provider *ir.ProviderIR, cfg BuildConfig, opts CollectOp
 	files = append(files, FunctionFiles(provider.Functions)...)
 	files = append(files, ClientFiles(*provider)...)
 
-	providerImport := cfg.modulePath() + "/internal/provider"
-	if len(provider.Resources) > 0 {
-		files = append(files, ValueMappersFile(provider.Resources, providerImport))
-		files = append(files, ModelFiles(provider.Resources)...)
-	}
 	if AnyResourceWired(provider.Resources) || AnyDataSourceWired(provider.DataSources) || AnyEphemeralWired(provider.EphemeralResources) || AnyActionSendsBody(provider.Actions) {
 		// JSON conversion helpers used by resource CRUD bodies, data source
 		// Read bodies, ephemeral resource Open bodies, and body-bearing action

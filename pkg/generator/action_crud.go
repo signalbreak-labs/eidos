@@ -43,6 +43,7 @@ type actionWiringPlan struct {
 	sendsBody    bool
 	needsStrings bool
 	needsStrconv bool
+	needsURL     bool
 }
 
 // AnyActionWired reports whether at least one action has a resolvable mapping
@@ -117,6 +118,7 @@ func planActionWiring(a ir.ActionIR) actionWiringPlan {
 		}
 		for _, sub := range planned.subs {
 			plan.needsStrings = true
+			plan.needsURL = true
 			if sub.primitive != ir.TypeString {
 				plan.needsStrconv = true
 			}

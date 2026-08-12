@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"go/ast"
 	"go/format"
-	"go/token"
 	"io"
 	"os"
 	"path/filepath"
@@ -14,6 +13,8 @@ import (
 	"strings"
 	"sync"
 	"text/template"
+
+	"github.com/signalbreak-labs/eidos/pkg/generator/astgen"
 )
 
 // ErrDuplicatePath is returned when two generated files target the same
@@ -206,7 +207,26 @@ func Template(path, text string, data any) File {
 			if !ok {
 				return errors.New("internal: template cache value has wrong type")
 			}
-			return t.Execute(w, data)
+			var buf bytes.Buffer
+			if err := t.Execute(&buf, data); err != nil {
+				return err
+			}
+			out := buf.Bytes()
+			// Go source templates are re-formatted via format.Source so the
+			// emitted code is gofmt-canonical (inter-declaration blank lines
+			// and composite-literal/struct-field alignment the text/template
+			// does not produce). Non-Go template output (docs, YAML, HCL) is
+			// written verbatim. A parse failure surfaces as a render error
+			// rather than silent malformed Go.
+			if strings.HasSuffix(path, ".go") {
+				formatted, err := format.Source(out)
+				if err != nil {
+					return fmt.Errorf("format template %q: %w", path, err)
+				}
+				out = formatted
+			}
+			_, err := w.Write(out)
+			return err
 		},
 	}
 }
@@ -231,11 +251,11 @@ func GoCodeAST(path string, file *ast.File) File {
 			if file == nil {
 				return errors.New("GoCodeAST: nil ast.File")
 			}
-			var buf bytes.Buffer
-			if err := format.Node(&buf, token.NewFileSet(), file); err != nil {
-				return fmt.Errorf("format ast: %w", err)
+			out, err := astgen.FormatGoFile(file)
+			if err != nil {
+				return err
 			}
-			_, err := w.Write(buf.Bytes())
+			_, err = w.Write(out)
 			return err
 		},
 	}

@@ -86,9 +86,9 @@ type OperationMappingIR struct {
 	// (application/json preferred, else the first schema-bearing media type
 	// lexicographically) so the generator emits the matching body encoding
 	// (JSON / form-urlencoded / multipart / XML) instead of always JSON (A2).
-	MediaType      string                 `json:"media_type,omitempty"`
-	BodySchema     *SchemaIR              `json:"body_schema,omitempty"`
-	ResponseSchema *SchemaIR              `json:"response_schema,omitempty"`
+	MediaType      string    `json:"media_type,omitempty"`
+	BodySchema     *SchemaIR `json:"body_schema,omitempty"`
+	ResponseSchema *SchemaIR `json:"response_schema,omitempty"`
 	// ResponseEnvelope is the property name of a {data: ...} response envelope
 	// the transformer flattened out of the response schema (e.g. "data"). The
 	// generator unwraps the decoded response body by this key before applying it
@@ -96,7 +96,7 @@ type OperationMappingIR struct {
 	// when the response is not enveloped.
 	ResponseEnvelope string                 `json:"response_envelope,omitempty"`
 	SuccessCodes     []int                  `json:"success_codes,omitempty"`
-	ErrorMappings  map[int]ErrorMappingIR `json:"error_mappings,omitempty"`
+	ErrorMappings    map[int]ErrorMappingIR `json:"error_mappings,omitempty"`
 	// SecurityRequirements carries the operation's declared security
 	// requirements (a list of alternatives; each alternative is a map of
 	// security scheme name to scopes). OpenAPI security is OR across

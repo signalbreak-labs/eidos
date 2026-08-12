@@ -693,6 +693,11 @@ func buildIRPreview(spec *parser.Spec, version parser.Version, cfg *config.Confi
 	// client ships ready-made interceptors.
 	applySecurityConfigAttributes(preview, &previewDiags)
 	applyConfigOverrides(preview, cfg, name, pathOps, consumed, &previewDiags)
+	// Write-only and secret (Sensitive) inference are spec-driven passes, not
+	// generator.yaml preferences, so they run unconditionally (even when cfg is
+	// nil) after config overrides so override-added constructs are covered too.
+	applyWriteOnlyAttributesToProvider(preview, &previewDiags)
+	inferSensitiveAttributesToProvider(preview, &previewDiags)
 
 	// Two operations that normalize to the same construct name (e.g. duplicate
 	// operationIds) would make the generator emit two files at one path. Fail
@@ -828,7 +833,6 @@ func applyConfigOverrides(preview *ir.ProviderIR, cfg *config.Config, providerNa
 			Detail:   err.Error(),
 		})
 	}
-	applyWriteOnlyAttributesToProvider(preview, diags)
 }
 
 // actionOverrideDoubleClaimed reports whether an action override's operation is
@@ -925,13 +929,61 @@ func matchingFunctionIndex(functions []ir.FunctionIR, fo config.FunctionOverride
 // applyFunctionOverrideExtras applies the function-override fields that
 // transformer.ApplyOverrides does not handle — the declared arguments — to an
 // existing function matched by an override.
+//
+// Declared arguments MERGE with the function's inferred arguments by name: an
+// override argument whose name matches an inferred argument (case-insensitively,
+// ignoring underscores) replaces that argument's type so the override can
+// correct an inferred type without duplicating it; an override argument with no
+// inferred counterpart is appended. Blindly appending every declared argument
+// duplicates the inferred signature when an override redeclares the same
+// parameters (e.g. an auto-generated config that records an inferred
+// function's query-parameter signature), producing "Parameter names must be
+// unique" validation errors at provider load.
 func applyFunctionOverrideExtras(f *ir.FunctionIR, fo config.FunctionOverride) {
 	for _, arg := range fo.Arguments {
+		name := strings.TrimSpace(arg.Name)
+		if name == "" {
+			continue
+		}
+		schema := ir.SchemaIR{Type: primitiveTypeFromString(arg.Type)}
+		if idx := functionArgumentIndex(f.Arguments, name); idx >= 0 {
+			// Replace only the type; preserve the inferred WireName and
+			// Description, which the override does not carry.
+			f.Arguments[idx].Schema = schema
+			continue
+		}
 		f.Arguments = append(f.Arguments, ir.FunctionParamIR{
-			Name:   arg.Name,
-			Schema: ir.SchemaIR{Type: primitiveTypeFromString(arg.Type)},
+			Name:   transformer.SanitizeAttributeName(name),
+			Schema: schema,
 		})
 	}
+}
+
+// functionArgumentIndex returns the index of the first function argument whose
+// name matches target. Names are compared case-insensitively and with
+// underscores stripped so that an override's snake_case name (e.g. "start_time")
+// matches an inferred name derived from a camelCase or dotted parameter (e.g.
+// "startTime" or "fm.tags").
+func functionArgumentIndex(args []ir.FunctionParamIR, target string) int {
+	want := normalizeFunctionArgName(target)
+	if want == "" {
+		return -1
+	}
+	for i := range args {
+		if normalizeFunctionArgName(args[i].Name) == want {
+			return i
+		}
+	}
+	return -1
+}
+
+// normalizeFunctionArgName trims surrounding whitespace, strips underscores, and
+// lowercases a function-argument name for case- and formatting-insensitive
+// comparison. It mirrors transformer.normalizeName (which is not exported).
+func normalizeFunctionArgName(s string) string {
+	s = strings.TrimSpace(s)
+	s = strings.ReplaceAll(s, "_", "")
+	return strings.ToLower(s)
 }
 
 // sortedKeys returns the keys of m in lexicographic order. It is used to make
@@ -991,6 +1043,44 @@ func applyWriteOnlyAttributesToProvider(provider *ir.ProviderIR, diags *diagnost
 		transformer.ApplyWriteOnlyAttributesWithDiagnostics(&provider.ListResources[i].IdentitySchema, diags)
 		if provider.ListResources[i].ResourceSchema != nil {
 			transformer.ApplyWriteOnlyAttributesWithDiagnostics(provider.ListResources[i].ResourceSchema, diags)
+		}
+	}
+}
+
+// inferSensitiveAttributesToProvider marks string-typed attributes whose names
+// indicate a secret (password/secret/token/...) as Sensitive across every
+// schema kind the generator renders Sensitive for (resources, data sources,
+// ephemeral resources). For schema kinds that ignore Sensitive — action config
+// attributes (action.go) and list resource schema attributes (list.go) — it
+// emits a Warning per secret-named attribute instead, so the limitation is
+// surfaced rather than the secret leaking in state with no signal (fail-loud).
+// Existing Sensitive attributes (security-scheme inference, write-only
+// processing, overrides) are left untouched; this pass only ever adds.
+func inferSensitiveAttributesToProvider(provider *ir.ProviderIR, diags *diagnostics.Diagnostics) {
+	if provider == nil {
+		return
+	}
+	for i := range provider.Resources {
+		transformer.InferSensitiveAttributes(&provider.Resources[i].Schema)
+	}
+	for i := range provider.DataSources {
+		transformer.InferSensitiveAttributes(&provider.DataSources[i].Schema)
+	}
+	for i := range provider.EphemeralResources {
+		transformer.InferSensitiveAttributes(&provider.EphemeralResources[i].ConfigSchema)
+		transformer.InferSensitiveAttributes(&provider.EphemeralResources[i].ResultSchema)
+	}
+	// Actions and list resources cannot render Sensitive (action.go/list.go);
+	// surface the secret-named attributes we cannot mark so they are not silent.
+	for i := range provider.Actions {
+		transformer.WarnUnmarkableSensitive(&provider.Actions[i].ConfigSchema, "action", provider.Actions[i].TypeName, diags)
+	}
+	for i := range provider.ListResources {
+		name := provider.ListResources[i].TypeName
+		transformer.WarnUnmarkableSensitive(&provider.ListResources[i].ConfigSchema, "list resource", name, diags)
+		transformer.WarnUnmarkableSensitive(&provider.ListResources[i].IdentitySchema, "list resource", name, diags)
+		if provider.ListResources[i].ResourceSchema != nil {
+			transformer.WarnUnmarkableSensitive(provider.ListResources[i].ResourceSchema, "list resource", name, diags)
 		}
 	}
 }
@@ -1475,10 +1565,18 @@ func buildGroupedResources(spec *parser.Spec, providerName string, pathOps map[s
 			continue
 		}
 
+		// The CRUD group's name is derived from the last path segment (e.g.
+		// "trafficPolicyGraph", "alert-policy"); normalize it to snake_case so the
+		// Terraform type name is a valid, conventional HCL identifier (camelCase
+		// is a convention violation; hyphens make the resource handle unreferenceable
+		// in expressions, e.g. gigamon_alert-policy.x lexes as subtraction). This
+		// mirrors the data-source/list/action naming convention.
+		name := transformer.ToSnakeCase(g.Name)
 		res := ir.ResourceIR{
-			Name:            g.Name,
-			FullName:        providerName + "_" + g.Name,
-			TypeName:        providerName + "_" + g.Name,
+			Name:            name,
+			FullName:        providerName + "_" + name,
+			TypeName:        providerName + "_" + name,
+			Description:     operationDescription(crudGroupDescriptionOp(spec, g), fmt.Sprintf("Manages the %s resource.", humanizeConstructName(name))),
 			SourceOperation: groupSourceOperation(g),
 		}
 		res.CRUDMapping.Create = operationMapping("POST", g.CollectionPath, parserOp(spec, g.CollectionPath, "POST"), envelopeOf(g.Create))
@@ -1638,10 +1736,17 @@ func resourceNameFromOverride(ro config.ResourceOverride, createPath string) str
 // operations were resolved from an override (G8). Unlike inferred groups, the
 // create/read/update/delete paths may differ (e.g. dashboards).
 func resourceFromOverrideCRUD(spec *parser.Spec, providerName string, g transformer.ResourceCRUD) *ir.ResourceIR {
+	// Normalize the CRUD group name to snake_case for the Terraform type name
+	// (camelCase is a convention violation; hyphens make the resource handle
+	// unreferenceable in HCL expressions). See the inferred-group counterpart
+	// above; the Go struct/file names derive from Name via naming.PascalCase /
+	// naming.SnakeCase, which are idempotent on an already-snake name.
+	name := transformer.ToSnakeCase(g.Name)
 	res := ir.ResourceIR{
-		Name:            g.Name,
-		FullName:        providerName + "_" + g.Name,
-		TypeName:        providerName + "_" + g.Name,
+		Name:            name,
+		FullName:        providerName + "_" + name,
+		TypeName:        providerName + "_" + name,
+		Description:     operationDescription(crudGroupDescriptionOp(spec, g), fmt.Sprintf("Manages the %s resource.", humanizeConstructName(name))),
 		SourceOperation: groupSourceOperation(g),
 	}
 	if g.Create != nil {
@@ -1850,13 +1955,33 @@ func isConsumed(consumed map[string]map[string]bool, path, method string) bool {
 	return consumed[path][strings.ToUpper(method)]
 }
 
+// crudGroupDescriptionOp returns the parser operation whose summary/description
+// best describes a CRUD-grouped resource, preferring the Read (GET instance)
+// operation then the Create operation. It feeds operationDescription so a
+// grouped resource gets the same description fallback chain as a single-op
+// construct (spec description if a real sentence, else summary, else a
+// generated "Manages the X resource." phrase).
+func crudGroupDescriptionOp(spec *parser.Spec, g transformer.ResourceCRUD) *parser.Operation {
+	if g.Read != nil {
+		if op := parserOp(spec, g.Read.Path, string(g.Read.Method)); op != nil {
+			return op
+		}
+	}
+	if g.Create != nil {
+		if op := parserOp(spec, g.Create.Path, string(g.Create.Method)); op != nil {
+			return op
+		}
+	}
+	return nil
+}
+
 func resourceFromOperation(op *parser.Operation, providerName, path, method string, pathOps map[string]map[transformer.HTTPMethod]transformer.Operation) ir.ResourceIR {
 	name := resourceName(op, method, path)
 	res := ir.ResourceIR{
 		Name:            name,
 		FullName:        providerName + "_" + name,
 		TypeName:        providerName + "_" + name,
-		Description:     op.Description,
+		Description:     operationDescription(op, fmt.Sprintf("Manages the %s resource.", humanizeConstructName(name))),
 		SourceOperation: op.OperationID,
 	}
 	mapping := operationMapping(method, path, op, envelopeOfTransformerOp(pathOps, path, method))
@@ -1879,7 +2004,7 @@ func dataSourceFromOperation(op *parser.Operation, providerName, path, method st
 		Name:            name,
 		FullName:        providerName + "_" + name,
 		TypeName:        providerName + "_" + name,
-		Description:     op.Description,
+		Description:     operationDescription(op, fmt.Sprintf("Reads the %s data source.", humanizeConstructName(name))),
 		SourceOperation: op.OperationID,
 		ReadMapping:     operationMapping(method, path, op, envelopeOfTransformerOp(pathOps, path, method)),
 	}
@@ -2463,13 +2588,65 @@ func actionFromOperation(op *parser.Operation, providerName, path, method string
 		Name:            name,
 		FullName:        providerName + "_" + name,
 		TypeName:        providerName + "_" + name,
-		Description:     op.Description,
+		Description:     actionDescription(op),
 		SourceOperation: op.OperationID,
 		// Actions have no result surface: the wired Invoke neither decodes a
 		// response nor sets a result, so no response envelope is carried.
 		InvokeMapping: operationMapping(method, path, op, ""),
 		ConfigSchema:  configSchema,
 	}
+}
+
+// operationDescription picks the most useful human-readable description for a
+// construct (resource, data source, or action) inferred from an OpenAPI
+// operation. Operations carry both a short summary and a verbose description;
+// either is acceptable, but some specs (notably the Gigamon GigaVUE-FM bundle)
+// accidentally copy a referenced schema component name into the operation
+// description field (e.g. description "GigaAlarmBulkAcknowledgementSpec"
+// alongside summary "Acknowledge Multiple Alarms"). A bare PascalCase
+// identifier with no whitespace is not a description a practitioner can use, so
+// such leaked titles are skipped in favor of the summary. The fallback chain
+// is:
+//
+//  1. op.Description, when it reads as a sentence (contains whitespace)
+//  2. op.Summary, when present
+//  3. fallback (a construct-specific generated phrase, or "" for actions)
+//
+// This keeps real verbose descriptions, fills the many constructs whose only
+// human-readable field is the summary, and never surfaces a leaked schema
+// title as the description. The same chain is applied to resources, data
+// sources, and actions so the generated schema MarkdownDescription and the
+// docs front matter stay consistent and non-empty.
+func operationDescription(op *parser.Operation, fallback string) string {
+	if op == nil {
+		return fallback
+	}
+	if desc := strings.TrimSpace(op.Description); desc != "" && strings.ContainsAny(desc, " \t\n") {
+		return desc
+	}
+	if summary := strings.TrimSpace(op.Summary); summary != "" {
+		return summary
+	}
+	return fallback
+}
+
+// humanizeConstructName turns a snake_case construct name into a space-separated
+// phrase for use in a generated description fallback (e.g. "alert_policy" ->
+// "alert policy").
+func humanizeConstructName(name string) string {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return "resource"
+	}
+	return strings.ReplaceAll(name, "_", " ")
+}
+
+// actionDescription returns the description for an auto-inferred action. Actions
+// have no natural noun phrase, so the empty-description fallback is "" (the
+// generator omits an empty Description cleanly) rather than a generated
+// sentence.
+func actionDescription(op *parser.Operation) string {
+	return operationDescription(op, "")
 }
 
 // actionConfigAttributes builds the config schema attributes for an
@@ -2523,7 +2700,7 @@ func ephemeralFromOperation(spec *parser.Spec, op *parser.Operation, providerNam
 		Name:            name,
 		FullName:        providerName + "_" + name,
 		TypeName:        providerName + "_" + name,
-		Description:     op.Description,
+		Description:     operationDescription(op, fmt.Sprintf("Opens the %s ephemeral resource.", humanizeConstructName(name))),
 		SourceOperation: op.OperationID,
 		OpenMapping:     operationMapping(method, path, op, envelopeOfTransformerOp(pathOps, path, method)),
 	}
@@ -2576,7 +2753,7 @@ func listResourceFromOperation(op *parser.Operation, providerName, path, method 
 		Name:            name,
 		FullName:        providerName + "_" + name,
 		TypeName:        providerName + "_" + name,
-		Description:     op.Description,
+		Description:     operationDescription(op, fmt.Sprintf("Lists %s resources.", humanizeConstructName(name))),
 		SourceOperation: op.OperationID,
 		ListMapping:     operationMapping(method, path, op, envelopeOfTransformerOp(pathOps, path, method)),
 	}
@@ -2662,7 +2839,7 @@ func functionFromOperation(op *parser.Operation, providerName, path, method stri
 		Name:            name,
 		FullName:        providerName + "_" + name,
 		TypeName:        providerName + "_" + name,
-		Description:     op.Description,
+		Description:     operationDescription(op, fmt.Sprintf("Provider-defined function %s.", humanizeConstructName(name))),
 		SourceOperation: op.OperationID,
 		Arguments:       actionConfigAttributes(op),
 	}

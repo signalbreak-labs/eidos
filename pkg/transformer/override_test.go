@@ -692,6 +692,54 @@ func TestApplyOverrides_MultipleOverridesOnSameResource(t *testing.T) {
 	}
 }
 
+// TestApplyOverrides_ComputedAttributesClearsRequired locks in the fix for the
+// Required+Computed invalid combination: a computed_attributes override that
+// claims a previously-Required attribute forces it Computed and clears Required
+// (the plugin framework forbids Computed together with Required). Optional is
+// preserved so an Optional attribute forced Computed becomes Optional+Computed,
+// which is valid.
+func TestApplyOverrides_ComputedAttributesClearsRequired(t *testing.T) {
+	provider := &ir.ProviderIR{
+		Resources: []ir.ResourceIR{{
+			Name:     "profile",
+			TypeName: "profile",
+			Schema: ir.ObjectSchemaIR{
+				Attributes: []ir.AttributeIR{
+					{Name: "alias", Required: true, Schema: ir.SchemaIR{Type: ir.TypeString}},
+					{Name: "labels", Optional: true, Schema: ir.SchemaIR{Type: ir.TypeString}},
+				},
+			},
+		}},
+	}
+	cfg := &config.Config{
+		Provider: config.ProviderConfig{Name: "test", Version: "0.0.1"},
+		ResourceOverrides: []config.ResourceOverride{{
+			Schema:             "profile",
+			ComputedAttributes: []string{"alias", "labels"},
+		}},
+	}
+
+	if err := ApplyOverrides(provider, cfg); err != nil {
+		t.Fatalf("ApplyOverrides() = %v, want nil", err)
+	}
+
+	attrs := provider.Resources[0].Schema.Attributes
+	alias := attrs[0]
+	if !alias.Computed {
+		t.Errorf("alias Computed = false, want true (forced by computed_attributes)")
+	}
+	if alias.Required {
+		t.Errorf("alias Required = true, want false (Computed+Required is invalid; computed_attributes clears Required)")
+	}
+	labels := attrs[1]
+	if !labels.Computed {
+		t.Errorf("labels Computed = false, want true (forced by computed_attributes)")
+	}
+	if !labels.Optional {
+		t.Errorf("labels Optional = false, want true (Optional preserved for Optional+Computed)")
+	}
+}
+
 func TestApplyOverrides_DatasourceName(t *testing.T) {
 	provider := &ir.ProviderIR{
 		DataSources: []ir.DataSourceIR{{

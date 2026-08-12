@@ -68,6 +68,66 @@ func DynamicUnionElement(elem ir.SchemaIR) ir.SchemaIR {
 	return elem
 }
 
+// ContainsNestedDynamic reports whether the schema, when rendered as a
+// terraform-plugin-framework attribute, would produce a DynamicAttribute at any
+// point nested under a collection element. The framework rejects any
+// collection (List/Set/Map) whose element type contains a dynamic type at any
+// depth — see fwtype.ContainsCollectionWithDynamic — so a collection whose
+// element contains a nested dynamic must be emitted as a DynamicAttribute as a
+// whole rather than as a typed collection with a dynamic leaf.
+//
+// The check is recursive through object attributes and nested blocks and
+// collections. A discriminated union that renders as a SingleNestedAttribute
+// via the dynamic-union strategy is recursed through its merged attributes; any
+// other union renders as a DynamicAttribute and is therefore treated as
+// dynamic. A primitive dynamic or null type is dynamic by definition.
+func ContainsNestedDynamic(s ir.SchemaIR) bool {
+	if s.Type == ir.TypeDynamic || s.Type == ir.TypeNull {
+		return true
+	}
+	if s.Union != nil {
+		if merged := MergedDiscriminatedUnion(s); merged != nil {
+			for _, attr := range merged.Attributes {
+				if ContainsNestedDynamic(attr.Schema) {
+					return true
+				}
+			}
+			return false
+		}
+		return true
+	}
+	if s.Collection != nil {
+		return ContainsNestedDynamic(s.Collection.ElementType)
+	}
+	for _, attr := range s.Attributes {
+		if ContainsNestedDynamic(attr.Schema) {
+			return true
+		}
+	}
+	for _, block := range s.Blocks {
+		if objectSchemaContainsDynamic(block.Schema) {
+			return true
+		}
+	}
+	return false
+}
+
+// objectSchemaContainsDynamic is the ObjectSchemaIR recursion companion to
+// ContainsNestedDynamic, walking a nested block's attributes and sub-blocks.
+func objectSchemaContainsDynamic(s ir.ObjectSchemaIR) bool {
+	for _, attr := range s.Attributes {
+		if ContainsNestedDynamic(attr.Schema) {
+			return true
+		}
+	}
+	for _, block := range s.Blocks {
+		if objectSchemaContainsDynamic(block.Schema) {
+			return true
+		}
+	}
+	return false
+}
+
 // ObjectSchemaHasDiscriminatedUnion reports whether any attribute or nested
 // block attribute in the schema is a discriminated union that renders as a
 // SingleNestedAttribute with a DiscriminatorValidator, so the generated file

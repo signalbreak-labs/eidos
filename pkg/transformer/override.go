@@ -350,7 +350,15 @@ func setAttributeFlagAtPath(obj *ir.ObjectSchemaIR, names []string, flag string,
 			if attributeNameMatches(obj.Attributes[i].Name, n) {
 				switch flag {
 				case "computed":
+					// Forcing an attribute Computed declares it server-managed.
+					// The plugin framework forbids Computed together with Required
+					// (a practitioner cannot be forced to supply a value the server
+					// also populates), so clear Required when a computed_attributes
+					// override claims a previously-Required attribute. Optional is
+					// preserved: Optional+Computed is valid (the practitioner may
+					// set the value and the server may also populate it).
 					obj.Attributes[i].Computed = true
+					obj.Attributes[i].Required = false
 				case "sensitive":
 					obj.Attributes[i].Sensitive = true
 				case "force_new":

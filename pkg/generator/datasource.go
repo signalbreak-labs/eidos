@@ -436,6 +436,18 @@ func dataSourceCollectionAttributeExpr(attr ir.AttributeIR, attrPath string) ast
 		}
 		return astgen.CompositeLit(astgen.QualExpr("schema", "DynamicAttribute"), datasourceAttributeValues(attr, nil)...)
 	}
+	// A collection whose element is an object (or nested collection) that
+	// contains a dynamic at any depth cannot be rendered as a typed framework
+	// collection: the terraform-plugin-framework rejects any collection whose
+	// element type contains a dynamic (fwtype.ContainsCollectionWithDynamic).
+	// Emit the whole collection as a DynamicAttribute, per the framework's own
+	// guidance. This is valid in an object-or-top-level context; when this
+	// collection is itself nested inside another collection's element, the
+	// enclosing collection's ContainsNestedDynamic check has already promoted that
+	// ancestor, so this emission is never reached inside a collection.
+	if schema.ContainsNestedDynamic(elem) {
+		return astgen.CompositeLit(astgen.QualExpr("schema", "DynamicAttribute"), datasourceAttributeValues(attr, nil)...)
+	}
 	switch attr.Schema.Collection.Kind {
 	case ir.List:
 		return dataSourceListElementAttributeExpr(attr, elem, attrPath, "List")

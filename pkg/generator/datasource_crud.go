@@ -85,6 +85,7 @@ func planDataSourceWiring(ds ir.DataSourceIR) dataSourceWiringPlan {
 	// strings. Setting needsStrings for parameters would import strings unused.
 	for _, sub := range read.subs {
 		plan.needsStrings = true
+		plan.needsURL = true
 		if sub.primitive != ir.TypeString {
 			plan.needsStrconv = true
 		}
@@ -215,8 +216,50 @@ func wiredDataSourceReadBody(ds ir.DataSourceIR, plan crudOperationPlan, modelNa
 	}
 	stmts = append(stmts, sendRequestStmts(plan, "d", summary, "config", nil, notFound)...)
 	stmts = append(stmts, decodeAndApplyStmts(summary, "config", plan.responseEnvelope)...)
+	// A single-object data source whose endpoint exposes a pagination query
+	// parameter (page/offset/skip/cursor/after) returns one page only — it does
+	// not aggregate across pages the way a list data source (bare-array response)
+	// does. When the practitioner leaves that argument unset, they receive the
+	// default page (typically page 1) and may not realize further pages exist.
+	// Surface the limitation as a non-fatal warning so it is not silently
+	// truncated (REMAINING_GAPS §4). When the argument is set, the practitioner
+	// has explicitly chosen a page and the warning is suppressed.
+	if p := paginationSuggestingParam(plan); p != nil {
+		stmts = append(stmts, astgen.If(
+			astgen.Call(astgen.Selector(astgen.Selector(astgen.Ident("config"), p.field), "IsNull")),
+			astgen.Block(addWarningStmt(
+				"Single-page result",
+				astgen.Call(astgen.QualExpr("fmt", "Sprintf"),
+					astgen.Lit(fmt.Sprintf(
+						"This data source reads a single page of a paginated API endpoint and does not aggregate results across pages. "+
+							"The %q argument is unset, so the default page is returned; set it to retrieve a different page.",
+						p.name)),
+				),
+			)),
+		))
+	}
 	stmts = append(stmts, stateSetStmt("config"))
 	return stmts
+}
+
+// paginationSuggestingParam returns the first query parameter on the plan whose
+// name suggests a pagination control (page/offset/skip/cursor/after), or nil
+// when none of the mapped query parameters are pagination controls. It is used
+// to surface the single-page limitation of a single-object data source whose
+// endpoint is paginated (REMAINING_GAPS §4).
+func paginationSuggestingParam(plan crudOperationPlan) *paramSubstitution {
+	for i := range plan.queryParams {
+		p := &plan.queryParams[i]
+		name := strings.ToLower(p.name)
+		if strings.Contains(name, "page") ||
+			strings.Contains(name, "offset") ||
+			strings.Contains(name, "skip") ||
+			strings.Contains(name, "cursor") ||
+			strings.Contains(name, "after") {
+			return p
+		}
+	}
+	return nil
 }
 
 // wiredListDataSourceReadBody returns the Read body for a list data source (a read
@@ -258,11 +301,17 @@ func wiredListDataSourceReadBody(ds ir.DataSourceIR, plan crudOperationPlan, mod
 		astgen.CompositeLit(astgen.QualExpr("url", "Values")),
 	))
 	for _, p := range plan.queryParams {
-		stmts = append(stmts, astgen.ExprStmt(astgen.Call(
+		setCall := astgen.Call(
 			astgen.Selector(astgen.Ident("params"), "Set"),
 			astgen.Lit(p.name),
 			paramValueExpr("config", p),
-		)))
+		)
+		// Gate optional query parameters on a non-null model value so an unset
+		// optional parameter is omitted from the request rather than sent as the
+		// zero-value empty string/0, which the API may reject or misinterpret
+		// (e.g. a 1-indexed `page=0` or an empty `type=` filter). Required
+		// parameters pass through ungated. Mirrors requestHeaderStmts.
+		stmts = append(stmts, gateParamStmts(p, "config", astgen.ExprStmt(setCall))...)
 	}
 	if style == ir.PaginationStyleOffset {
 		// Offset pagination starts at page 1; the next callback increments it

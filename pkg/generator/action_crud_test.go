@@ -111,7 +111,7 @@ func TestWiredActionInvoke_Render(t *testing.T) {
 		`r.client == nil`,
 		// Path template and substitution from the config.
 		`reqPath := "/servers/{server_id}/reboot"`,
-		`strings.ReplaceAll(reqPath, "{server_id}"`,
+		`strings.ReplaceAll(reqPath, "{server_id}", url.PathEscape(`,
 		// Bodiless request through the generated client (no body argument).
 		`r.client.NewRequest(ctx, http.MethodPost, reqPath, nil)`,
 		// Query parameter encoded onto the request URL.
@@ -393,7 +393,7 @@ func TestWiredActionModifyPlan_Render(t *testing.T) {
 
 	for _, want := range []string{
 		`reqPath := "/servers/{server_id}/reboot/preview"`,
-		`strings.ReplaceAll(reqPath, "{server_id}", config.ServerId.ValueString())`,
+		`strings.ReplaceAll(reqPath, "{server_id}", url.PathEscape(config.ServerId.ValueString()))`,
 		`r.client.NewRequest(ctx, http.MethodPost, reqPath, nil)`,
 		`r.client.Do(httpReq)`,
 	} {

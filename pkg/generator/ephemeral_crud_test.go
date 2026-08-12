@@ -177,7 +177,7 @@ func TestWiredEphemeralOpen_Path_Render(t *testing.T) {
 
 	for _, want := range []string{
 		`reqPath := "/secrets/{name}"`,
-		`strings.ReplaceAll(reqPath, "{name}",`,
+		`strings.ReplaceAll(reqPath, "{name}", url.PathEscape(`,
 		`e.client.NewRequest(ctx, http.MethodGet, reqPath, nil)`,
 		`resp.Result.Set(ctx, &config)`,
 	} {
@@ -354,7 +354,7 @@ func TestWiredEphemeralRenew_Render(t *testing.T) {
 		// Renew reads it back and rebuilds the renew path.
 		`req.Private.GetKey(ctx, "eidos.param.Name")`,
 		`reqPath := "/secrets/{name}/renew"`,
-		`strings.ReplaceAll(reqPath, "{name}", string(nameBytes))`,
+		`strings.ReplaceAll(reqPath, "{name}", url.PathEscape(string(nameBytes)))`,
 		`e.client.NewRequest(ctx, http.MethodPost, reqPath, nil)`,
 		`e.client.Do(httpReq)`,
 	} {
@@ -383,7 +383,7 @@ func TestWiredEphemeralClose_Render(t *testing.T) {
 	for _, want := range []string{
 		`req.Private.GetKey(ctx, "eidos.param.Name")`,
 		`reqPath := "/secrets/{name}"`,
-		`strings.ReplaceAll(reqPath, "{name}", string(nameBytes))`,
+		`strings.ReplaceAll(reqPath, "{name}", url.PathEscape(string(nameBytes)))`,
 		`e.client.NewRequest(ctx, http.MethodDelete, reqPath, nil)`,
 	} {
 		if !strings.Contains(got, want) {

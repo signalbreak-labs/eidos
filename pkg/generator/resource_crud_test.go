@@ -161,6 +161,59 @@ func TestWiredBody_CookieParam_Render(t *testing.T) {
 	}
 }
 
+// gatedQueryParamResourceIR returns a wired resource whose Read operation carries
+// one optional query parameter (filter) and one required query parameter
+// (region), each mapped to a same-named schema attribute. It exercises the
+// optional-parameter gating: an unset optional parameter is omitted from the
+// request rather than sent as the zero-value empty string.
+func gatedQueryParamResourceIR() ir.ResourceIR {
+	r := sampleResourceIR()
+	r.Schema.Attributes = append(r.Schema.Attributes,
+		ir.AttributeIR{Name: "filter", Optional: true, Schema: ir.SchemaIR{Type: ir.TypeString}},
+		ir.AttributeIR{Name: "region", Required: true, Schema: ir.SchemaIR{Type: ir.TypeString}},
+	)
+	r.CRUDMapping.Read = ir.OperationMappingIR{
+		Method:       "GET",
+		PathTemplate: "/pets/{id}",
+		SuccessCodes: []int{200},
+		QueryParams: []ir.ParamIR{
+			{Name: "filter", In: "query", Schema: ir.SchemaIR{Type: ir.TypeString}},
+			{Name: "region", In: "query", Required: true, Schema: ir.SchemaIR{Type: ir.TypeString}},
+		},
+	}
+	return r
+}
+
+// TestWiredBody_OptionalQueryParamsAreGated asserts that an optional query
+// parameter is emitted inside an "if !state.<field>.IsNull() { ... }" guard so
+// an unset optional parameter is omitted from the request, while a required
+// query parameter is emitted unguarded (it is always set at apply time).
+func TestWiredBody_OptionalQueryParamsAreGated(t *testing.T) {
+	r := gatedQueryParamResourceIR()
+
+	file := ResourceFile(r, testClientImport)
+	var buf bytes.Buffer
+	if err := file.Render(&buf); err != nil {
+		t.Fatalf("Render() error = %v", err)
+	}
+	got := buf.String()
+
+	// Optional parameter is guarded against a null model field.
+	if !strings.Contains(got, "if !state.Filter.IsNull() {") {
+		t.Errorf("optional query param should be gated on !state.Filter.IsNull(), missing in body:\n%s", got)
+	}
+	if !strings.Contains(got, `query.Set("filter", state.Filter.ValueString())`) {
+		t.Errorf("optional query param emission missing in body:\n%s", got)
+	}
+	// Required parameter is emitted unguarded.
+	if !strings.Contains(got, `query.Set("region", state.Region.ValueString())`) {
+		t.Errorf("required query param emission missing in body:\n%s", got)
+	}
+	if strings.Contains(got, "if !state.Region.IsNull() {") {
+		t.Errorf("required query param must NOT be gated on IsNull, but a guard was emitted:\n%s", got)
+	}
+}
+
 // TestPlanOperation_RequiredCookieParamDisablesWiring verifies that a required
 // cookie parameter with no matching schema attribute disables wiring, mirroring
 // the query/header rule, so the body never omits a required cookie at runtime.

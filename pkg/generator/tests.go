@@ -383,19 +383,12 @@ func generateMapperModelTests(f *astgen.File, modelName string, obj ir.ObjectSch
 
 // TestFiles returns the complete set of generated unit-test files for a
 // provider. It includes provider_test.go, one resource_<name>_test.go per
-// resource, one data_source_<name>_test.go per data source, and
-// value_mappers_test.go when the provider defines resources. The providerImport
-// is derived from cfg.modulePath().
+// resource and one data_source_<name>_test.go per data source.
 func TestFiles(pir ir.ProviderIR, cfg BuildConfig) []File {
-	providerImport := cfg.modulePath() + "/internal/provider"
-
-	files := make([]File, 0)
+	files := make([]File, 0, 1+len(pir.Resources)+len(pir.DataSources))
 	files = append(files, ProviderTestFile(pir))
 	files = append(files, ResourceTestFiles(pir.Resources)...)
 	files = append(files, ResourceAcceptanceTestFiles(pir, cfg)...)
 	files = append(files, DataSourceTestFiles(pir.DataSources)...)
-	if len(pir.Resources) > 0 {
-		files = append(files, MapperTestFile(pir.Resources, providerImport))
-	}
 	return files
 }

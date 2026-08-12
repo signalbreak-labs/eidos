@@ -852,6 +852,18 @@ func frameworkAttributeExpr(attr ir.AttributeIR, attrPath string) ast.Expr {
 	// Collection types.
 	if s.Collection != nil {
 		elem := schema.DynamicUnionElement(s.Collection.ElementType)
+		// A collection whose element is, or contains at any depth, a dynamic
+		// type cannot be rendered as a typed framework collection: the
+		// terraform-plugin-framework rejects any collection whose element type
+		// contains a dynamic type (fwtype.ContainsCollectionWithDynamic). Emit
+		// the whole collection as a DynamicAttribute instead, per the
+		// framework's own guidance. An enclosing collection's
+		// ContainsNestedDynamic check promotes any collection ancestor, so this
+		// DynamicAttribute is only reached in an object-or-top-level context
+		// where it is valid.
+		if schema.ContainsNestedDynamic(elem) {
+			return astgen.CompositeLit(astgen.QualExpr("schema", "DynamicAttribute"), attributeValues(attr, nil)...)
+		}
 		switch s.Collection.Kind {
 		case ir.List:
 			if schema.IsPrimitiveSchema(elem) {

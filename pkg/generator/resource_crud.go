@@ -118,6 +118,11 @@ type paramSubstitution struct {
 	in        string // "query", "header", or "cookie"
 	field     string
 	primitive ir.PrimitiveType
+	// required is true for an OpenAPI parameter marked required. Non-required
+	// parameters are gated on their model field being non-null when emitted, so
+	// an unset optional parameter is omitted from the request rather than sent as
+	// the zero-value empty string (which the API may reject or misinterpret).
+	required bool
 	// binary is true for a formData parameter whose OpenAPI format is "binary"
 	// (a file upload): the multipart body builder writes it as a file part via
 	// CreateFormFile instead of a text field via WriteField (A2).
@@ -140,6 +145,9 @@ type resourceWiringPlan struct {
 
 	needsStrings bool
 	needsStrconv bool
+	// needsURL is true when at least one wired operation has a path placeholder,
+	// gating the net/url import for url.PathEscape on path substitution.
+	needsURL bool
 	// needsJSONBody is true when at least one wired create/update body is a JSON
 	// body (modelToJSONMap + json.Marshal + bytes.NewReader), gating the bytes
 	// and encoding/json imports. needsFormBody is true when at least one wired
@@ -288,6 +296,7 @@ func methodHasBody(method string) bool {
 func (plan *resourceWiringPlan) noteOpImportNeeds(op crudOperationPlan) {
 	for _, sub := range op.subs {
 		plan.needsStrings = true
+		plan.needsURL = true
 		if sub.primitive != ir.TypeString {
 			plan.needsStrconv = true
 		}
@@ -475,7 +484,7 @@ func resolveParamSubstitutions(attrs []ir.AttributeIR, params []ir.ParamIR) ([]p
 			}
 			continue
 		}
-		subs = append(subs, paramSubstitution{name: p.Name, in: p.In, field: field, primitive: prim})
+		subs = append(subs, paramSubstitution{name: p.Name, in: p.In, field: field, primitive: prim, required: p.Required})
 	}
 	return subs, true
 }
@@ -502,6 +511,7 @@ func resolveFormDataSubstitutions(attrs []ir.AttributeIR, params []ir.ParamIR) (
 			in:        p.In,
 			field:     field,
 			primitive: prim,
+			required:  p.Required,
 			// format: binary marks a file upload: the multipart body builder
 			// writes it as a file part (A2).
 			binary: strings.EqualFold(p.Schema.Format, "binary"),
@@ -698,7 +708,10 @@ func clientGuardStmt(receiver string) ast.Stmt {
 }
 
 // requestPathStmts emits the statements building reqPath from a path template,
-// substituting each {placeholder} with the value of the planned model field.
+// substituting each {placeholder} with the URL-path-escaped value of the planned
+// model field. PathEscape ensures a value containing reserved characters
+// (e.g. a name with a space or "/") is encoded as a single path segment rather
+// than producing a malformed URL or spurious extra segments.
 func requestPathStmts(op crudOperationPlan, modelVar string) []ast.Stmt {
 	stmts := make([]ast.Stmt, 0, 1+len(op.subs))
 	stmts = append(stmts, astgen.AssignSingle(astgen.Ident("reqPath"), astgen.Lit(op.template)))
@@ -709,7 +722,7 @@ func requestPathStmts(op crudOperationPlan, modelVar string) []ast.Stmt {
 				astgen.QualExpr("strings", "ReplaceAll"),
 				astgen.Ident("reqPath"),
 				astgen.Lit("{"+sub.placeholder+"}"),
-				pathValueExpr(modelVar, sub),
+				astgen.Call(astgen.QualExpr("url", "PathEscape"), pathValueExpr(modelVar, sub)),
 			)},
 			token.ASSIGN,
 		))
@@ -731,11 +744,12 @@ func requestQueryStmts(op crudOperationPlan, modelVar string) []ast.Stmt {
 		astgen.Call(astgen.Selector(astgen.Selector(astgen.Ident("httpReq"), "URL"), "Query")),
 	))
 	for _, p := range op.queryParams {
-		stmts = append(stmts, astgen.ExprStmt(astgen.Call(
+		setCall := astgen.Call(
 			astgen.Selector(astgen.Ident("query"), "Set"),
 			astgen.Lit(p.name),
 			paramValueExpr(modelVar, p),
-		)))
+		)
+		stmts = append(stmts, gateParamStmts(p, modelVar, astgen.ExprStmt(setCall))...)
 	}
 	stmts = append(stmts, astgen.AssignStmt(
 		[]ast.Expr{astgen.Selector(astgen.Selector(astgen.Ident("httpReq"), "URL"), "RawQuery")},
@@ -754,11 +768,12 @@ func requestHeaderStmts(op crudOperationPlan, modelVar string) []ast.Stmt {
 	}
 	stmts := make([]ast.Stmt, 0, len(op.headerParams))
 	for _, p := range op.headerParams {
-		stmts = append(stmts, astgen.ExprStmt(astgen.Call(
+		setCall := astgen.Call(
 			astgen.Selector(astgen.Selector(astgen.Ident("httpReq"), "Header"), "Set"),
 			astgen.Lit(p.name),
 			paramValueExpr(modelVar, p),
-		)))
+		)
+		stmts = append(stmts, gateParamStmts(p, modelVar, astgen.ExprStmt(setCall))...)
 	}
 	return stmts
 }
@@ -773,14 +788,15 @@ func requestCookieStmts(op crudOperationPlan, modelVar string) []ast.Stmt {
 	}
 	stmts := make([]ast.Stmt, 0, len(op.cookieParams))
 	for _, p := range op.cookieParams {
-		stmts = append(stmts, astgen.ExprStmt(astgen.Call(
+		addCall := astgen.Call(
 			astgen.Selector(astgen.Ident("httpReq"), "AddCookie"),
 			astgen.UnaryPtr(astgen.CompositeLit(
 				astgen.QualExpr("http", "Cookie"),
 				astgen.KeyValue("Name", astgen.Lit(p.name)),
 				astgen.KeyValue("Value", paramValueExpr(modelVar, p)),
 			)),
-		)))
+		)
+		stmts = append(stmts, gateParamStmts(p, modelVar, astgen.ExprStmt(addCall))...)
 	}
 	return stmts
 }
@@ -795,6 +811,22 @@ func pathValueExpr(modelVar string, sub pathSubstitution) ast.Expr {
 // model field as a string for the request.
 func paramValueExpr(modelVar string, p paramSubstitution) ast.Expr {
 	return modelFieldStringExpr(modelVar, p.field, p.primitive)
+}
+
+// gateParamStmts returns stmts as-is when p is required, or wrapped in a single
+// "if !<modelVar>.<field>.IsNull() { ... }" when p is optional. An unset
+// optional parameter is omitted from the request entirely rather than sent as
+// the zero-value empty string, which the API may reject or misinterpret. All
+// typed framework values implement attr.Value, whose IsNull method reports an
+// explicitly unset (null) value; user-supplied optional parameters are either
+// set (known) or null at apply time, so IsNull is the correct gate.
+func gateParamStmts(p paramSubstitution, modelVar string, stmts ...ast.Stmt) []ast.Stmt {
+	if p.required {
+		return stmts
+	}
+	sel := astgen.Selector(astgen.Ident(modelVar), p.field)
+	notNull := astgen.Unary(token.NOT, astgen.Call(astgen.Selector(sel, "IsNull")))
+	return []ast.Stmt{astgen.If(notNull, stmts...)}
 }
 
 // modelFieldStringExpr renders a typed model field as a string, formatting
@@ -1129,11 +1161,12 @@ func formBodyStmts(op crudOperationPlan, modelVar string) ([]ast.Stmt, ast.Expr)
 		astgen.CompositeLit(astgen.QualExpr("url", "Values")),
 	))
 	for _, p := range op.formDataParams {
-		stmts = append(stmts, astgen.ExprStmt(astgen.Call(
+		setCall := astgen.Call(
 			astgen.Selector(astgen.Ident("form"), "Set"),
 			astgen.Lit(p.name),
 			paramValueExpr(modelVar, p),
-		)))
+		)
+		stmts = append(stmts, gateParamStmts(p, modelVar, astgen.ExprStmt(setCall))...)
 	}
 	stmts = append(stmts, astgen.AssignSingle(
 		astgen.Ident("payload"),
@@ -1171,13 +1204,14 @@ func multipartBodyStmts(op crudOperationPlan, summary, modelVar string) ([]ast.S
 		),
 	)
 	for _, p := range op.formDataParams {
+		var inner []ast.Stmt
 		if p.binary {
 			// Binary parameter: the model field holds the upload path. Open it,
 			// create a file part named after the field using the path's base name
 			// as the filename (so the request does not leak the full local path),
 			// copy the file into the part, then close the file. Each step is
 			// error-checked and returns on failure.
-			stmts = append(stmts,
+			inner = append(inner,
 				astgen.Assign(
 					[]ast.Expr{astgen.Ident("file"), astgen.Ident("err")},
 					[]ast.Expr{astgen.Call(astgen.QualExpr("os", "Open"), paramValueExpr(modelVar, p))},
@@ -1219,12 +1253,15 @@ func multipartBodyStmts(op crudOperationPlan, summary, modelVar string) ([]ast.S
 			)
 		} else {
 			// Non-binary parameter: write it as a text field.
-			stmts = append(stmts, astgen.ExprStmt(astgen.Call(
+			inner = append(inner, astgen.ExprStmt(astgen.Call(
 				astgen.Selector(astgen.Ident("formWriter"), "WriteField"),
 				astgen.Lit(p.name),
 				paramValueExpr(modelVar, p),
 			)))
 		}
+		// An optional formData parameter is omitted from the body entirely when
+		// unset (its model field is null) rather than written as an empty field.
+		stmts = append(stmts, gateParamStmts(p, modelVar, inner...)...)
 	}
 	// Finalize the multipart body; a failure to close the writer leaves an
 	// incomplete body, so it is error-checked like the other steps.

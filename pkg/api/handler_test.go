@@ -2302,6 +2302,70 @@ func TestFunctionFromOperation_ComplexResponseFallsBackDynamic(t *testing.T) {
 	}
 }
 
+// TestFunctionOverride_MergesArgumentsByName asserts that a function_override
+// whose declared arguments redeclare an inferred function's parameters MERGES
+// by name instead of appending duplicates. A redeclared argument replaces the
+// inferred type (and preserves the inferred description/wire name); an
+// argument with no inferred counterpart is appended. Blindly appending would
+// duplicate the signature and surface "Parameter names must be unique" errors
+// at provider load.
+func TestFunctionOverride_MergesArgumentsByName(t *testing.T) {
+	body := []byte(`{
+		"openapi": "3.0.1",
+		"info": {"title": "Search API", "version": "1.0.0"},
+		"config": "provider:\n  name: search_provider\n  version: \"1.0.0\"\nfunction_overrides:\n  - operation: searchRecords\n    name: search\n    arguments:\n      - name: q\n        type: string\n      - name: limit\n        type: string\n      - name: extra\n        type: boolean\n",
+		"paths": {
+			"/search": {
+				"get": {
+					"operationId": "searchRecords",
+					"parameters": [
+						{"name": "q", "in": "query", "required": true, "description": "The search query.", "schema": {"type": "string"}},
+						{"name": "limit", "in": "query", "description": "Max results.", "schema": {"type": "integer"}}
+					],
+					"responses": {"200": {"description": "ok"}}
+				}
+			}
+		}
+	}`)
+
+	resp := Validate(body)
+	if !resp.Valid {
+		t.Fatalf("expected valid response, got diagnostics: %+v", resp.Diagnostics)
+	}
+	if len(resp.IRPreview.Functions) != 1 {
+		t.Fatalf("expected 1 function, got %d", len(resp.IRPreview.Functions))
+	}
+	fn := resp.IRPreview.Functions[0]
+	if fn.Name != "search" {
+		t.Errorf("function name = %q, want %q (override rename)", fn.Name, "search")
+	}
+	// Two inferred args (q, limit) plus one override-only arg (extra) => 3, not 5.
+	if len(fn.Arguments) != 3 {
+		t.Fatalf("expected 3 merged arguments (no duplicates), got %d: %+v", len(fn.Arguments), fn.Arguments)
+	}
+	byName := map[string]ir.AttributeIR{}
+	for _, a := range fn.Arguments {
+		if _, dup := byName[a.Name]; dup {
+			t.Errorf("duplicate argument name %q in merged signature: %+v", a.Name, fn.Arguments)
+		}
+		byName[a.Name] = a
+	}
+	// The redeclared "limit" argument takes the override's type (string), not the
+	// inferred integer — the override corrects the type.
+	if byName["limit"].Schema.Type != ir.TypeString {
+		t.Errorf("limit type = %q, want %q (override replaces inferred type)", byName["limit"].Schema.Type, ir.TypeString)
+	}
+	// The inferred description is preserved for a redeclared argument (the
+	// override carries no description).
+	if byName["q"].Description != "The search query." {
+		t.Errorf("q description = %q, want inferred description preserved", byName["q"].Description)
+	}
+	// The override-only argument is appended with the declared type.
+	if byName["extra"].Schema.Type != ir.TypeBool {
+		t.Errorf("extra type = %q, want %q (override-only argument appended)", byName["extra"].Schema.Type, ir.TypeBool)
+	}
+}
+
 // TestActionFromOverride_PreflightMappings asserts the F3 override surface:
 // modify_plan_operation / validate_config_operation parse into the action's
 // preflight mappings, and declaring modify_plan_operation implies the

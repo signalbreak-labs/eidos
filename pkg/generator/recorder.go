@@ -200,12 +200,6 @@ func CollectFromProviderIR(provider *ir.ProviderIR, opts CollectOptions) []FileE
 
 		rec.Record("internal/provider/validators.go", "custom schema validators")
 
-		if len(provider.Resources) > 0 {
-			rec.Record("internal/protocol/value_mappers.go", "tftypes.Value to Go struct converters")
-			if opts.IncludeTests {
-				rec.Record("internal/protocol/value_mappers_test.go", "value mapper round-trip tests")
-			}
-		}
 		if AnyResourceWired(provider.Resources) || AnyDataSourceWired(provider.DataSources) || AnyEphemeralWired(provider.EphemeralResources) || AnyActionSendsBody(provider.Actions) {
 			rec.Record("internal/provider/json_convert.go", "JSON/model conversion helpers for wired CRUD bodies")
 		}
@@ -229,7 +223,6 @@ func collectProviderCore(rec *Recorder, opts CollectOptions) {
 func collectResourceFiles(rec *Recorder, res ir.ResourceIR, opts CollectOptions) {
 	name := fileName(res.Name)
 	rec.Record(fmt.Sprintf("internal/provider/resource_%s.go", name), fmt.Sprintf("resource %s", displayName(res.Name, res.FullName)))
-	rec.Record(fmt.Sprintf("internal/provider/model_%s.go", name), fmt.Sprintf("API model for resource %s", res.Name))
 	if opts.IncludeTests {
 		rec.Record(fmt.Sprintf("internal/provider/resource_%s_test.go", name), fmt.Sprintf("unit tests for resource %s", res.Name))
 		// A scaffolded (unwired) resource gets no acceptance test: its CRUD

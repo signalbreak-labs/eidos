@@ -48,7 +48,7 @@ func TestClientFiles_Render(t *testing.T) {
 		"baseURL:     \"https://api.example.com\"",
 		"User-Agent",
 		"func WithLogging",
-		"logging           LoggingConfig",
+		"logging            LoggingConfig",
 		"NewLoggingRoundTripper",
 		// Per-operation security (REMAINING_GAPS §1): scheme-keyed interceptors
 		// and the WithSchemes request option that selectively applies them.

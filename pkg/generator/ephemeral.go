@@ -246,6 +246,9 @@ func generateEphemeralFile(er ir.EphemeralResourceIR, clientImport string) *ast.
 		if wiring.needsStrconv {
 			f.AddImport("strconv", "")
 		}
+		if wiring.needsURL {
+			f.AddImport("net/url", "")
+		}
 	}
 	// The schema/validator package is only referenced by ephemeralBlockExpr when a
 	// List/Set block emits a validator.List/validator.Set composite, which in turn
@@ -626,6 +629,17 @@ func ephemeralCollectionAttributeExpr(attr ir.AttributeIR, attrPath, resourceNam
 		if strings.Contains(attrPath, ".") {
 			return nil
 		}
+		return astgen.CompositeLit(astgen.QualExpr("ephemeralschema", "DynamicAttribute"), ephemeralAttributeValues(attr, nil)...)
+	}
+	// A collection whose element is an object (or nested collection) that
+	// contains a dynamic at any depth cannot be rendered as a typed framework
+	// collection: the framework rejects any collection whose element type
+	// contains a dynamic (fwtype.ContainsCollectionWithDynamic). Emit the whole
+	// collection as a DynamicAttribute, per the framework's own guidance. This is
+	// valid in an object-or-top-level context; an enclosing collection's
+	// ContainsNestedDynamic check promotes any collection ancestor, so this is
+	// never reached inside a collection.
+	if schema.ContainsNestedDynamic(elem) {
 		return astgen.CompositeLit(astgen.QualExpr("ephemeralschema", "DynamicAttribute"), ephemeralAttributeValues(attr, nil)...)
 	}
 	switch attr.Schema.Collection.Kind {

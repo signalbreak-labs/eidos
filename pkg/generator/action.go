@@ -275,6 +275,9 @@ func generateActionFile(a ir.ActionIR, clientImport string) *ast.File {
 		if wiring.needsStrconv {
 			f.AddImport("strconv", "")
 		}
+		if wiring.needsURL {
+			f.AddImport("net/url", "")
+		}
 	}
 	// The model struct references types.* via modelFieldType for every config
 	// attribute field (modelFieldType always returns a types.* expression), and
@@ -495,10 +498,14 @@ func frameworkActionAttributeExpr(attr ir.AttributeIR) ast.Expr {
 // unrepresentable in the framework (G12).
 func actionCollectionAttributeExpr(attr ir.AttributeIR) ast.Expr {
 	elem := schema.DynamicUnionElement(attr.Schema.Collection.ElementType)
-	// A collection whose element is dynamic/null cannot be represented as a
-	// framework collection (List{ElementType: DynamicType} is rejected by the
-	// framework); map it to a DynamicAttribute (G12).
-	if elem.Type == ir.TypeDynamic || elem.Type == ir.TypeNull {
+	// A collection whose element is, or contains at any depth, a dynamic-typed
+	// shape cannot be rendered as a typed framework collection: the framework
+	// rejects any collection whose element type contains a dynamic
+	// (fwtype.ContainsCollectionWithDynamic). Emit the whole collection as a
+	// DynamicAttribute instead, per the framework's own guidance. An enclosing
+	// collection's ContainsNestedDynamic check promotes any collection ancestor,
+	// so this is never reached inside a collection (G12).
+	if schema.ContainsNestedDynamic(elem) {
 		return astgen.CompositeLit(astgen.QualExpr("schema", "DynamicAttribute"), actionAttributeValues(attr, nil)...)
 	}
 	switch attr.Schema.Collection.Kind {

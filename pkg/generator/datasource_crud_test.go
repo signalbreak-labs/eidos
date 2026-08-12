@@ -119,6 +119,9 @@ func TestWiredListDataSource_None_Render(t *testing.T) {
 
 	for _, want := range []string{
 		`params := url.Values{}`,
+		// Optional query parameters are gated on a non-null value so an unset
+		// parameter is omitted rather than sent as the zero value.
+		`if !config.Limit.IsNull() {`,
 		`params.Set("limit", strconv.FormatInt(config.Limit.ValueInt64(), 10))`,
 		// Single-page fetch passes a nil next callback.
 		`client.ListAllPages(ctx, params, fetch, nil)`,
@@ -325,5 +328,84 @@ func TestListPaginationConfig_Defaults(t *testing.T) {
 	}
 	if pageParam != "page" || cursorField != "cursor" || nextLinkRel != "next" {
 		t.Fatalf("defaults = (%q, %q, %q), want (page, cursor, next)", pageParam, cursorField, nextLinkRel)
+	}
+}
+
+// singlePageDataSourceIR returns a wired single-object data source (not a list
+// data source) whose Read endpoint carries a `page` query parameter mapped to a
+// `page` schema attribute, plus a Computed `name` output attribute. It mirrors the
+// Gigamon load_all_* shape: an envelope/single-object response from a paginated
+// endpoint, where the data source returns one page only.
+func singlePageDataSourceIR() ir.DataSourceIR {
+	return ir.DataSourceIR{
+		Name:     "roles",
+		TypeName: "mycloud_roles",
+		Schema: ir.ObjectSchemaIR{
+			Attributes: []ir.AttributeIR{
+				{Name: "page", Optional: true, Schema: ir.SchemaIR{Type: ir.TypeString}},
+				{Name: "name", Computed: true, Schema: ir.SchemaIR{Type: ir.TypeString}},
+			},
+		},
+		ReadMapping: ir.OperationMappingIR{
+			Method:       "GET",
+			PathTemplate: "/roles",
+			SuccessCodes: []int{200},
+			QueryParams: []ir.ParamIR{
+				{Name: "page", In: "query", Schema: ir.SchemaIR{Type: ir.TypeString}},
+			},
+		},
+	}
+}
+
+// TestWiredDataSource_SinglePageWarning_Render asserts that a single-object
+// data source whose endpoint carries a pagination query parameter emits a
+// non-fatal AddWarning when that argument is unset, so the single-page
+// limitation is surfaced rather than silently truncating a paginated endpoint
+// (REMAINING_GAPS §4).
+func TestWiredDataSource_SinglePageWarning_Render(t *testing.T) {
+	ds := singlePageDataSourceIR()
+
+	file := DataSourceFile(ds, testClientImport)
+	var buf bytes.Buffer
+	if err := file.Render(&buf); err != nil {
+		t.Fatalf("Render() error = %v", err)
+	}
+	got := buf.String()
+
+	// The warning is gated on the page argument being null (unset) so a
+	// practitioner who explicitly selects a page is not warned.
+	if !strings.Contains(got, "if config.Page.IsNull() {") {
+		t.Errorf("expected single-page warning gated on config.Page.IsNull(), missing in body:\n%s", got)
+	}
+	if !strings.Contains(got, "AddWarning") {
+		t.Errorf("expected AddWarning for single-page paginated data source, missing in body:\n%s", got)
+	}
+	if !strings.Contains(got, "Single-page result") {
+		t.Errorf("expected 'Single-page result' warning summary, missing in body:\n%s", got)
+	}
+	if !strings.Contains(got, `\"page\"`) {
+		t.Errorf("expected warning to name the page argument, missing in body:\n%s", got)
+	}
+}
+
+// TestWiredDataSource_NoPaginationParamNoWarning asserts that a single-object
+// data source whose endpoint has no pagination query parameter does NOT emit the
+// single-page warning (there is no pagination to truncate).
+func TestWiredDataSource_NoPaginationParamNoWarning(t *testing.T) {
+	ds := singlePageDataSourceIR()
+	// Replace the page query param with a non-pagination filter param.
+	ds.ReadMapping.QueryParams[0] = ir.ParamIR{Name: "filter", In: "query", Schema: ir.SchemaIR{Type: ir.TypeString}}
+	// Keep the schema attribute named for the filter so wiring stays valid.
+	ds.Schema.Attributes[0] = ir.AttributeIR{Name: "filter", Optional: true, Schema: ir.SchemaIR{Type: ir.TypeString}}
+
+	file := DataSourceFile(ds, testClientImport)
+	var buf bytes.Buffer
+	if err := file.Render(&buf); err != nil {
+		t.Fatalf("Render() error = %v", err)
+	}
+	got := buf.String()
+
+	if strings.Contains(got, "Single-page result") {
+		t.Errorf("non-paginated data source must not emit the single-page warning, but it did:\n%s", got)
 	}
 }

@@ -457,8 +457,10 @@ func generateMapperTestModule(t *testing.T, r ir.ResourceIR) string {
 	return tmp
 }
 
-// TestTestFiles verifies that TestFiles aggregates provider, resource, data
-// source, and mapper test files in a deterministic order.
+// TestTestFiles verifies that TestFiles aggregates provider, resource, and data
+// source test files in a deterministic order. (The legacy value-mapper test
+// file is no longer part of the generated provider suite — CRUD bodies use
+// map[string]any conversion — so it is not expected here.)
 func TestTestFiles(t *testing.T) {
 	pir := sampleProviderIR()
 	// A wired resource (full CRUD mapping) so the acceptance test file is
@@ -473,7 +475,6 @@ func TestTestFiles(t *testing.T) {
 		"internal/provider/resource_pet_test.go",
 		"internal/provider/resource_pet_acceptance_test.go",
 		"internal/provider/data_source_pets_test.go",
-		"internal/protocol/value_mappers_test.go",
 	}
 	if len(files) != len(wantPaths) {
 		t.Fatalf("TestFiles() returned %d files, want %d", len(files), len(wantPaths))
@@ -485,8 +486,9 @@ func TestTestFiles(t *testing.T) {
 	}
 }
 
-// TestTestFiles_NoResources verifies that TestFiles omits the mapper test file
-// when the provider defines no resources.
+// TestTestFiles_NoResources verifies that TestFiles emits only the provider and
+// data source test files when the provider defines no resources. (The legacy
+// value-mapper test file is never emitted now; this guard keeps that explicit.)
 func TestTestFiles_NoResources(t *testing.T) {
 	pir := ir.ProviderIR{
 		Name:     "mycloud",

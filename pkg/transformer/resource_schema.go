@@ -77,10 +77,12 @@ func schemaIRFromSpecRecursive(spec SchemaSpec) ir.SchemaIR {
 }
 
 // nestedAttributesFromSpec builds the nested attribute list for an object-typed
-// SchemaSpec. Nested attributes are read-only (Computed) because the resource
-// schema's writable surface is the top-level attribute set reconciled against the
-// request body; deeper nesting is rendered as SingleNestedAttribute /
-// ListNestedAttribute state whose values come from the API response.
+// SchemaSpec. Nested attributes are read-only (Computed) by default; a managed
+// resource's writable nested surface is reconciled against the request body
+// after the fact by reconcileNestedRequestFlags, which promotes request-required
+// nested fields to Required/Optional so the practitioner can supply them on
+// create. Deeper nesting that the request does not carry stays Computed
+// (server-managed).
 func nestedAttributesFromSpec(spec SchemaSpec) []ir.AttributeIR {
 	names := make([]string, 0, len(spec.Properties))
 	for name := range spec.Properties {
@@ -98,6 +100,147 @@ func nestedAttributesFromSpec(spec SchemaSpec) []ir.AttributeIR {
 		})
 	}
 	return attrs
+}
+
+// reconcileNestedRequestFlags walks the nested attributes within a managed
+// resource attribute's schema and re-derives their Required/Optional/Computed
+// flags from the matching request-body property, mirroring the top-level
+// reconciliation in ManagedResourceSchema (G18). nestedAttributesFromSpec marks
+// every nested attribute Computed, which is correct for response-only shapes but
+// wrong for objects the practitioner must supply on create: a request-required
+// nested field becomes Required, a request-optional field becomes Optional, and
+// only request-absent fields stay Computed. The type structure is unchanged; only
+// the flags are corrected.
+//
+// responseEchoes reports whether the response also returns this attribute (and
+// thus its nested children). When true (the attribute is in the state shape), an
+// optional request field is Optional+Computed: the practitioner may set it and the
+// provider may repopulate it after apply (G18). When false (a request-only
+// attribute the response does not echo), an optional request field is Optional
+// only — the server never returns it, so Computed would leave the framework
+// expecting a value the provider cannot supply, causing inconsistency after
+// apply. Required fields are Required either way; request-absent fields are
+// Computed only when the response echoes the parent (otherwise they cannot
+// occur, since a request-only attribute's children all come from the request).
+//
+// requestProp is the request body's version of the attribute; a requestProp with
+// no Properties/Items means the request does not carry nested shape for this
+// attribute, so its nested children keep their existing flags.
+func reconcileNestedRequestFlags(s *ir.SchemaIR, requestProp SchemaSpec, responseEchoes bool) {
+	if s == nil {
+		return
+	}
+	// Descend through collections to the element schema, matching the request
+	// property's items (array) or additionalProperties (map). A collection
+	// element inherits the parent's response-echo status: the response returns
+	// the element only if it returns the enclosing collection.
+	if s.Collection != nil {
+		if s.Collection.Kind == ir.Map {
+			if requestProp.AdditionalProperties != nil {
+				reconcileNestedRequestFlags(&s.Collection.ElementType, *requestProp.AdditionalProperties, responseEchoes)
+			}
+			return
+		}
+		if requestProp.Items != nil {
+			reconcileNestedRequestFlags(&s.Collection.ElementType, *requestProp.Items, responseEchoes)
+		}
+		return
+	}
+	if len(s.Attributes) == 0 || len(requestProp.Properties) == 0 {
+		return
+	}
+	reqProps := make(map[string]struct{}, len(requestProp.Properties))
+	for n := range requestProp.Properties {
+		reqProps[n] = struct{}{}
+	}
+	reqRequired := make(map[string]bool, len(requestProp.Required))
+	for _, n := range requestProp.Required {
+		reqRequired[n] = true
+	}
+	for i := range s.Attributes {
+		a := &s.Attributes[i]
+		_, inReq := reqProps[a.WireName]
+		switch {
+		case reqRequired[a.WireName]:
+			a.Required = true
+			a.Optional = false
+			a.Computed = false
+		case inReq:
+			a.Optional = true
+			a.Required = false
+			// When the response also returns this field, the provider may
+			// repopulate it after apply (G18). A request-only attribute's child
+			// is never server-populated, so it stays Optional only.
+			a.Computed = responseEchoes
+		default:
+			// A request-absent nested field is server-managed only when the
+			// response returns the parent; a request-only attribute has no such
+			// children (they all come from the request), so this arm is unreachable
+			// there but kept defensive.
+			a.Computed = responseEchoes
+			a.Optional = false
+			a.Required = false
+		}
+		// Recurse into the child's nested schema against the request's child,
+		// propagating the response-echo status.
+		if child, ok := requestProp.Properties[a.WireName]; ok {
+			reconcileNestedRequestFlags(&a.Schema, child, responseEchoes)
+		}
+	}
+}
+
+// applyManagedAttributeFlags sets the Required/Optional/Computed flags on a
+// managed-resource attribute derived from a response property, reconciling it
+// against the create request body so writable inputs stay writable and
+// server-assigned identifiers stay Computed. inRequest reports whether the
+// property appears in the create request body; requestRequired is the request
+// body's required-property set; requestSpec is the create request body schema
+// (nil when there is no request body), used to reconcile nested children. It
+// returns true when the attribute is the resource identifier ("id"), so the
+// caller can track whether the state shape already carries an id.
+func applyManagedAttributeFlags(
+	attr *ir.AttributeIR,
+	name, snake string,
+	inRequest bool,
+	requestRequired map[string]bool,
+	requestSpec *SchemaSpec,
+) bool {
+	// State-shape attributes are always echoed by the response, so an optional
+	// input the response also returns is Optional+Computed: the practitioner may
+	// set it, and the provider may populate it from the server (a create/read
+	// response that carries the field must not be "inconsistent after apply" just
+	// because the practitioner left it unset) (G18).
+	switch {
+	case requestRequired[name]:
+		attr.Required = true
+	case inRequest:
+		attr.Optional = true
+		attr.Computed = true
+	default:
+		attr.Computed = true
+	}
+	// A server-assigned identifier is Computed even when the request body
+	// happens to list it; the provider must not require the practitioner to
+	// supply the id on create. A practitioner-set identifier — one the create
+	// request body declares — keeps its Required/Optional semantics so
+	// resources whose name is set on create are distinguished from
+	// server-assigned ids (REMAINING_GAPS §3/#11).
+	if (snake == "id" || name == "id") && !inRequest && !requestRequired[name] {
+		attr.Required = false
+		attr.Optional = false
+		attr.Computed = true
+	}
+	// Reconcile nested children against the request body so writable nested
+	// fields (required/optional in the request body) are Required/Optional
+	// rather than unconditionally Computed. Only attributes the request body
+	// carries can expose writable nested fields; response-only attributes keep
+	// their Computed nested children (server-managed).
+	if requestSpec != nil {
+		if reqProp, ok := requestSpec.Properties[name]; ok {
+			reconcileNestedRequestFlags(&attr.Schema, reqProp, true)
+		}
+	}
+	return snake == "id" || name == "id"
 }
 
 // ManagedResourceSchema builds the object schema for a managed resource inferred
@@ -160,42 +303,14 @@ func ManagedResourceSchema(c ResourceCRUD) (ir.ObjectSchemaIR, string) {
 	for _, name := range names {
 		prop := stateSpec.Properties[name]
 		snake := SanitizeAttributeName(name)
-		if snake == "id" || name == "id" {
-			hasID = true
-		}
 		attr := ir.AttributeIR{
 			Name:     snake,
 			WireName: name,
 			Schema:   schemaIRFromSpecRecursive(prop),
 		}
 		_, inRequest := requestProps[name]
-		_, inState := stateSpec.Properties[name]
-		switch {
-		case requestRequired[name]:
-			attr.Required = true
-		case inRequest:
-			attr.Optional = true
-			// An optional input the response also returns is Optional+Computed:
-			// the practitioner may set it, and the provider may populate it from
-			// the server (a create/read response that carries the field must not
-			// be "inconsistent after apply" just because the practitioner left it
-			// unset) (G18).
-			if inState {
-				attr.Computed = true
-			}
-		default:
-			attr.Computed = true
-		}
-		// A server-assigned identifier is Computed even when the request body
-		// happens to list it; the provider must not require the practitioner to
-		// supply the id on create. A practitioner-set identifier — one the create
-		// request body declares — keeps its Required/Optional semantics so
-		// resources whose name is set on create are distinguished from
-		// server-assigned ids (REMAINING_GAPS §3/#11).
-		if (snake == "id" || name == "id") && !inRequest && !requestRequired[name] {
-			attr.Required = false
-			attr.Optional = false
-			attr.Computed = true
+		if applyManagedAttributeFlags(&attr, name, snake, inRequest, requestRequired, requestSpec) {
+			hasID = true
 		}
 		attrs = append(attrs, attr)
 	}
@@ -373,6 +488,12 @@ func appendRequestOnlyAttributes(attrs []ir.AttributeIR, requestSpec *SchemaSpec
 		} else {
 			attr.Optional = true
 		}
+		// Reconcile nested children against the request body. A request-only
+		// attribute is not echoed by the response, so its optional nested inputs
+		// are Optional only (not Computed): the server never returns them, so
+		// marking them Computed would leave the framework expecting a value the
+		// provider cannot supply. Required nested inputs become Required.
+		reconcileNestedRequestFlags(&attr.Schema, requestSpec.Properties[name], false)
 		attrs = append(attrs, attr)
 		presentNames[snake] = true
 	}

@@ -328,14 +328,6 @@
     "reason": "retry logic with exponential backoff"
   },
   {
-    "path": "internal/protocol/value_mappers.go",
-    "reason": "tftypes.Value to Go struct converters"
-  },
-  {
-    "path": "internal/protocol/value_mappers_test.go",
-    "reason": "value mapper round-trip tests"
-  },
-  {
     "path": "internal/provider/action_create_pull_request.go",
     "reason": "action mycloud_create_pull_request"
   },
@@ -538,34 +530,6 @@
   {
     "path": "internal/provider/list_list_workspaces.go",
     "reason": "list resource mycloud_list_workspaces"
-  },
-  {
-    "path": "internal/provider/model_config.go",
-    "reason": "API model for resource config"
-  },
-  {
-    "path": "internal/provider/model_instance.go",
-    "reason": "API model for resource instance"
-  },
-  {
-    "path": "internal/provider/model_network.go",
-    "reason": "API model for resource network"
-  },
-  {
-    "path": "internal/provider/model_project.go",
-    "reason": "API model for resource project"
-  },
-  {
-    "path": "internal/provider/model_secret.go",
-    "reason": "API model for resource secret"
-  },
-  {
-    "path": "internal/provider/model_stack.go",
-    "reason": "API model for resource stack"
-  },
-  {
-    "path": "internal/provider/model_workspace.go",
-    "reason": "API model for resource workspace"
   },
   {
     "path": "internal/provider/provider.go",

@@ -305,12 +305,20 @@ func TestRenderExampleArguments_CollectionsAndObjects(t *testing.T) {
 	}
 }
 
-// TestSchemaTypeName_UnknownFallback verifies that an unrecognized primitive
-// type is surfaced as "Unknown" rather than silently defaulting to "String".
-func TestSchemaTypeName_UnknownFallback(t *testing.T) {
+// TestSchemaTypeName_DynamicFallback verifies that an unrecognized primitive
+// type (e.g. TypeNull, or an empty type that the schema renderer degrades to a
+// DynamicAttribute) is surfaced as "Dynamic" — matching the attribute the
+// generator actually emits — rather than silently defaulting to "String" or the
+// opaque "Unknown".
+func TestSchemaTypeName_DynamicFallback(t *testing.T) {
 	got := schemaTypeName(ir.SchemaIR{Type: ir.TypeNull})
-	if got != "Unknown" {
-		t.Errorf("schemaTypeName(TypeNull) = %q, want %q", got, "Unknown")
+	if got != "Dynamic" {
+		t.Errorf("schemaTypeName(TypeNull) = %q, want %q", got, "Dynamic")
+	}
+	// An empty type with no collection/union/object shape also renders as a
+	// DynamicAttribute, so its docs label must be "Dynamic" too.
+	if got := schemaTypeName(ir.SchemaIR{}); got != "Dynamic" {
+		t.Errorf("schemaTypeName(empty) = %q, want %q", got, "Dynamic")
 	}
 }
 

@@ -113,6 +113,9 @@ func TestWiredListResource_Render(t *testing.T) {
 		// Client guard through the pushError closure.
 		`l.client == nil`,
 		// Page fetching.
+		// Optional query parameters are gated on a non-null value so an unset
+		// parameter is omitted rather than sent as the empty string.
+		`if !config.Status.IsNull() {`,
 		`params.Set("status", config.Status.ValueString())`,
 		`client.ListAllPages(ctx, params, fetch, nil)`,
 		`l.client.Do(httpReq)`,

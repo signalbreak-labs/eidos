@@ -426,15 +426,41 @@ func headerNames(headers map[string]*parser.Header) []string {
 // deep-nesting path.
 const maxSchemaDepth = 1000
 
-// schemaMemo caches the SchemaSpec conversion of a non-ref parser.Schema so a
-// shared sub-schema in a DAG is converted once per top-level conversion instead
-// of once per path (exponential on real-world specs). It is scoped to a single
-// schemaSpecFromParser call, so concurrent conversions (e.g. the API server
-// handling requests in parallel) never share a cache.
-type schemaMemo map[*parser.Schema]*SchemaSpec
+// maxCyclicDepth bounds how many cyclic $ref edges schemaSpecFromParser descends
+// along a single path before cutting the cycle to an opaque (scalar-only)
+// boundary. It preserves the first-entry properties of a circular schema (the
+// target's direct fields are emitted) while keeping the generated IR finite and
+// shallow: a cyclic ref is expanded up to maxCyclicDepth levels, then deeper
+// re-entry is treated as an opaque boundary instead of recursing forever.
+//
+// This is the resolution to the circular-schema tension documented in
+// docs/OPEN_ISSUE-circular-schema-generation.md: cutting at the ref holder
+// (depth 0) regressed first-entry circular refs to DynamicAttribute, while
+// unbounded expansion produced an enormous IR that hung generation. Expanding a
+// fixed number of levels keeps first-entry properties and bounds output size,
+// and — because cycleDepth is the only path-varying dimension for an Opaque ref
+// (cyclic refs are not added to the visited set) — the conversion of a schema at
+// a given cycleDepth is path-independent, so memoizing on (schema, cycleDepth)
+// is sound.
+const maxCyclicDepth = 2
+
+// schemaMemo caches the SchemaSpec conversion of a (non-ref parser.Schema,
+// cycleDepth) pair so a shared sub-schema in a DAG is converted once per
+// top-level conversion instead of once per path (exponential on real-world
+// specs). The cycleDepth dimension is required for cyclic schemas: a schema
+// reached after k cyclic-ref descents has a different (bounded) shape than the
+// same schema reached after k+1, and the cycleDepth key keeps those distinct
+// without conflating them. The memo is scoped to a single schemaSpecFromParser
+// call, so concurrent conversions (e.g. the API server handling requests in
+// parallel) never share a cache.
+type schemaMemoKey struct {
+	schema     *parser.Schema
+	cycleDepth int
+}
+type schemaMemo map[schemaMemoKey]*SchemaSpec
 
 func schemaSpecFromParser(spec *parser.Spec, s *parser.Schema, diags *diagnostics.Diagnostics) *SchemaSpec {
-	return schemaSpecFromParserDepth(spec, s, 0, nil, make(schemaMemo), diags)
+	return schemaSpecFromParserDepth(spec, s, 0, 0, nil, make(schemaMemo), diags)
 }
 
 // schemaSpecFromParserDepth converts a parser.Schema into a SchemaSpec, recursing
@@ -444,31 +470,66 @@ func schemaSpecFromParser(spec *parser.Spec, s *parser.Schema, diags *diagnostic
 // not just a top-level request/response $ref — carries the referenced shape
 // instead of falling back to Dynamic.
 //
-// Cycle safety is layered: (1) the parser marks schemas participating in direct
-// $ref cycles as Opaque, which the guard below treats as an opaque boundary; (2)
+// cycleDepth counts how many cyclic (Opaque) $ref edges have been descended on
+// the current path. It bounds circular-schema expansion: a cyclic ref is
+// expanded up to maxCyclicDepth levels (preserving first-entry properties) and
+// then cut to an opaque boundary, so the IR stays finite and shallow instead of
+// re-expanding the dense component graph on every operation.
+//
+// Cycle safety is layered: (1) the parser marks $ref cycles as Opaque on the
+// ref holder, and the Opaque branch below bounds expansion by cycleDepth; (2)
 // resolveSchemaRef stops following a chained ref at a cycle; (3) the path-local
-// visited set passed to each descent stops a $ref re-entered via object
-// properties (a cross-property cycle like A.b -> $ref B, B.a -> $ref A) from
-// recursing to maxSchemaDepth and generating pathological nesting. The visited
-// set is copied only when a ref is resolved, so sibling properties (which do not
-// grow the path) share it without interfering with each other.
-func schemaSpecFromParserDepth(spec *parser.Spec, s *parser.Schema, depth int, visited map[string]bool, memo schemaMemo, diags *diagnostics.Diagnostics) *SchemaSpec {
+// visited set passed to each *acyclic* descent stops a $ref re-entered via
+// object properties (a cross-property cycle the parser did not mark Opaque,
+// e.g. a synthetic or malformed spec) from recursing to maxSchemaDepth. Cyclic
+// (Opaque) refs are intentionally not added to visited, so the conversion of a
+// schema at a given cycleDepth is path-independent and memoizing on
+// (schema, cycleDepth) is sound. The visited set is copied only when an acyclic
+// ref is resolved, so sibling properties (which do not grow the path) share it
+// without interfering with each other.
+func schemaSpecFromParserDepth(spec *parser.Spec, s *parser.Schema, depth, cycleDepth int, visited map[string]bool, memo schemaMemo, diags *diagnostics.Diagnostics) *SchemaSpec {
 	if s == nil {
 		return nil
 	}
 	// Resolve a nested $ref against the component schemas before processing, so
 	// referenced properties/items/additionalProperties contribute their real
-	// shape. If the same ref is already on this descent path, stop: re-entering
-	// it is a cross-property cycle, and descending would recurse to maxSchemaDepth
-	// and emit pathological nesting. Treat the boundary as opaque (scalar fields
-	// only, no descent), matching the Opaque handling below.
+	// shape.
 	if s.Ref != "" && spec != nil {
+		refName := refBaseName(s.Ref)
+		if s.Opaque {
+			// A cyclic $ref. Bound expansion by cycleDepth so the circular schema
+			// is expanded a fixed number of levels (preserving first-entry
+			// properties) and then cut to an opaque boundary, instead of
+			// re-expanding the cycle on every operation. Cyclic refs are not
+			// added to the visited set: cycleDepth is the only path-varying
+			// dimension, which keeps the (schema, cycleDepth) memo sound.
+			if cycleDepth >= maxCyclicDepth {
+				return &SchemaSpec{
+					Type:     schemaTypeString(s.Type),
+					Format:   s.Format,
+					Nullable: s.Nullable,
+					RefName:  refName,
+				}
+			}
+			resolved := resolveSchemaRef(spec, s)
+			out := schemaSpecFromParserDepth(spec, resolved, depth+1, cycleDepth+1, visited, memo, diags)
+			if out != nil && out.RefName == "" {
+				out.RefName = refName
+			}
+			return out
+		}
+		// An acyclic $ref. The visited set backstops cycles the parser did not
+		// mark Opaque (a synthetic or malformed spec): if the same ref is already
+		// on this descent path, stop — re-entering it is a cross-property cycle,
+		// and descending would recurse to maxSchemaDepth and emit pathological
+		// nesting. Treat the boundary as opaque (scalar fields only, no descent),
+		// matching the Opaque handling below.
 		if visited[s.Ref] {
 			return &SchemaSpec{
 				Type:     schemaTypeString(s.Type),
 				Format:   s.Format,
 				Nullable: s.Nullable,
-				RefName:  refBaseName(s.Ref),
+				RefName:  refName,
 			}
 		}
 		// Copy the path-local visited set and add this ref so descendants see it,
@@ -479,16 +540,15 @@ func schemaSpecFromParserDepth(spec *parser.Spec, s *parser.Schema, depth int, v
 		}
 		pathVisited[s.Ref] = true
 		visited = pathVisited
-		refName := refBaseName(s.Ref)
-		s = resolveSchemaRef(spec, s)
-		out := schemaSpecFromParserDepth(spec, s, depth+1, visited, memo, diags)
+		resolved := resolveSchemaRef(spec, s)
+		out := schemaSpecFromParserDepth(spec, resolved, depth+1, cycleDepth, visited, memo, diags)
 		if out != nil && out.RefName == "" {
 			out.RefName = refName
 		}
 		return out
 	}
-	// A non-ref schema the parser marked Opaque (a direct self-reference via
-	// Properties rather than a $ref) is an opaque boundary too: keep its scalar
+	// A non-ref schema the parser marked Opaque (e.g. an additionalProperties
+	// bare $ref that closes a cycle) is an opaque boundary too: keep its scalar
 	// fields but do not descend, which would recurse forever (M-41).
 	if s.Opaque {
 		return &SchemaSpec{
@@ -497,20 +557,21 @@ func schemaSpecFromParserDepth(spec *parser.Spec, s *parser.Schema, depth int, v
 			Nullable: s.Nullable,
 		}
 	}
-	// A non-ref schema is converted once and memoized: the schema graph is a DAG
-	// whose shared sub-schemas would otherwise be re-converted along every path
-	// (exponential on real-world specs). With the Opaque boundaries above, a
-	// schema participating in a $ref cycle is cut before descent, so the
-	// conversion result is path-independent and memoizing on the schema pointer
-	// is sound. The cached result is returned as a shallow copy so callers that
-	// stamp a RefName (operationFromParser, unionSpecsFromParser) never mutate
-	// the cache.
-	if cached, ok := memo[s]; ok {
+	// A non-ref schema is converted once per (schema, cycleDepth) and memoized:
+	// the schema graph is a DAG whose shared sub-schemas would otherwise be
+	// re-converted along every path (exponential on real-world specs). With the
+	// cycleDepth bound above, a schema participating in a $ref cycle is cut after
+	// a fixed number of levels, so the conversion result depends only on
+	// (schema, cycleDepth) and memoizing on that pair is sound. The cached result
+	// is returned as a shallow copy so callers that stamp a RefName
+	// (operationFromParser, unionSpecsFromParser) never mutate the cache.
+	key := schemaMemoKey{schema: s, cycleDepth: cycleDepth}
+	if cached, ok := memo[key]; ok {
 		cp := *cached
 		return &cp
 	}
-	out := schemaSpecFromParserDepthInner(spec, s, depth, visited, memo, diags)
-	memo[s] = out
+	out := schemaSpecFromParserDepthInner(spec, s, depth, cycleDepth, visited, memo, diags)
+	memo[key] = out
 	return out
 }
 
@@ -518,7 +579,7 @@ func schemaSpecFromParserDepth(spec *parser.Spec, s *parser.Schema, depth int, v
 // SchemaSpec, recursing into items, object properties, and additionalProperties.
 // It is the memoized body of schemaSpecFromParserDepth; callers must go through
 // the memoizing wrapper so shared sub-schemas are converted once.
-func schemaSpecFromParserDepthInner(spec *parser.Spec, s *parser.Schema, depth int, visited map[string]bool, memo schemaMemo, diags *diagnostics.Diagnostics) *SchemaSpec {
+func schemaSpecFromParserDepthInner(spec *parser.Spec, s *parser.Schema, depth, cycleDepth int, visited map[string]bool, memo schemaMemo, diags *diagnostics.Diagnostics) *SchemaSpec {
 	out := &SchemaSpec{
 		Type:        schemaTypeString(s.Type),
 		Format:      s.Format,
@@ -528,14 +589,18 @@ func schemaSpecFromParserDepthInner(spec *parser.Spec, s *parser.Schema, depth i
 		Required:    s.Required,
 	}
 	// A depth backstop keeps a pathologically deep (non-cyclic) schema from
-	// stack-overflowing; the Opaque/visited guards above handle cycles.
+	// stack-overflowing; the Opaque/visited/cycleDepth guards above handle
+	// cycles.
 	if depth >= maxSchemaDepth {
 		return out
 	}
+	// Descents into items/properties/additionalProperties are not $ref descents,
+	// so cycleDepth is propagated unchanged: only descending through a cyclic
+	// $ref (handled in schemaSpecFromParserDepth) grows it.
 	switch v := s.Items.(type) {
 	case *parser.Schema:
 		if v != nil {
-			out.Items = schemaSpecFromParserDepth(spec, v, depth+1, visited, memo, diags)
+			out.Items = schemaSpecFromParserDepth(spec, v, depth+1, cycleDepth, visited, memo, diags)
 		}
 	case bool:
 		// items: false means no items are allowed; items: true is the permissive
@@ -551,7 +616,7 @@ func schemaSpecFromParserDepthInner(spec *parser.Spec, s *parser.Schema, depth i
 			if prop == nil {
 				continue
 			}
-			if child := schemaSpecFromParserDepth(spec, prop, depth+1, visited, memo, diags); child != nil {
+			if child := schemaSpecFromParserDepth(spec, prop, depth+1, cycleDepth, visited, memo, diags); child != nil {
 				out.Properties[name] = *child
 			}
 		}
@@ -559,7 +624,7 @@ func schemaSpecFromParserDepthInner(spec *parser.Spec, s *parser.Schema, depth i
 	switch v := s.AdditionalProperties.(type) {
 	case *parser.Schema:
 		if v != nil {
-			out.AdditionalProperties = schemaSpecFromParserDepth(spec, v, depth+1, visited, memo, diags)
+			out.AdditionalProperties = schemaSpecFromParserDepth(spec, v, depth+1, cycleDepth, visited, memo, diags)
 		}
 	case bool:
 		// additionalProperties: false means the object has a closed property set
@@ -573,7 +638,7 @@ func schemaSpecFromParserDepthInner(spec *parser.Spec, s *parser.Schema, depth i
 	}
 	// allOf/oneOf/anyOf composition inside nested properties is handled by a
 	// separate pass so the main conversion stays readable (REMAINING_GAPS §3).
-	flattenCompositionInto(out, spec, s, depth, visited, memo, diags)
+	flattenCompositionInto(out, spec, s, depth, cycleDepth, visited, memo, diags)
 	return out
 }
 
@@ -590,26 +655,26 @@ func schemaSpecFromParserDepthInner(spec *parser.Spec, s *parser.Schema, depth i
 // composition still renders as a Dynamic attribute and emits a fail-loud
 // Warning (L-97) because the flat attribute model cannot switch on
 // alternatives there.
-func flattenCompositionInto(out *SchemaSpec, spec *parser.Spec, s *parser.Schema, depth int, visited map[string]bool, memo schemaMemo, diags *diagnostics.Diagnostics) {
+func flattenCompositionInto(out *SchemaSpec, spec *parser.Spec, s *parser.Schema, depth, cycleDepth int, visited map[string]bool, memo schemaMemo, diags *diagnostics.Diagnostics) {
 	for _, member := range s.AllOf {
 		if member == nil {
 			continue
 		}
-		merged := schemaSpecFromParserDepth(spec, member, depth+1, visited, memo, diags)
+		merged := schemaSpecFromParserDepth(spec, member, depth+1, cycleDepth, visited, memo, diags)
 		if merged == nil {
 			continue
 		}
 		mergeAllOfSchemaSpec(out, *merged)
 	}
 	if len(s.OneOf) > 0 {
-		out.OneOf = unionSpecsFromParser(spec, s.OneOf, depth, visited, memo, diags)
+		out.OneOf = unionSpecsFromParser(spec, s.OneOf, depth, cycleDepth, visited, memo, diags)
 		out.Discriminator = discriminatorSpecFromParser(s.Discriminator)
 		if depth > 0 {
 			warnCompositionNotModeled(diags, "oneOf", s.SourceLocation)
 		}
 	}
 	if len(s.AnyOf) > 0 {
-		out.AnyOf = unionSpecsFromParser(spec, s.AnyOf, depth, visited, memo, diags)
+		out.AnyOf = unionSpecsFromParser(spec, s.AnyOf, depth, cycleDepth, visited, memo, diags)
 		if depth > 0 {
 			warnCompositionNotModeled(diags, "anyOf", s.SourceLocation)
 		}
@@ -620,13 +685,13 @@ func flattenCompositionInto(out *SchemaSpec, spec *parser.Spec, s *parser.Schema
 // variant's RefName from its $ref's final segment (e.g. "Cat") so union
 // variants carry the concrete schema names the split-resources strategy and
 // the discriminator mapping need. Nil members are skipped.
-func unionSpecsFromParser(spec *parser.Spec, members []*parser.Schema, depth int, visited map[string]bool, memo schemaMemo, diags *diagnostics.Diagnostics) []SchemaSpec {
+func unionSpecsFromParser(spec *parser.Spec, members []*parser.Schema, depth, cycleDepth int, visited map[string]bool, memo schemaMemo, diags *diagnostics.Diagnostics) []SchemaSpec {
 	out := make([]SchemaSpec, 0, len(members))
 	for _, member := range members {
 		if member == nil {
 			continue
 		}
-		converted := schemaSpecFromParserDepth(spec, member, depth+1, visited, memo, diags)
+		converted := schemaSpecFromParserDepth(spec, member, depth+1, cycleDepth, visited, memo, diags)
 		if converted == nil {
 			continue
 		}
