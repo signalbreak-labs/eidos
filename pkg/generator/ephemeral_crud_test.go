@@ -100,7 +100,7 @@ func ephemeralModuleFiles(t *testing.T, p ir.ProviderIR, cfg BuildConfig) []File
 	files = append(files, EphemeralFiles(p.EphemeralResources, clientImport)...)
 	files = append(files, ClientFiles(p)...)
 	if AnyEphemeralWired(p.EphemeralResources) {
-		files = append(files, JSONConvertFile())
+		files = append(files, JSONConvertFile(&p))
 	}
 	return files
 }

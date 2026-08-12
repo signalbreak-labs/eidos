@@ -48,11 +48,18 @@ func ResourceAcceptanceTestFile(pir ir.ProviderIR, r ir.ResourceIR, cfg BuildCon
 }
 
 // ResourceAcceptanceTestFiles returns the generated resource acceptance test
-// files for every ResourceIR in the provider. Files are emitted in the order
-// supplied.
+// files for every wired ResourceIR in the provider. Files are emitted in the
+// order supplied. A scaffolded (unwired) resource's CRUD bodies report "is not
+// wired to a remote API endpoint", so a lifecycle acceptance test against a mock
+// server could never pass; skipping it keeps the generated provider's own
+// `go test ./...` green while the scaffold's honest runtime diagnostic still
+// surfaces when the resource is used.
 func ResourceAcceptanceTestFiles(pir ir.ProviderIR, cfg BuildConfig) []File {
 	files := make([]File, 0, len(pir.Resources))
 	for _, r := range pir.Resources {
+		if !planResourceWiring(r).wired {
+			continue
+		}
 		files = append(files, ResourceAcceptanceTestFile(pir, r, cfg))
 	}
 	return files
@@ -187,7 +194,12 @@ func protoV6ProviderFactories(providerName string) ast.Expr {
 // which would invisibly lose import test coverage (L-26).
 func acceptanceTestSteps(r ir.ResourceIR, resourceAddr, configFuncName string, hasEndpoint, hasTokenURL, hasOIDCTokenURL, hasParam bool, paramAttr string, paramType ir.PrimitiveType) (ast.Expr, error) {
 	elems := []ast.Expr{createTestStep(r, resourceAddr, configFuncName, hasEndpoint, hasTokenURL, hasOIDCTokenURL, hasParam, paramAttr, paramType)}
-	if hasParam {
+	// The update step applies a changed config and expects the resource to be
+	// updated. A resource whose Update is a scaffold (no update operation in the
+	// spec, or an unresolvable mapping) reports "Update is not wired to a remote
+	// API endpoint" as a diagnostic, so the step could never pass; skip it and
+	// keep the lifecycle test to create/import/destroy (G-21).
+	if hasParam && planResourceWiring(r).update {
 		elems = append(elems, updateTestStep(r, resourceAddr, configFuncName, hasEndpoint, hasTokenURL, hasOIDCTokenURL, paramAttr, paramType))
 	}
 	if r.Importable {
@@ -618,24 +630,41 @@ func updatedValue(t ir.PrimitiveType) string {
 	panic(fmt.Errorf("%w: %q in updatedValue", ErrUnsupportedPrimitiveType, t))
 }
 
+// acceptanceImportSegment returns the import ID segment for one attribute.
+// Non-string attributes use a value the generated ImportState can parse back
+// (matching the mock's placeholder ID so the mock's read fallback serves the
+// created resource); string attributes use the "imported-"<attr> marker.
+func acceptanceImportSegment(r ir.ResourceIR, attr string) string {
+	switch importAttributeType(r, attr) {
+	case ir.TypeInt, ir.TypeFloat:
+		return "1"
+	case ir.TypeBool:
+		return "true"
+	default:
+		return "imported-" + attr
+	}
+}
+
 // acceptanceImportID builds a deterministic import identifier for the
 // acceptance import step. It mirrors the parsing logic used by the generated
-// ImportState method. When the format cannot be parsed, it returns an empty id
-// along with the parse error; the sole caller (acceptanceTestSteps) surfaces
-// that error as a generation error rather than silently dropping the import
-// step, so a malformed ImportIDFormat fails loud instead of invisibly losing
-// import test coverage (L-26).
+// ImportState method, producing segments the ImportState can convert back into
+// each attribute's primitive type (an int64 ID cannot store "imported-id").
+// When the format cannot be parsed, it returns an empty id along with the
+// parse error; the sole caller (acceptanceTestSteps) surfaces that error as a
+// generation error rather than silently dropping the import step, so a
+// malformed ImportIDFormat fails loud instead of invisibly losing import test
+// coverage (L-26).
 func acceptanceImportID(r ir.ResourceIR) (string, error) {
 	parsed, err := parseImportIDFormat(r.ImportIDFormat, r.IDAttribute)
 	if err != nil {
 		return "", err
 	}
 	if parsed.simple {
-		return "imported-" + parsed.attrs[0], nil
+		return acceptanceImportSegment(r, parsed.attrs[0]), nil
 	}
 	parts := make([]string, len(parsed.attrs))
 	for i, attr := range parsed.attrs {
-		parts[i] = "imported-" + attr
+		parts[i] = acceptanceImportSegment(r, attr)
 	}
 	return strings.Join(parts, parsed.delimiter), nil
 }
@@ -647,6 +676,28 @@ type mockRoute struct {
 	read   bool
 	update bool
 	delete bool
+	// deleteMethod is the HTTP method of the delete operation. A non-DELETE
+	// delete (e.g. POST /pets/{id}/scrap) shares the route prefix with the
+	// collection POST create; the generated handler uses this to dispatch
+	// nested-path requests to the delete branch instead of the create branch.
+	deleteMethod string
+	// The HTTP status code the stub returns for each operation. These mirror
+	// the spec's declared success codes (first declared code; conventional
+	// 201/200/200/204 when none are declared) so the generated client's success
+	// check, which matches against the same codes, accepts the stub response.
+	createStatus int
+	readStatus   int
+	updateStatus int
+	deleteStatus int
+}
+
+// firstSuccessCode returns the first declared success code for an operation,
+// falling back to conventional default when the spec declares none.
+func firstSuccessCode(codes []int, fallback int) int {
+	if len(codes) == 0 {
+		return fallback
+	}
+	return codes[0]
 }
 
 func generateMockServerFunction(f *astgen.File, r ir.ResourceIR, funcName string, routes []mockRoute, schemes []ir.SecuritySchemeIR) {
@@ -655,8 +706,19 @@ func generateMockServerFunction(f *astgen.File, r ir.ResourceIR, funcName string
 	// Register the OAuth2 token endpoint before the resource routes so a
 	// client_credentials interceptor has a token to fetch during the lifecycle.
 	body = append(body, mockTokenEndpointStmts(schemes)...)
+	idInfo := resourceIDFieldInfo(r)
+	idPrimitive := idInfo.primitive
+	// The mock echoes the ID back under the resource's actual ID attribute name
+	// (r.IDAttribute, falling back to "id") so the create/update response
+	// decodes into the resource's ID attribute — a resource whose ID is exposed
+	// as e.g. symbol would otherwise never have its ID set and the generated
+	// Create would fail its identifier check (G-21).
+	idAttr := idInfo.attr
+	if idAttr == "" {
+		idAttr = "id"
+	}
 	for i, route := range routes {
-		body = append(body, statefulMockRouteHandler(route, i, schemes)...)
+		body = append(body, statefulMockRouteHandler(route, i, schemes, idPrimitive, idAttr)...)
 	}
 	body = append(body, astgen.Return(astgen.Call(astgen.QualExpr("httptest", "NewServer"), astgen.Ident("mux"))))
 
@@ -674,15 +736,30 @@ func generateMockServerFunction(f *astgen.File, r ir.ResourceIR, funcName string
 	f.AddDecl(fn)
 }
 
+// routeKind identifies which CRUD operation an addRoute call contributes, so a
+// non-DELETE delete (e.g. POST /pets/{id}/scrap) is recorded as a delete rather
+// than as a create on the same prefix — otherwise it would overwrite the
+// collection POST create's status code (G-21).
+type routeKind int
+
+const (
+	routeCreate routeKind = iota
+	routeRead
+	routeUpdate
+	routeDelete
+)
+
 // mockRoutes aggregates CRUD operations into route stubs keyed by the path prefix
 // up to the first '{' parameter. Operations that share that prefix are merged
 // and dispatched by HTTP method in the generated handler. Nested paths such as
 // POST /pets/{id}/action share the same prefix as POST /pets and would be
-// merged, so only first-segment-level CRUD routes are currently stubbed.
+// merged, so only first-segment-level CRUD routes are currently stubbed; a
+// non-DELETE delete on a nested path is dispatched to the delete branch by the
+// generated handler (see statefulMockRouteHandler).
 func mockRoutes(m ir.CRUDMappingIR) []mockRoute {
 	byPath := map[string]mockRoute{}
 
-	addRoute := func(pathTemplate, method string) {
+	addRoute := func(pathTemplate, method string, status int, kind routeKind) {
 		path := pathTemplate
 		if idx := strings.Index(pathTemplate, "{"); idx >= 0 {
 			path = pathTemplate[:idx]
@@ -693,25 +770,30 @@ func mockRoutes(m ir.CRUDMappingIR) []mockRoute {
 		}
 		route := byPath[path]
 		route.path = path
-		switch method {
-		case "POST":
+		switch kind {
+		case routeCreate:
 			route.create = true
-		case "GET":
+			route.createStatus = status
+		case routeRead:
 			route.read = true
-		case "PUT", "PATCH":
+			route.readStatus = status
+		case routeUpdate:
 			route.update = true
-		case "DELETE":
+			route.updateStatus = status
+		case routeDelete:
 			route.delete = true
+			route.deleteMethod = method
+			route.deleteStatus = status
 		}
 		byPath[path] = route
 	}
 
-	addRoute(m.Create.PathTemplate, m.Create.Method)
-	addRoute(m.Read.PathTemplate, m.Read.Method)
+	addRoute(m.Create.PathTemplate, m.Create.Method, firstSuccessCode(m.Create.SuccessCodes, 201), routeCreate)
+	addRoute(m.Read.PathTemplate, m.Read.Method, firstSuccessCode(m.Read.SuccessCodes, 200), routeRead)
 	if m.Update != nil {
-		addRoute(m.Update.PathTemplate, m.Update.Method)
+		addRoute(m.Update.PathTemplate, m.Update.Method, firstSuccessCode(m.Update.SuccessCodes, 200), routeUpdate)
 	}
-	addRoute(m.Delete.PathTemplate, m.Delete.Method)
+	addRoute(m.Delete.PathTemplate, m.Delete.Method, firstSuccessCode(m.Delete.SuccessCodes, 204), routeDelete)
 
 	keys := make([]string, 0, len(byPath))
 	for k := range byPath {
@@ -1052,12 +1134,47 @@ func mockTokenEndpointStmts(schemes []ir.SecuritySchemeIR) []ast.Stmt {
 	}
 }
 
+// mockIDDefault returns the string the mock uses for the resource ID when the
+// request path carries none (e.g. a collection POST). It must equal the string
+// form of mockIDValue so the ID the mock returns is the ID the client sends on
+// subsequent Read/Update/Delete requests, which the mock looks up by path.
+func mockIDDefault(t ir.PrimitiveType) string {
+	switch t {
+	case ir.TypeInt:
+		return "1"
+	case ir.TypeFloat:
+		return "1"
+	case ir.TypeBool:
+		return "true"
+	default: // TypeString, TypeDynamic, TypeNull, unknown
+		return "example-id"
+	}
+}
+
+// mockIDValue returns the Go literal the mock assigns to body["id"] so the
+// response decodes into the resource's ID attribute. String IDs use the
+// canonical "example-id" placeholder; integer/number/boolean IDs use a typed
+// literal, since jsonToAttrValue decodes only a JSON number into an int64 ID
+// and a string would fail with "expected JSON number" (G18).
+func mockIDValue(t ir.PrimitiveType) ast.Expr {
+	switch t {
+	case ir.TypeInt:
+		return astgen.IntLit(1)
+	case ir.TypeFloat:
+		return astgen.FloatLit(1.0)
+	case ir.TypeBool:
+		return astgen.BoolLit(true)
+	default: // TypeString, TypeDynamic, TypeNull, unknown
+		return astgen.Lit("example-id")
+	}
+}
+
 // statefulMockRouteHandler generates a handler closure with per-route state
 // keyed by resource ID so that POST/PUT/PATCH echo the request body back and
 // GET returns the stored body for the requested ID. DELETE removes the entry,
 // causing subsequent GETs for that ID to return 404. Malformed JSON bodies
 // are rejected with 400 BadRequest; an empty body is accepted as an empty map.
-func statefulMockRouteHandler(route mockRoute, index int, schemes []ir.SecuritySchemeIR) []ast.Stmt {
+func statefulMockRouteHandler(route mockRoute, index int, schemes []ir.SecuritySchemeIR, idPrimitive ir.PrimitiveType, idAttr string) []ast.Stmt {
 	stateVar := fmt.Sprintf("state%d", index)
 	muVar := fmt.Sprintf("mu%d", index)
 	handlerVar := fmt.Sprintf("handler%d", index)
@@ -1065,7 +1182,21 @@ func statefulMockRouteHandler(route mockRoute, index int, schemes []ir.SecurityS
 	var cases []ast.Stmt
 
 	if route.create {
-		createBody := []ast.Stmt{
+		createBody := []ast.Stmt{}
+		// A non-DELETE delete on a nested path (e.g. POST /pets/{id}/scrap)
+		// shares the route prefix with the collection POST create, so the mock
+		// cannot tell them apart by method alone. The nested-path marker — an id
+		// containing '/' — identifies the delete; the collection create's id is
+		// the bare placeholder (mockIDDefault), which never contains '/'.
+		if route.delete && route.deleteMethod == "POST" {
+			createBody = append(createBody, astgen.If(
+				astgen.Call(astgen.QualExpr("strings", "Contains"), astgen.Ident("id"), astgen.Lit("/")),
+				astgen.ExprStmt(astgen.Call(astgen.Ident("delete"), astgen.Ident(stateVar), astgen.Ident("id"))),
+				astgen.ExprStmt(astgen.Call(astgen.Selector(astgen.Ident("w"), "WriteHeader"), astgen.IntLit(route.deleteStatus))),
+				astgen.Return(),
+			))
+		}
+		createBody = append(createBody,
 			astgen.AssignSingle(astgen.Ident("body"), astgen.Call(astgen.Ident("make"), astgen.MapType(astgen.Ident("string"), astgen.Ident("interface{}")))),
 			&ast.IfStmt{
 				Init: astgen.AssignSingle(astgen.Ident("err"), astgen.Call(
@@ -1086,8 +1217,8 @@ func statefulMockRouteHandler(route mockRoute, index int, schemes []ir.SecurityS
 			// is never nil; the prior `if body == nil` re-initialization was dead
 			// (L-25).
 			astgen.AssignStmt(
-				[]ast.Expr{astgen.IndexExpr(astgen.Ident("body"), astgen.Lit("id"))},
-				[]ast.Expr{astgen.Lit("example-id")},
+				[]ast.Expr{astgen.IndexExpr(astgen.Ident("body"), astgen.Lit(idAttr))},
+				[]ast.Expr{mockIDValue(idPrimitive)},
 				token.ASSIGN,
 			),
 			astgen.AssignStmt(
@@ -1096,14 +1227,14 @@ func statefulMockRouteHandler(route mockRoute, index int, schemes []ir.SecurityS
 				token.ASSIGN,
 			),
 			astgen.ExprStmt(astgen.Call(astgen.Selector(astgen.Call(astgen.Selector(astgen.Ident("w"), "Header")), "Set"), astgen.Lit("Content-Type"), astgen.Lit("application/json"))),
-			astgen.ExprStmt(astgen.Call(astgen.Selector(astgen.Ident("w"), "WriteHeader"), astgen.IntLit(201))),
+			astgen.ExprStmt(astgen.Call(astgen.Selector(astgen.Ident("w"), "WriteHeader"), astgen.IntLit(route.createStatus))),
 			astgen.AssignStmt(
 				[]ast.Expr{astgen.Ident("_")},
 				[]ast.Expr{astgen.Call(astgen.Selector(astgen.Call(astgen.QualExpr("json", "NewEncoder"), astgen.Ident("w")), "Encode"), astgen.Ident("body"))},
 				token.ASSIGN,
 			),
 			astgen.Return(),
-		}
+		)
 		cases = append(cases, caseWithBody([]ast.Expr{astgen.QualExpr("http", "MethodPost")}, createBody...))
 	}
 
@@ -1139,7 +1270,7 @@ func statefulMockRouteHandler(route mockRoute, index int, schemes []ir.SecurityS
 				astgen.Return(),
 			),
 			astgen.ExprStmt(astgen.Call(astgen.Selector(astgen.Call(astgen.Selector(astgen.Ident("w"), "Header")), "Set"), astgen.Lit("Content-Type"), astgen.Lit("application/json"))),
-			astgen.ExprStmt(astgen.Call(astgen.Selector(astgen.Ident("w"), "WriteHeader"), astgen.IntLit(200))),
+			astgen.ExprStmt(astgen.Call(astgen.Selector(astgen.Ident("w"), "WriteHeader"), astgen.IntLit(route.readStatus))),
 			astgen.AssignStmt(
 				[]ast.Expr{astgen.Ident("_")},
 				[]ast.Expr{astgen.Call(astgen.Selector(astgen.Call(astgen.QualExpr("json", "NewEncoder"), astgen.Ident("w")), "Encode"), astgen.Ident("body"))},
@@ -1172,8 +1303,8 @@ func statefulMockRouteHandler(route mockRoute, index int, schemes []ir.SecurityS
 			// is never nil; the prior `if body == nil` re-initialization was dead
 			// (L-25).
 			astgen.AssignStmt(
-				[]ast.Expr{astgen.IndexExpr(astgen.Ident("body"), astgen.Lit("id"))},
-				[]ast.Expr{astgen.Ident("id")},
+				[]ast.Expr{astgen.IndexExpr(astgen.Ident("body"), astgen.Lit(idAttr))},
+				[]ast.Expr{mockIDValue(idPrimitive)},
 				token.ASSIGN,
 			),
 			astgen.AssignStmt(
@@ -1182,7 +1313,7 @@ func statefulMockRouteHandler(route mockRoute, index int, schemes []ir.SecurityS
 				token.ASSIGN,
 			),
 			astgen.ExprStmt(astgen.Call(astgen.Selector(astgen.Call(astgen.Selector(astgen.Ident("w"), "Header")), "Set"), astgen.Lit("Content-Type"), astgen.Lit("application/json"))),
-			astgen.ExprStmt(astgen.Call(astgen.Selector(astgen.Ident("w"), "WriteHeader"), astgen.IntLit(200))),
+			astgen.ExprStmt(astgen.Call(astgen.Selector(astgen.Ident("w"), "WriteHeader"), astgen.IntLit(route.updateStatus))),
 			astgen.AssignStmt(
 				[]ast.Expr{astgen.Ident("_")},
 				[]ast.Expr{astgen.Call(astgen.Selector(astgen.Call(astgen.QualExpr("json", "NewEncoder"), astgen.Ident("w")), "Encode"), astgen.Ident("body"))},
@@ -1199,7 +1330,7 @@ func statefulMockRouteHandler(route mockRoute, index int, schemes []ir.SecurityS
 	if route.delete {
 		deleteBody := []ast.Stmt{
 			astgen.ExprStmt(astgen.Call(astgen.Ident("delete"), astgen.Ident(stateVar), astgen.Ident("id"))),
-			astgen.ExprStmt(astgen.Call(astgen.Selector(astgen.Ident("w"), "WriteHeader"), astgen.IntLit(204))),
+			astgen.ExprStmt(astgen.Call(astgen.Selector(astgen.Ident("w"), "WriteHeader"), astgen.IntLit(route.deleteStatus))),
 			astgen.Return(),
 		}
 		cases = append(cases, caseWithBody([]ast.Expr{astgen.QualExpr("http", "MethodDelete")}, deleteBody...))
@@ -1230,7 +1361,7 @@ func statefulMockRouteHandler(route mockRoute, index int, schemes []ir.SecurityS
 		)),
 		astgen.If(astgen.Equal(astgen.Ident("id"), astgen.Lit("")), astgen.AssignStmt(
 			[]ast.Expr{astgen.Ident("id")},
-			[]ast.Expr{astgen.Lit("example-id")},
+			[]ast.Expr{astgen.Lit(mockIDDefault(idPrimitive))},
 			token.ASSIGN,
 		)),
 		astgen.SwitchStmt(astgen.Selector(astgen.Ident("r"), "Method"), astgen.Block(cases...)),

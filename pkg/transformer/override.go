@@ -137,7 +137,7 @@ func applyResourceOverrides(provider *ir.ProviderIR, overrides []config.Resource
 
 func resourceMatchesOverride(r ir.ResourceIR, override config.ResourceOverride) bool {
 	if strings.TrimSpace(override.Operation) != "" {
-		return sourceOperationMatches(r.SourceOperation, override.Operation)
+		return operationMatches(r.SourceOperation, r.CRUDMapping.Create, override.Operation)
 	}
 	if strings.TrimSpace(override.Schema) != "" {
 		return nameMatchesIdentity(override.Schema, r.Name, r.TypeName, r.FullName)
@@ -181,27 +181,62 @@ func sourceOperationMatches(sourceOp, overrideOp string) bool {
 	return normalizeName(sourceOp) == normalizedOverride
 }
 
+// operationMatches reports whether an override operation identifier matches an
+// entity's source operation. The override may be either an OpenAPI operationId
+// (matched case-insensitively, ignoring underscores) or a "METHOD /path" form
+// (matched against the entity's method and path template). The method+path form
+// disambiguates operations that share an operationId — a duplicate operationId
+// in the spec — which the operationId form cannot, because it matches every
+// operation carrying that operationId.
+func operationMatches(sourceOp string, m ir.OperationMappingIR, overrideOp string) bool {
+	if sourceOperationMatches(sourceOp, overrideOp) {
+		return true
+	}
+	if m.Method == "" || m.PathTemplate == "" {
+		return false
+	}
+	return sourceOperationMatches(m.Method+" "+m.PathTemplate, overrideOp)
+}
+
 // entityOperationMatches reports whether an override operation identifier matches
 // an entity. It first compares the entity's source operation (case-insensitive,
-// with trimmed whitespace). If that does not match, it falls back to matching the
-// override operation against one or more identity strings supplied by the caller
-// (e.g., name, type name, full name).
-func entityOperationMatches(sourceOp, overrideOp string, names ...string) bool {
-	if sourceOperationMatches(sourceOp, overrideOp) {
+// with trimmed whitespace) or its method+path (see operationMatches). If that
+// does not match, it falls back to matching the override operation against one
+// or more identity strings supplied by the caller (e.g., name, type name, full
+// name).
+func entityOperationMatches(sourceOp string, m ir.OperationMappingIR, overrideOp string, names ...string) bool {
+	if operationMatches(sourceOp, m, overrideOp) {
 		return true
 	}
 	return nameMatchesIdentity(overrideOp, names...)
 }
 
+// OverrideMatchesEntity reports whether an override operation identifier matches
+// an entity by source operation, method+path, or name identity. It mirrors the
+// matching used by ApplyOverrides and is exported so the API layer can decide
+// whether an override declares a new construct or modifies an existing one
+// (avoiding a duplicate when both would apply).
+func OverrideMatchesEntity(sourceOp string, m ir.OperationMappingIR, overrideOp string, names ...string) bool {
+	return entityOperationMatches(sourceOp, m, overrideOp, names...)
+}
+
 // applyResourceNameOverride overwrites the resource's Name, TypeName, and FullName
 // with the override's ResourceName whenever ResourceName is non-empty. This
 // unconditionally replaces any name produced by inference or prior overrides.
+//
+// The Terraform type name is reconstructed as <provider>_<ResourceName> from the
+// provider prefix the entity's TypeName already carries (inferred TypeNames are
+// always prefixed), so a rename never strips the provider prefix that Terraform
+// requires to resolve the resource type (e.g. renaming "purchase_ship" to
+// "buy_ship" under provider "space-traders-api" yields "space-traders-api_buy_ship",
+// not the unresolvable "buy_ship").
 func applyResourceNameOverride(r *ir.ResourceIR, override config.ResourceOverride) {
 	if strings.TrimSpace(override.ResourceName) == "" {
 		return
 	}
+	prefix := strings.TrimSuffix(r.TypeName, r.Name)
 	r.Name = override.ResourceName
-	r.TypeName = override.ResourceName
+	r.TypeName = prefix + override.ResourceName
 	r.FullName = toHumanName(override.ResourceName)
 }
 
@@ -439,8 +474,9 @@ func applyDatasourceOverrides(provider *ir.ProviderIR, overrides []config.Dataso
 				continue
 			}
 			if strings.TrimSpace(override.DatasourceName) != "" {
+				prefix := strings.TrimSuffix(ds.TypeName, ds.Name)
 				ds.Name = override.DatasourceName
-				ds.TypeName = override.DatasourceName
+				ds.TypeName = prefix + override.DatasourceName
 				ds.FullName = toHumanName(override.DatasourceName)
 			}
 		}
@@ -449,7 +485,7 @@ func applyDatasourceOverrides(provider *ir.ProviderIR, overrides []config.Dataso
 
 func datasourceMatchesOverride(ds ir.DataSourceIR, override config.DatasourceOverride) bool {
 	if strings.TrimSpace(override.Operation) != "" {
-		return sourceOperationMatches(ds.SourceOperation, override.Operation)
+		return operationMatches(ds.SourceOperation, ds.ReadMapping, override.Operation)
 	}
 	if strings.TrimSpace(override.Name) != "" {
 		return nameMatchesIdentity(override.Name, ds.Name, ds.TypeName, ds.FullName)
@@ -463,12 +499,13 @@ func applyActionOverrides(provider *ir.ProviderIR, overrides []config.ActionOver
 	for _, override := range overrides {
 		for i := range provider.Actions {
 			a := &provider.Actions[i]
-			if !entityOperationMatches(a.SourceOperation, override.Operation, a.Name, a.TypeName, a.FullName) {
+			if !entityOperationMatches(a.SourceOperation, a.InvokeMapping, override.Operation, a.Name, a.TypeName, a.FullName) {
 				continue
 			}
 			if strings.TrimSpace(override.Name) != "" {
+				prefix := strings.TrimSuffix(a.TypeName, a.Name)
 				a.Name = override.Name
-				a.TypeName = override.Name
+				a.TypeName = prefix + override.Name
 				a.FullName = toHumanName(override.Name)
 			}
 			if strings.TrimSpace(override.Description) != "" {
@@ -491,12 +528,13 @@ func applyEphemeralOverrides(provider *ir.ProviderIR, overrides []config.Ephemer
 	for _, override := range overrides {
 		for i := range provider.EphemeralResources {
 			e := &provider.EphemeralResources[i]
-			if !entityOperationMatches(e.SourceOperation, override.Operation, e.Name, e.TypeName, e.FullName) {
+			if !entityOperationMatches(e.SourceOperation, e.OpenMapping, override.Operation, e.Name, e.TypeName, e.FullName) {
 				continue
 			}
 			if strings.TrimSpace(override.Name) != "" {
+				prefix := strings.TrimSuffix(e.TypeName, e.Name)
 				e.Name = override.Name
-				e.TypeName = override.Name
+				e.TypeName = prefix + override.Name
 				e.FullName = toHumanName(override.Name)
 			}
 			if strings.TrimSpace(override.Description) != "" {
@@ -529,7 +567,7 @@ func applyListResourceOverrides(provider *ir.ProviderIR, overrides []config.List
 
 func listResourceMatchesOverride(lr ir.ListResourceIR, override config.ListResourceOverride) bool {
 	if strings.TrimSpace(override.Operation) != "" {
-		return entityOperationMatches(lr.SourceOperation, override.Operation, lr.Name, lr.TypeName, lr.FullName)
+		return entityOperationMatches(lr.SourceOperation, lr.ListMapping, override.Operation, lr.Name, lr.TypeName, lr.FullName)
 	}
 	if strings.TrimSpace(override.Resource) != "" {
 		return nameMatchesIdentity(override.Resource, lr.Name, lr.TypeName, lr.FullName)
@@ -592,12 +630,15 @@ func applyFunctionOverrides(provider *ir.ProviderIR, overrides []config.Function
 	for _, override := range overrides {
 		for i := range provider.Functions {
 			f := &provider.Functions[i]
-			if !entityOperationMatches(f.SourceOperation, override.Operation, f.Name, f.TypeName, f.FullName) {
+			// Functions carry no method+path mapping in the IR, so the override
+			// operation matches by operationId or name only.
+			if !entityOperationMatches(f.SourceOperation, ir.OperationMappingIR{}, override.Operation, f.Name, f.TypeName, f.FullName) {
 				continue
 			}
 			if strings.TrimSpace(override.Name) != "" {
+				prefix := strings.TrimSuffix(f.TypeName, f.Name)
 				f.Name = override.Name
-				f.TypeName = override.Name
+				f.TypeName = prefix + override.Name
 				f.FullName = toHumanName(override.Name)
 			}
 		}
@@ -743,8 +784,9 @@ func renameResourcesByVariants(resources []ir.ResourceIR, variants []Polymorphis
 			if strings.TrimSpace(variant.ResourceName) == "" {
 				continue
 			}
+			prefix := strings.TrimSuffix(r.TypeName, r.Name)
 			r.Name = variant.ResourceName
-			r.TypeName = variant.ResourceName
+			r.TypeName = prefix + variant.ResourceName
 			r.FullName = toHumanName(variant.ResourceName)
 		}
 	}
@@ -760,8 +802,9 @@ func renameDataSourcesByVariants(dataSources []ir.DataSourceIR, variants []Polym
 			if strings.TrimSpace(variant.DataSourceName) == "" {
 				continue
 			}
+			prefix := strings.TrimSuffix(ds.TypeName, ds.Name)
 			ds.Name = variant.DataSourceName
-			ds.TypeName = variant.DataSourceName
+			ds.TypeName = prefix + variant.DataSourceName
 			ds.FullName = toHumanName(variant.DataSourceName)
 		}
 	}

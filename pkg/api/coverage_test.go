@@ -474,8 +474,8 @@ func TestBuildProviderIRWithContentType(t *testing.T) {
 	if err != nil {
 		t.Fatalf("yaml spec error: %v", err)
 	}
-	if preview == nil || preview.Name != "cover_store" {
-		t.Errorf("preview = %+v, want name cover_store", preview)
+	if preview == nil || preview.Name != "cover-store" {
+		t.Errorf("preview = %+v, want name cover-store", preview)
 	}
 	if version != parser.Version3_0 {
 		t.Errorf("version = %v, want 3.0", version)
@@ -487,7 +487,7 @@ func TestBuildProviderIRWithContentType(t *testing.T) {
 	if err != nil || preview == nil {
 		t.Fatalf("json spec error: %v", err)
 	}
-	if preview.Name != "json_store" {
+	if preview.Name != "json-store" {
 		t.Errorf("json preview name = %q", preview.Name)
 	}
 	if _, _, _, err := BuildProviderIRWithContentType([]byte("{not valid"), "", nil); err == nil {
@@ -501,8 +501,8 @@ func TestGenerateStarterConfig(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GenerateStarterConfig error: %v", err)
 	}
-	if cfg.Provider.Name != "cover_store" {
-		t.Errorf("derived provider name = %q, want cover_store", cfg.Provider.Name)
+	if cfg.Provider.Name != "cover-store" {
+		t.Errorf("derived provider name = %q, want cover-store", cfg.Provider.Name)
 	}
 	cfg, _, _, err = GenerateStarterConfig([]byte(coverageSpec), "custom")
 	if err != nil {

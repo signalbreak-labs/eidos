@@ -219,10 +219,14 @@ func (cfg BuildConfig) Validate() error {
 
 // registrySegmentPattern is the set of strings safe to embed in a Go module
 // path segment, a goreleaser project_name, and a Terraform registry source
-// address: an alphanumeric lead character followed by alphanumerics, dots,
-// hyphens, or underscores. It rejects whitespace, colons, and slashes, which
-// would break go.mod parsing or the registry address.
-const registrySegmentPattern = `^[a-zA-Z0-9][a-zA-Z0-9._-]*$`
+// address: an alphanumeric lead character followed by alphanumerics or hyphens.
+// It rejects whitespace, colons, slashes, dots, and underscores. Dots and
+// underscores are valid in Go module path segments but are rejected by
+// Terraform for provider type names and namespaces (verified against terraform
+// v1.14.7), and the generated module path is derived from the same
+// namespace/name, so a dash-only name keeps both the module path and the
+// registry source address valid.
+const registrySegmentPattern = `^[a-zA-Z0-9][a-zA-Z0-9-]*$`
 
 // registrySegmentRe is the compiled form of registrySegmentPattern. The pattern
 // is a compile-time constant, so MustCompile is safe and avoids recompiling on
@@ -493,11 +497,11 @@ func FilesForProviderIR(provider *ir.ProviderIR, cfg BuildConfig, opts CollectOp
 		files = append(files, ValueMappersFile(provider.Resources, providerImport))
 		files = append(files, ModelFiles(provider.Resources)...)
 	}
-	if AnyResourceWired(provider.Resources) || AnyDataSourceWired(provider.DataSources) || AnyEphemeralWired(provider.EphemeralResources) {
+	if AnyResourceWired(provider.Resources) || AnyDataSourceWired(provider.DataSources) || AnyEphemeralWired(provider.EphemeralResources) || AnyActionSendsBody(provider.Actions) {
 		// JSON conversion helpers used by resource CRUD bodies, data source
-		// Read bodies, and ephemeral resource Open bodies wired to the
-		// generated API client.
-		files = append(files, JSONConvertFile())
+		// Read bodies, ephemeral resource Open bodies, and body-bearing action
+		// Invoke bodies wired to the generated API client.
+		files = append(files, JSONConvertFile(provider))
 	}
 	files = append(files, ValidatorsFile(*provider))
 

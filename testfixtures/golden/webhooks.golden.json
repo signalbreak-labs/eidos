@@ -69,15 +69,19 @@
   },
   {
     "path": "internal/provider/action_receive_new_pet.go",
-    "reason": "action webhooks_api_receive_new_pet"
+    "reason": "action webhooks-api_receive_new_pet"
   },
   {
     "path": "internal/provider/data_source_list_pets.go",
-    "reason": "data source webhooks_api_list_pets"
+    "reason": "data source webhooks-api_list_pets"
   },
   {
     "path": "internal/provider/data_source_list_pets_test.go",
     "reason": "unit tests for data source list_pets"
+  },
+  {
+    "path": "internal/provider/json_convert.go",
+    "reason": "JSON/model conversion helpers for wired CRUD bodies"
   },
   {
     "path": "internal/provider/provider.go",

@@ -81,11 +81,11 @@
   },
   {
     "path": "internal/provider/action_create_polymorphic_pet.go",
-    "reason": "action complex_polymorphism_api_create_polymorphic_pet"
+    "reason": "action complex-polymorphism-api_create_polymorphic_pet"
   },
   {
     "path": "internal/provider/data_source_get_polymorphic_pet.go",
-    "reason": "data source complex_polymorphism_api_get_polymorphic_pet"
+    "reason": "data source complex-polymorphism-api_get_polymorphic_pet"
   },
   {
     "path": "internal/provider/data_source_get_polymorphic_pet_test.go",
@@ -93,11 +93,15 @@
   },
   {
     "path": "internal/provider/data_source_list_animals.go",
-    "reason": "data source complex_polymorphism_api_list_animals"
+    "reason": "data source complex-polymorphism-api_list_animals"
   },
   {
     "path": "internal/provider/data_source_list_animals_test.go",
     "reason": "unit tests for data source list_animals"
+  },
+  {
+    "path": "internal/provider/json_convert.go",
+    "reason": "JSON/model conversion helpers for wired CRUD bodies"
   },
   {
     "path": "internal/provider/provider.go",

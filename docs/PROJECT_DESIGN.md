@@ -2221,7 +2221,7 @@ Each OpenAPI security scheme maps to provider-level configuration attributes and
 | `apiKey` (query) | `api_key` (Sensitive, String) | Append `?api_key=<value>` to URL |
 | `apiKey` (cookie) | `api_key` (Sensitive, String) | Inject `Cookie: api_key=<value>` header |
 | `http/basic` | `username` (String), `password` (Sensitive, String) | `Authorization: Basic <base64(user:pass)>` |
-| `http/bearer` | `bearer_token` (Sensitive, String) | `Authorization: Bearer <token>` |
+| `http/bearer` | `bearer_token` (Sensitive, String) — qualified to `<scheme>_token` when the spec declares several bearer schemes | `Authorization: Bearer <token>` |
 | `oauth2/client_credentials` | `client_id`, `client_secret` (Sensitive), `token_url`, `scopes` | Token exchange at `token_url`, cache token, inject `Authorization: Bearer <token>` |
 | `oauth2/authorization_code` | `client_id`, `client_secret` (Sensitive), `auth_url`, `token_url`, `refresh_token` (Sensitive), `scopes` | Refresh-only: the initial code exchange is interactive and happens out-of-band; the provider refreshes the supplied `refresh_token` at `token_url` (handling rotation) and injects `Authorization: Bearer <token>` |
 | `oauth2/implicit` | `auth_url`, `scopes` | No interceptor (interactive redirect; deprecated in OAuth 2.1); fail-loud runtime warning |
@@ -2229,6 +2229,8 @@ Each OpenAPI security scheme maps to provider-level configuration attributes and
 | `openIdConnect` | `oidc_token_url`, `client_id`, `client_secret` (Sensitive) | Token endpoint from `oidc_token_url` override, else OIDC discovery (cached); client-credentials token fetch, inject Bearer |
 
 Multiple security schemes on a single operation are resolved with **AND semantics**, not OR: an operation declaring exactly one security requirement authenticates with exactly that requirement's schemes via `client.WithSchemes(...)` (per-operation AND). An operation declaring no `security` inherits the global default (every configured scheme interceptor applies); an operation declaring a single empty requirement (`security: [{}]`) is unauthenticated. An operation (or global `security`) declaring **more than one requirement** — OR, where any one suffices — is ambiguous for a non-interactive provider: eidos applies every declared scheme (AND of all, which is stricter than OR) and emits a fail-loud Warning diagnostic (`warnPerOpORSecurity` for per-operation OR; the global case warns via `buildSecurityIR`). This is fail-loud, not silent — a non-interactive Terraform provider cannot reliably try/fallback across OR alternatives.
+
+A spec declaring **more than one bearer scheme** qualifies each scheme's provider attribute with the scheme name (`account_token`, `agent_token`, …) via `transformer.BearerTokenAttributeName`, so each interceptor reads its own token and per-operation `WithSchemes(...)` selection is meaningful. A single bearer scheme keeps the canonical `bearer_token`. Both the config-schema mapping (`applySecurityConfigAttributes`) and the generated Configure wiring (`pkg/generator/provider_auth.go`) resolve the same helper, so the attribute a practitioner sets is the attribute the interceptor reads.
 
 ### 11.1 Provider-Level HTTP Trace Logging
 
@@ -3189,6 +3191,14 @@ upstream constraint changes or a product decision is made.
   (browser redirect) and deprecated in OAuth 2.1; `Configure` emits an
   `AddWarning` for every scheme that exposes config attributes but has no
   generated interceptor.
+- **Actions have no result surface (upstream framework limit).**
+  terraform-plugin-framework v1.19.0's `action.InvokeResponse` exposes only
+  `Diagnostics` and `SendProgress` — there is no `Result` field, and every
+  `action/schema` attribute rejects `Computed` — so a generated action that
+  returns a value (e.g. SpaceTraders `register`'s token) cannot surface it. No
+  broken code is emitted: the action reports success/failure and the response
+  body is intentionally not decoded. Revisit when the framework adds an action
+  output API.
 - **List-resource `uniqueItems: true` falls back to List.** The experimental
   `list/schema` package has no Set types, so a list endpoint whose response
   array declares `uniqueItems: true` is downgraded to List with a fail-loud

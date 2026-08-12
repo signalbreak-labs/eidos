@@ -61,11 +61,11 @@
   },
   {
     "path": "internal/provider/function_lookup_tags.go",
-    "reason": "provider-defined function search_api_lookup_tags"
+    "reason": "provider-defined function search-api_lookup_tags"
   },
   {
     "path": "internal/provider/function_search_users.go",
-    "reason": "provider-defined function search_api_search_users"
+    "reason": "provider-defined function search-api_search_users"
   },
   {
     "path": "internal/provider/provider.go",

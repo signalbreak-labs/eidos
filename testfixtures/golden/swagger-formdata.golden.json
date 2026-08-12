@@ -97,7 +97,7 @@
   },
   {
     "path": "internal/provider/resource_note.go",
-    "reason": "resource form_data_api_note"
+    "reason": "resource form-data-api_note"
   },
   {
     "path": "internal/provider/resource_note_acceptance_test.go",
@@ -109,7 +109,7 @@
   },
   {
     "path": "internal/provider/resource_upload.go",
-    "reason": "resource form_data_api_upload"
+    "reason": "resource form-data-api_upload"
   },
   {
     "path": "internal/provider/resource_upload_acceptance_test.go",

@@ -15,15 +15,20 @@ import (
 // All generated attributes are Optional by default; required credentials are
 // enforced at runtime by the generated client based on the configured scheme.
 //
+// allSchemes is the full normalized scheme list the provider exposes, so a
+// bearer scheme can qualify its config attribute name when the spec declares
+// several bearer schemes (see BearerTokenAttributeName) instead of collapsing
+// them all onto "bearer_token".
+//
 // L-108: this function uses the canonical ir package types
 // (ir.SecuritySchemeIR, ir.AttributeIR, ir.SchemaIR) rather than package-local
 // shadow types, consistent with the rest of the transformer package.
-func MapSecuritySchemeToProviderConfig(scheme ir.SecuritySchemeIR) ([]ir.AttributeIR, error) {
+func MapSecuritySchemeToProviderConfig(scheme ir.SecuritySchemeIR, allSchemes []ir.SecuritySchemeIR) ([]ir.AttributeIR, error) {
 	switch scheme.Type {
 	case ir.SecuritySchemeAPIKey:
 		return mapAPIKey(scheme), nil
 	case ir.SecuritySchemeHTTP:
-		return mapHTTP(scheme)
+		return mapHTTP(scheme, allSchemes)
 	case ir.SecuritySchemeOAuth2:
 		return mapOAuth2(scheme)
 	case ir.SecuritySchemeOpenIDConnect:
@@ -59,7 +64,7 @@ func mapAPIKey(scheme ir.SecuritySchemeIR) []ir.AttributeIR {
 	}
 }
 
-func mapHTTP(scheme ir.SecuritySchemeIR) ([]ir.AttributeIR, error) {
+func mapHTTP(scheme ir.SecuritySchemeIR, allSchemes []ir.SecuritySchemeIR) ([]ir.AttributeIR, error) {
 	switch strings.ToLower(scheme.Scheme) {
 	case "basic":
 		return []ir.AttributeIR{
@@ -71,10 +76,39 @@ func mapHTTP(scheme ir.SecuritySchemeIR) ([]ir.AttributeIR, error) {
 		if scheme.BearerFormat != "" {
 			desc = fmt.Sprintf("Bearer token used for HTTP bearer authentication. Expected format: %s.", scheme.BearerFormat)
 		}
-		return []ir.AttributeIR{sensitiveStringAttr("bearer_token", desc)}, nil
+		return []ir.AttributeIR{sensitiveStringAttr(BearerTokenAttributeName(scheme, allSchemes), desc)}, nil
 	default:
 		return nil, fmt.Errorf("unsupported HTTP security scheme %q", scheme.Scheme)
 	}
+}
+
+// BearerTokenAttributeName returns the provider-config attribute name for an
+// HTTP bearer security scheme. A spec that declares a single bearer scheme maps
+// to the canonical "bearer_token"; a spec that declares several bearer schemes
+// (e.g. SpaceTraders' AccountToken and AgentToken) qualifies each attribute
+// with the scheme name (account_token, agent_token) so practitioners can set
+// distinct tokens and per-operation client.WithSchemes selection stays
+// meaningful instead of collapsing every bearer scheme onto one attribute.
+func BearerTokenAttributeName(scheme ir.SecuritySchemeIR, allSchemes []ir.SecuritySchemeIR) string {
+	if bearerSchemeCount(allSchemes) <= 1 {
+		return "bearer_token"
+	}
+	name := strings.TrimSpace(scheme.Name)
+	if name == "" {
+		return "bearer_token"
+	}
+	return SanitizeAttributeName(name)
+}
+
+// bearerSchemeCount counts the HTTP bearer schemes among allSchemes.
+func bearerSchemeCount(schemes []ir.SecuritySchemeIR) int {
+	n := 0
+	for _, s := range schemes {
+		if s.Type == ir.SecuritySchemeHTTP && strings.EqualFold(s.Scheme, "bearer") {
+			n++
+		}
+	}
+	return n
 }
 
 func mapOAuth2(scheme ir.SecuritySchemeIR) ([]ir.AttributeIR, error) {

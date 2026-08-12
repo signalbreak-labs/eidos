@@ -77,11 +77,11 @@
   },
   {
     "path": "internal/provider/action_search_records.go",
-    "reason": "action mycloud_data_search_records"
+    "reason": "action mycloud-data_search_records"
   },
   {
     "path": "internal/provider/data_source_list_data_sets.go",
-    "reason": "data source mycloud_data_list_data_sets"
+    "reason": "data source mycloud-data_list_data_sets"
   },
   {
     "path": "internal/provider/data_source_list_data_sets_test.go",
@@ -89,11 +89,15 @@
   },
   {
     "path": "internal/provider/data_source_list_fields.go",
-    "reason": "data source mycloud_data_list_fields"
+    "reason": "data source mycloud-data_list_fields"
   },
   {
     "path": "internal/provider/data_source_list_fields_test.go",
     "reason": "unit tests for data source list_fields"
+  },
+  {
+    "path": "internal/provider/json_convert.go",
+    "reason": "JSON/model conversion helpers for wired CRUD bodies"
   },
   {
     "path": "internal/provider/provider.go",

@@ -89,7 +89,13 @@ type OperationMappingIR struct {
 	MediaType      string                 `json:"media_type,omitempty"`
 	BodySchema     *SchemaIR              `json:"body_schema,omitempty"`
 	ResponseSchema *SchemaIR              `json:"response_schema,omitempty"`
-	SuccessCodes   []int                  `json:"success_codes,omitempty"`
+	// ResponseEnvelope is the property name of a {data: ...} response envelope
+	// the transformer flattened out of the response schema (e.g. "data"). The
+	// generator unwraps the decoded response body by this key before applying it
+	// to the model, so the schema and the response stay consistent (E1). Empty
+	// when the response is not enveloped.
+	ResponseEnvelope string                 `json:"response_envelope,omitempty"`
+	SuccessCodes     []int                  `json:"success_codes,omitempty"`
 	ErrorMappings  map[int]ErrorMappingIR `json:"error_mappings,omitempty"`
 	// SecurityRequirements carries the operation's declared security
 	// requirements (a list of alternatives; each alternative is a map of

@@ -71,6 +71,12 @@ type crudOperationPlan struct {
 	// send a form body and stays scaffolded (REMAINING_GAPS §2).
 	formDataParams []paramSubstitution
 	contentType    string
+	// hasBody is true when the operation declares a request body that the wired
+	// body encodes. It is distinct from bodyEncoding because bodyJSON is the zero
+	// value of bodyKind, so a bodiless operation would otherwise be
+	// indistinguishable from a JSON-body operation (the action wiring relies on
+	// this distinction; resources always build a body on body-bearing methods).
+	hasBody bool
 	// bodyEncoding is the request body encoding derived from
 	// OperationMappingIR.MediaType via transformer.RequestBodyKind. JSON is the
 	// default (bodiless methods and empty media types). Unsupported media types
@@ -98,6 +104,11 @@ type crudOperationPlan struct {
 	// generation time so the emitted call is deterministic.
 	securitySchemes    []string
 	securitySchemesSet bool
+	// responseEnvelope is the {data: ...} response envelope key the transformer
+	// flattened out of the response schema. When non-empty, the wired body
+	// unwraps the decoded response by this key before applying it to the model,
+	// keeping the schema and the response consistent (E1).
+	responseEnvelope string
 }
 
 // paramSubstitution describes one query, header, or cookie parameter and the
@@ -395,6 +406,7 @@ func planOperation(r ir.ResourceIR, op ir.OperationMappingIR) (crudOperationPlan
 	planned.queryParams = queryParams
 	planned.headerParams = headerParams
 	planned.cookieParams = cookieParams
+	planned.responseEnvelope = op.ResponseEnvelope
 
 	// Per-operation security (REMAINING_GAPS §1). See applySecurityRequirements.
 	applySecurityRequirements(&planned, op.SecurityRequirements)
@@ -979,8 +991,8 @@ func sortedErrorCodes(m map[int]string) []int {
 
 // decodeAndApplyStmts emits the statements decoding a JSON response body and
 // applying it to the named model variable.
-func decodeAndApplyStmts(summary, modelVar string) []ast.Stmt {
-	return []ast.Stmt{
+func decodeAndApplyStmts(summary, modelVar, envelope string) []ast.Stmt {
+	stmts := []ast.Stmt{
 		astgen.DeclStmt(astgen.VarDeclGen(astgen.VarSpec(
 			"data",
 			astgen.MapType(astgen.Ident("string"), astgen.Ident("any")),
@@ -1006,6 +1018,38 @@ func decodeAndApplyStmts(summary, modelVar string) []ast.Stmt {
 				astgen.Return(),
 			),
 		},
+	}
+	// A {data: ...} response envelope (E1): the transformer flattened the payload
+	// out of the response schema, so unwrap the decoded body by the same key
+	// before applying it to the model. The type assertion is fail-safe — a
+	// response that does not carry the envelope object leaves data untouched and
+	// applyJSONToModel simply finds no matching fields.
+	if envelope != "" {
+		stmts = append(stmts, &ast.IfStmt{
+			Init: astgen.Assign(
+				[]ast.Expr{astgen.Ident("v"), astgen.Ident("ok")},
+				[]ast.Expr{astgen.IndexExpr(astgen.Ident("data"), astgen.Lit(envelope))},
+			),
+			Cond: astgen.Ident("ok"),
+			Body: astgen.Block(
+				&ast.IfStmt{
+					Init: astgen.Assign(
+						[]ast.Expr{astgen.Ident("m"), astgen.Ident("ok")},
+						[]ast.Expr{astgen.TypeAssertExpr(astgen.Ident("v"), astgen.MapType(astgen.Ident("string"), astgen.Ident("any")))},
+					),
+					Cond: astgen.Ident("ok"),
+					Body: astgen.Block(
+						astgen.AssignStmt(
+							[]ast.Expr{astgen.Ident("data")},
+							[]ast.Expr{astgen.Ident("m")},
+							token.ASSIGN,
+						),
+					),
+				},
+			),
+		})
+	}
+	stmts = append(stmts,
 		astgen.AssignStmt(
 			[]ast.Expr{astgen.Ident("err")},
 			[]ast.Expr{astgen.Call(
@@ -1016,7 +1060,8 @@ func decodeAndApplyStmts(summary, modelVar string) []ast.Stmt {
 			token.ASSIGN,
 		),
 		errCheckStmt(summary, "Could not map response to state: %s"),
-	}
+	)
+	return stmts
 }
 
 // stateSetStmt emits resp.Diagnostics.Append(resp.State.Set(ctx, &model)...).
@@ -1249,7 +1294,7 @@ func wiredCreateBody(r ir.ResourceIR, plan resourceWiringPlan, modelName string)
 	stmts = append(stmts, bodyStmts...)
 	stmts = append(stmts, requestPathStmts(plan.create, "plan")...)
 	stmts = append(stmts, sendRequestStmts(plan.create, "r", summary, "plan", bodyExpr, nil)...)
-	stmts = append(stmts, decodeAndApplyStmts(summary, "plan")...)
+	stmts = append(stmts, decodeAndApplyStmts(summary, "plan", plan.create.responseEnvelope)...)
 	stmts = append(stmts, createIDFallbackStmts(r, "plan", summary)...)
 	stmts = append(stmts, stateSetStmt("plan"))
 	return stmts
@@ -1328,7 +1373,7 @@ func wiredReadBody(r ir.ResourceIR, plan resourceWiringPlan, modelName string) [
 		)),
 		astgen.Return(),
 	})...)
-	stmts = append(stmts, decodeAndApplyStmts(summary, "state")...)
+	stmts = append(stmts, decodeAndApplyStmts(summary, "state", plan.read.responseEnvelope)...)
 	stmts = append(stmts, stateSetStmt("state"))
 	return stmts
 }
@@ -1377,7 +1422,7 @@ func wiredUpdateBody(r ir.ResourceIR, plan resourceWiringPlan, modelName string)
 	stmts = append(stmts, bodyStmts...)
 	stmts = append(stmts, requestPathStmts(plan.updateOp, "plan")...)
 	stmts = append(stmts, sendRequestStmts(plan.updateOp, "r", summary, "plan", bodyExpr, nil)...)
-	stmts = append(stmts, decodeAndApplyStmts(summary, "plan")...)
+	stmts = append(stmts, decodeAndApplyStmts(summary, "plan", plan.updateOp.responseEnvelope)...)
 	stmts = append(stmts, stateSetStmt("plan"))
 	return stmts
 }

@@ -18,6 +18,13 @@ import (
 	"github.com/signalbreak-labs/eidos/pkg/transformer"
 )
 
+// testOp builds a transformer.Operation with Method and Path populated, mirroring
+// how the real pipeline constructs pathOps (handler.go) so CRUD-group helpers
+// like transformer.HasFullCRUD behave as they do on a real spec.
+func testOp(method transformer.HTTPMethod, path string) transformer.Operation {
+	return transformer.Operation{Method: method, Path: path}
+}
+
 func TestValidate_ValidOpenAPI3JSON(t *testing.T) {
 	body := []byte(`{
 		"openapi": "3.0.1",
@@ -51,16 +58,22 @@ func TestValidate_ValidOpenAPI3JSON(t *testing.T) {
 	if resp.IRPreview == nil {
 		t.Fatal("expected IR preview")
 	}
-	if resp.IRPreview.Name != "pet_store" {
-		t.Errorf("expected provider name pet_store, got %q", resp.IRPreview.Name)
+	if resp.IRPreview.Name != "pet-store" {
+		t.Errorf("expected provider name pet-store, got %q", resp.IRPreview.Name)
 	}
 	if len(resp.IRPreview.DataSources) != 1 {
 		t.Errorf("expected 1 data source, got %d", len(resp.IRPreview.DataSources))
 	}
-	if len(resp.IRPreview.Resources) != 1 {
-		t.Errorf("expected 1 resource, got %d", len(resp.IRPreview.Resources))
+	// The spec has a create (POST /pets) and a read (GET /pets/{id}) but no
+	// delete, so the group is not full CRUD: the create is reclassified as an
+	// action rather than scaffolded as an empty resource.
+	if len(resp.IRPreview.Resources) != 0 {
+		t.Errorf("expected 0 resources, got %d", len(resp.IRPreview.Resources))
 	}
-	if !strings.Contains(resp.SuggestedConfig, "name: pet_store") {
+	if len(resp.IRPreview.Actions) != 1 {
+		t.Errorf("expected 1 action, got %d", len(resp.IRPreview.Actions))
+	}
+	if !strings.Contains(resp.SuggestedConfig, "name: pet-store") {
 		t.Errorf("expected suggested config to contain provider name, got:\n%s", resp.SuggestedConfig)
 	}
 }
@@ -371,11 +384,91 @@ func TestValidate_OptInConstructsAndProviderSettings(t *testing.T) {
 	}
 }
 
+// TestValidate_DuplicateOperationIdFailsLoud verifies that two operations
+// sharing an operationId (which normalize to the same construct name) produce
+// an error diagnostic instead of a confusing "duplicate output path" error from
+// the generator.
+func TestValidate_DuplicateOperationIdFailsLoud(t *testing.T) {
+	body := []byte(`{
+		"openapi": "3.0.1",
+		"info": {"title": "Dup API", "version": "1.0.0"},
+		"paths": {
+			"/snmp/throttle": {
+				"put": {
+					"operationId": "redefineSnmpThrottleConfig",
+					"responses": {"200": {"description": "ok"}}
+				}
+			},
+			"/system/snmp/throttle": {
+				"put": {
+					"operationId": "redefineSnmpThrottleConfig",
+					"responses": {"200": {"description": "ok"}}
+				}
+			}
+		}
+	}`)
+
+	resp := Validate(body)
+	if resp.Valid {
+		t.Fatalf("expected invalid response for duplicate operationId, got valid: %+v", resp.Diagnostics)
+	}
+	found := false
+	for _, d := range resp.Diagnostics {
+		if d.Severity == diagnostics.Error.String() && strings.Contains(d.Summary, "duplicate action name") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected duplicate action name error diagnostic, got %+v", resp.Diagnostics)
+	}
+}
+
+// TestValidate_DuplicateOperationIdResolvedByMethodPathOverride verifies that a
+// generator.yaml action override matching by "METHOD /path" renames one of two
+// colliding operations (which share an operationId) so the duplicate diagnostic
+// clears and both actions are emitted with distinct names.
+func TestValidate_DuplicateOperationIdResolvedByMethodPathOverride(t *testing.T) {
+	body := []byte(`{
+		"openapi": "3.0.1",
+		"info": {"title": "Dup API", "version": "1.0.0"},
+		"config": "provider:\n  name: dup_provider\n  version: \"1.0.0\"\naction_overrides:\n  - operation: \"PUT /system/snmp/throttle\"\n    name: redefine_system_snmp_throttle_config\n",
+		"paths": {
+			"/snmp/throttle": {
+				"put": {
+					"operationId": "redefineSnmpThrottleConfig",
+					"responses": {"200": {"description": "ok"}}
+				}
+			},
+			"/system/snmp/throttle": {
+				"put": {
+					"operationId": "redefineSnmpThrottleConfig",
+					"responses": {"200": {"description": "ok"}}
+				}
+			}
+		}
+	}`)
+
+	resp := Validate(body)
+	if !resp.Valid {
+		t.Fatalf("expected valid response, got diagnostics: %+v", resp.Diagnostics)
+	}
+	if len(resp.IRPreview.Actions) != 2 {
+		t.Fatalf("expected 2 actions, got %d", len(resp.IRPreview.Actions))
+	}
+	names := make(map[string]bool, 2)
+	for _, a := range resp.IRPreview.Actions {
+		names[a.Name] = true
+	}
+	if !names["redefine_snmp_throttle_config"] || !names["redefine_system_snmp_throttle_config"] {
+		t.Errorf("expected both disambiguated action names, got %v", names)
+	}
+}
+
 func TestValidate_ResourceOverridesAreApplied(t *testing.T) {
 	body := []byte(`{
 		"openapi": "3.0.1",
 		"info": {"title": "Override API", "version": "1.0.0"},
-		"config": "provider:\n  name: override_api\n  version: \"1.0.0\"\nresource_overrides:\n  - schema: create_pet\n    id_attribute: pet_id\n    import_format: \"{id}\"\n",
+		"config": "provider:\n  name: override_api\n  version: \"1.0.0\"\nresource_overrides:\n  - operation: createPet\n    id_attribute: pet_id\n    import_format: \"{id}\"\n",
 		"paths": {
 			"/pets": {
 				"post": {
@@ -387,6 +480,10 @@ func TestValidate_ResourceOverridesAreApplied(t *testing.T) {
 				"get": {
 					"operationId": "getPet",
 					"responses": {"200": {"description": "ok"}}
+				},
+				"delete": {
+					"operationId": "deletePet",
+					"responses": {"204": {"description": "deleted"}}
 				}
 			}
 		}
@@ -399,6 +496,8 @@ func TestValidate_ResourceOverridesAreApplied(t *testing.T) {
 	if resp.IRPreview == nil {
 		t.Fatal("expected IR preview")
 	}
+	// The spec is full CRUD (create + read + delete), so the resource is
+	// inferred and the id_attribute/import_format overrides apply to it.
 	if len(resp.IRPreview.Resources) != 1 {
 		t.Fatalf("expected 1 resource, got %d", len(resp.IRPreview.Resources))
 	}
@@ -408,6 +507,187 @@ func TestValidate_ResourceOverridesAreApplied(t *testing.T) {
 	}
 	if res.ImportIDFormat != "{id}" {
 		t.Errorf("expected import_format override {id}, got %q", res.ImportIDFormat)
+	}
+}
+
+// TestValidate_ActionOverrideDoubleClaimedWarnsAndSkips asserts that an action
+// override whose operation is already consumed by a managed resource fails loud
+// (a Warning naming the operation) and does NOT append an empty scaffold action
+// for it. This is the regression for the SpaceTraders config bug where
+// purchase-ship / scrap-ship were declared as both resource operations and
+// action overrides: the resource consumed the operations, so no action was
+// inferred, and the bare override emitted a body-less scaffold that dropped
+// practitioner input at runtime.
+func TestValidate_ActionOverrideDoubleClaimedWarnsAndSkips(t *testing.T) {
+	body := []byte(`{
+		"openapi": "3.0.1",
+		"info": {"title": "Double Claim API", "version": "1.0.0"},
+		"config": "provider:\n  name: double_claim_api\n  version: \"1.0.0\"\naction_overrides:\n  - operation: createPet\n    name: create_pet\n",
+		"paths": {
+			"/pets": {
+				"post": {
+					"operationId": "createPet",
+					"responses": {"201": {"description": "created"}}
+				}
+			},
+			"/pets/{id}": {
+				"get": {
+					"operationId": "getPet",
+					"responses": {"200": {"description": "ok"}}
+				},
+				"delete": {
+					"operationId": "deletePet",
+					"responses": {"204": {"description": "deleted"}}
+				}
+			}
+		}
+	}`)
+
+	resp := Validate(body)
+	// A warning is non-blocking: the provider is still generated.
+	if !resp.Valid {
+		t.Fatalf("expected valid response (warning, not error), got diagnostics: %+v", resp.Diagnostics)
+	}
+	if resp.IRPreview == nil {
+		t.Fatal("expected an IR preview")
+	}
+
+	var sawDoubleClaim bool
+	for _, d := range resp.Diagnostics {
+		if d.Severity == diagnostics.Warning.String() && strings.Contains(d.Summary, "already claimed by a resource") {
+			sawDoubleClaim = true
+			if !strings.Contains(d.Detail, "createPet") {
+				t.Errorf("expected the warning to name the double-claimed operation, got: %s", d.Detail)
+			}
+		}
+	}
+	if !sawDoubleClaim {
+		t.Errorf("expected a double-claim warning, got diagnostics: %+v", resp.Diagnostics)
+	}
+
+	// The grouped resource owns the operation; the scaffold action must not be
+	// emitted.
+	if len(resp.IRPreview.Resources) != 1 {
+		t.Errorf("expected 1 resource, got %d", len(resp.IRPreview.Resources))
+	}
+	for _, a := range resp.IRPreview.Actions {
+		if a.SourceOperation == "createPet" {
+			t.Errorf("double-claimed operation must not become an action, got action %q", a.Name)
+		}
+	}
+}
+
+// TestValidate_ActionOverrideUnclaimedStillEmitted asserts that an action
+// override for an operation no resource consumes still appends an action (the
+// override is a legitimate declaration, not a double-claim).
+func TestValidate_ActionOverrideUnclaimedStillEmitted(t *testing.T) {
+	body := []byte(`{
+		"openapi": "3.0.1",
+		"info": {"title": "Unclaimed Action API", "version": "1.0.0"},
+		"config": "provider:\n  name: unclaimed_action_api\n  version: \"1.0.0\"\naction_overrides:\n  - operation: resetPet\n    name: reset_pet\n",
+		"paths": {
+			"/pets": {
+				"post": {
+					"operationId": "createPet",
+					"responses": {"201": {"description": "created"}}
+				}
+			},
+			"/pets/{id}": {
+				"get": {
+					"operationId": "getPet",
+					"responses": {"200": {"description": "ok"}}
+				},
+				"delete": {
+					"operationId": "deletePet",
+					"responses": {"204": {"description": "deleted"}}
+				}
+			},
+			"/pets/{id}:reset": {
+				"post": {
+					"operationId": "resetPet",
+					"responses": {"200": {"description": "ok"}}
+				}
+			}
+		}
+	}`)
+
+	resp := Validate(body)
+	if !resp.Valid {
+		t.Fatalf("expected valid response, got diagnostics: %+v", resp.Diagnostics)
+	}
+	if resp.IRPreview == nil {
+		t.Fatal("expected an IR preview")
+	}
+	for _, d := range resp.Diagnostics {
+		if strings.Contains(d.Summary, "already claimed by a resource") {
+			t.Fatalf("an unclaimed operation must not trigger the double-claim warning, got: %+v", d)
+		}
+	}
+	var sawReset bool
+	for _, a := range resp.IRPreview.Actions {
+		if a.SourceOperation == "resetPet" {
+			sawReset = true
+		}
+	}
+	if !sawReset {
+		t.Errorf("expected an action for unclaimed operation resetPet, got actions: %+v", resp.IRPreview.Actions)
+	}
+}
+
+// TestValidate_MultiBearerSchemesQualifyAuthAttributes asserts that a spec
+// declaring several HTTP bearer schemes yields distinct, scheme-qualified
+// provider-config attributes (e.g. account_token + agent_token) instead of
+// collapsing onto a single bearer_token. This is the SpaceTraders auth fix: two
+// bearer schemes map to two attributes so per-scheme tokens are set
+// independently and per-operation WithSchemes selection is meaningful.
+func TestValidate_MultiBearerSchemesQualifyAuthAttributes(t *testing.T) {
+	body := []byte(`{
+		"openapi": "3.0.1",
+		"info": {"title": "Multi Bearer API", "version": "1.0.0"},
+		"paths": {
+			"/me": {
+				"get": {
+					"operationId": "getMe",
+					"security": [{"AccountToken": []}],
+					"responses": {"200": {"description": "ok"}}
+				}
+			}
+		},
+		"components": {
+			"securitySchemes": {
+				"AccountToken": {"type": "http", "scheme": "bearer"},
+				"AgentToken": {"type": "http", "scheme": "bearer"}
+			}
+		}
+	}`)
+
+	resp := Validate(body)
+	if !resp.Valid {
+		t.Fatalf("expected valid response, got diagnostics: %+v", resp.Diagnostics)
+	}
+	if resp.IRPreview == nil {
+		t.Fatal("expected an IR preview")
+	}
+
+	var sawAccount, sawAgent bool
+	for _, a := range resp.IRPreview.ConfigSchema.Attributes {
+		switch a.Name {
+		case "account_token":
+			sawAccount = true
+			if !a.Sensitive {
+				t.Error("account_token must be a sensitive attribute")
+			}
+		case "agent_token":
+			sawAgent = true
+			if !a.Sensitive {
+				t.Error("agent_token must be a sensitive attribute")
+			}
+		case "bearer_token":
+			t.Error("multi-bearer spec must not expose a generic bearer_token attribute")
+		}
+	}
+	if !sawAccount || !sawAgent {
+		t.Errorf("expected both account_token and agent_token config attributes, got: %+v", resp.IRPreview.ConfigSchema.Attributes)
 	}
 }
 
@@ -662,6 +942,7 @@ func TestValidate_CRUDMappingByMethod(t *testing.T) {
 				"post": {"operationId": "createPet", "responses": {"201": {"description": "created"}}}
 			},
 			"/pets/{id}": {
+				"get": {"operationId": "getPet", "responses": {"200": {"description": "ok"}}},
 				"put": {"operationId": "updatePet", "responses": {"200": {"description": "ok"}}},
 				"patch": {"operationId": "patchPet", "responses": {"200": {"description": "ok"}}},
 				"delete": {"operationId": "deletePet", "responses": {"204": {"description": "deleted"}}}
@@ -673,54 +954,30 @@ func TestValidate_CRUDMappingByMethod(t *testing.T) {
 	if !resp.Valid {
 		t.Fatalf("expected valid response, got diagnostics: %+v", resp.Diagnostics)
 	}
-	if len(resp.IRPreview.Resources) != 4 {
-		t.Fatalf("expected 4 resources, got %d", len(resp.IRPreview.Resources))
+	// A full CRUD group (create + read + update + delete) becomes a single
+	// grouped resource whose CRUD mapping binds each lifecycle method to the
+	// right HTTP verb.
+	if len(resp.IRPreview.Resources) != 1 {
+		t.Fatalf("expected 1 grouped resource, got %d", len(resp.IRPreview.Resources))
 	}
-	for _, r := range resp.IRPreview.Resources {
-		switch r.SourceOperation {
-		case "createPet":
-			if r.CRUDMapping.Create.Method != http.MethodPost {
-				t.Errorf("expected POST create mapping, got %+v", r.CRUDMapping.Create)
-			}
-			if r.CRUDMapping.Update != nil {
-				t.Errorf("expected no update mapping for create resource, got %+v", r.CRUDMapping.Update)
-			}
-			if r.CRUDMapping.Delete.Method != "" {
-				t.Errorf("expected no delete mapping for create resource, got %+v", r.CRUDMapping.Delete)
-			}
-		case "updatePet":
-			if r.CRUDMapping.Update == nil || r.CRUDMapping.Update.Method != http.MethodPut {
-				t.Errorf("expected PUT update mapping, got %+v", r.CRUDMapping.Update)
-			}
-			if r.CRUDMapping.Create.Method != "" {
-				t.Errorf("expected no create mapping for update resource, got %+v", r.CRUDMapping.Create)
-			}
-			if r.CRUDMapping.Delete.Method != "" {
-				t.Errorf("expected no delete mapping for update resource, got %+v", r.CRUDMapping.Delete)
-			}
-		case "patchPet":
-			if r.CRUDMapping.Update == nil || r.CRUDMapping.Update.Method != http.MethodPatch {
-				t.Errorf("expected PATCH update mapping, got %+v", r.CRUDMapping.Update)
-			}
-			if r.CRUDMapping.Create.Method != "" {
-				t.Errorf("expected no create mapping for patch resource, got %+v", r.CRUDMapping.Create)
-			}
-			if r.CRUDMapping.Delete.Method != "" {
-				t.Errorf("expected no delete mapping for patch resource, got %+v", r.CRUDMapping.Delete)
-			}
-		case "deletePet":
-			if r.CRUDMapping.Delete.Method != http.MethodDelete {
-				t.Errorf("expected DELETE delete mapping, got %+v", r.CRUDMapping.Delete)
-			}
-			if r.CRUDMapping.Create.Method != "" {
-				t.Errorf("expected no create mapping for delete resource, got %+v", r.CRUDMapping.Create)
-			}
-			if r.CRUDMapping.Update != nil {
-				t.Errorf("expected no update mapping for delete resource, got %+v", r.CRUDMapping.Update)
-			}
-		default:
-			t.Errorf("unexpected resource %q", r.SourceOperation)
-		}
+	r := resp.IRPreview.Resources[0]
+	if r.CRUDMapping.Create.Method != http.MethodPost {
+		t.Errorf("expected POST create mapping, got %+v", r.CRUDMapping.Create)
+	}
+	if r.CRUDMapping.Read.Method != http.MethodGet {
+		t.Errorf("expected GET read mapping, got %+v", r.CRUDMapping.Read)
+	}
+	if r.CRUDMapping.Update == nil || r.CRUDMapping.Update.Method != http.MethodPut {
+		t.Errorf("expected PUT update mapping, got %+v", r.CRUDMapping.Update)
+	}
+	if r.CRUDMapping.Delete.Method != http.MethodDelete {
+		t.Errorf("expected DELETE delete mapping, got %+v", r.CRUDMapping.Delete)
+	}
+	// The PATCH is the partial update; with a PUT present it is subsumed by the
+	// grouped resource's Update and consumed, so it is not double-emitted as a
+	// separate action or scaffolded as an empty resource.
+	if len(resp.IRPreview.Actions) != 0 {
+		t.Fatalf("expected 0 actions, got %d", len(resp.IRPreview.Actions))
 	}
 }
 
@@ -1273,7 +1530,11 @@ func TestClassifyOperation_Heuristics(t *testing.T) {
 		{"/pets/{id}", "GET", "getPet", nil, kindDataSource},
 		{"/pets", "POST", "createPet", nil, kindResource},
 		{"/pets/{id}", "PUT", "updatePet", nil, kindResource},
-		{"/pets/{id}", "PATCH", "patchPet", nil, kindResource},
+		// PATCH is the partial update; when the group also has a PUT, the PUT is
+		// consumed as the resource Update and the PATCH is not part of the CRUD
+		// group, so it is reclassified as an action rather than scaffolded as an
+		// empty resource.
+		{"/pets/{id}", "PATCH", "patchPet", nil, kindAction},
 		{"/pets/{id}", "DELETE", "deletePet", nil, kindResource},
 		{"/pets/{id}/reboot", "POST", "rebootPet", nil, kindAction},
 		{"/pets", "DELETE", "deleteAllPets", nil, kindAction},
@@ -1288,18 +1549,18 @@ func TestClassifyOperation_Heuristics(t *testing.T) {
 	// collection has an instance subpath stays a resource) behaves as it does
 	// on a real spec.
 	pathOps := map[string]map[transformer.HTTPMethod]transformer.Operation{
-		"/pets":                  {transformer.MethodPost: {}},
-		"/pets/{id}":             {transformer.MethodGet: {}, transformer.MethodPut: {}, transformer.MethodPatch: {}, transformer.MethodDelete: {}},
-		"/pets/{id}/reboot":      {transformer.MethodPost: {}},
-		"/credentials/temporary": {transformer.MethodPost: {}},
-		"/pets/search":           {transformer.MethodGet: {}},
-		"/items":                 {transformer.MethodGet: {}},
-		"/convert":               {transformer.MethodGet: {}},
+		"/pets":                  {transformer.MethodPost: testOp(transformer.MethodPost, "/pets")},
+		"/pets/{id}":             {transformer.MethodGet: testOp(transformer.MethodGet, "/pets/{id}"), transformer.MethodPut: testOp(transformer.MethodPut, "/pets/{id}"), transformer.MethodPatch: testOp(transformer.MethodPatch, "/pets/{id}"), transformer.MethodDelete: testOp(transformer.MethodDelete, "/pets/{id}")},
+		"/pets/{id}/reboot":      {transformer.MethodPost: testOp(transformer.MethodPost, "/pets/{id}/reboot")},
+		"/credentials/temporary": {transformer.MethodPost: testOp(transformer.MethodPost, "/credentials/temporary")},
+		"/pets/search":           {transformer.MethodGet: testOp(transformer.MethodGet, "/pets/search")},
+		"/items":                 {transformer.MethodGet: testOp(transformer.MethodGet, "/items")},
+		"/convert":               {transformer.MethodGet: testOp(transformer.MethodGet, "/convert")},
 	}
 	for _, tc := range cases {
 		t.Run(tc.path+"_"+tc.method, func(t *testing.T) {
 			op := &parser.Operation{OperationID: tc.opID, Extensions: tc.extensions}
-			got := classifyOperation(tc.path, tc.method, op, pathOps)
+			got := classifyOperation(tc.path, tc.method, op, pathOps, true)
 			if got != tc.want {
 				t.Errorf("classifyOperation(%q, %q, %q) = %q, want %q", tc.path, tc.method, tc.opID, got, tc.want)
 			}
@@ -1491,11 +1752,14 @@ func TestValidate_HeuristicAutoDetection(t *testing.T) {
 	if len(resp.IRPreview.DataSources) != 1 {
 		t.Errorf("expected 1 data source, got %d", len(resp.IRPreview.DataSources))
 	}
-	if len(resp.IRPreview.Resources) != 1 {
-		t.Errorf("expected 1 resource, got %d", len(resp.IRPreview.Resources))
+	// createPet (POST /pets) has no paired delete, so the group is not full CRUD
+	// and the create is reclassified as an action rather than scaffolded as an
+	// empty resource.
+	if len(resp.IRPreview.Resources) != 0 {
+		t.Errorf("expected 0 resources, got %d", len(resp.IRPreview.Resources))
 	}
-	if len(resp.IRPreview.Actions) != 1 {
-		t.Errorf("expected 1 action, got %d", len(resp.IRPreview.Actions))
+	if len(resp.IRPreview.Actions) != 2 {
+		t.Errorf("expected 2 actions, got %d", len(resp.IRPreview.Actions))
 	}
 	if len(resp.IRPreview.EphemeralResources) != 1 {
 		t.Errorf("expected 1 ephemeral resource, got %d", len(resp.IRPreview.EphemeralResources))
@@ -1577,7 +1841,7 @@ func TestParamsFromOperation_CookieAndFormData(t *testing.T) {
 	}
 
 	// operationMapping surfaces cookie and formData on the IR mapping.
-	mapping := operationMapping("GET", "/items/{itemId}", op)
+	mapping := operationMapping("GET", "/items/{itemId}", op, "")
 	if len(mapping.CookieParams) != 1 || mapping.CookieParams[0].Name != "session" {
 		t.Errorf("mapping.CookieParams = %+v, want [session]", mapping.CookieParams)
 	}
@@ -1674,6 +1938,43 @@ func TestLoggingConfig_AbsentLeavesLoggingNil(t *testing.T) {
 	}
 }
 
+// TestBuildProviderIR_NonLocalRefFailsLoud asserts the generate path runs the
+// same $ref validation as the HTTP /validate endpoint (parser.Validate): a
+// non-local $ref — e.g. a bundled spec's sibling schema file that was never
+// fetched — must surface as an error diagnostic instead of being silently
+// dropped into an empty schema. The converter records the ref string but never
+// resolves it; only Validate rejects non-local references (fail-loud, not
+// dropped-silently).
+func TestBuildProviderIR_NonLocalRefFailsLoud(t *testing.T) {
+	spec := []byte(`{
+		"openapi": "3.0.1",
+		"info": {"title": "Bundled API", "version": "1.0.0"},
+		"paths": {
+			"/pets": {
+				"post": {
+					"operationId": "createPet",
+					"requestBody": {"content": {"application/json": {"schema": {"$ref": "source/schemas/pet.json#/definitions/Pet"}}}},
+					"responses": {"200": {"description": "ok"}}
+				}
+			}
+		}
+	}`)
+
+	_, _, diags, err := BuildProviderIR(spec, nil)
+	if err != nil {
+		t.Fatalf("BuildProviderIR() error = %v", err)
+	}
+	if !diags.HasErrors() {
+		t.Fatal("BuildProviderIR() diagnostics have no errors, want Non-local $ref error")
+	}
+	for _, d := range diags {
+		if d.Severity == diagnostics.Error && d.Summary == "Non-local $ref" {
+			return
+		}
+	}
+	t.Errorf("BuildProviderIR() diagnostics = %v, want a Non-local $ref error", diags)
+}
+
 // TestClassifyOperation_ActionFromVerbOperationId locks in the G unification: a
 // POST whose trailing path segment is not a recognized verb but whose
 // operationId leads with one classifies as an action, and a POST that is not a
@@ -1682,9 +1983,11 @@ func TestLoggingConfig_AbsentLeavesLoggingNil(t *testing.T) {
 // resource.
 func TestClassifyOperation_ActionFromVerbOperationId(t *testing.T) {
 	pathOps := map[string]map[transformer.HTTPMethod]transformer.Operation{
-		"/servers":      {transformer.MethodPost: {}},
-		"/servers/{id}": {transformer.MethodGet: {}, transformer.MethodPost: {}},
-		"/uploads":      {transformer.MethodPost: {}},
+		"/servers":      {transformer.MethodPost: testOp(transformer.MethodPost, "/servers")},
+		"/servers/{id}": {transformer.MethodGet: testOp(transformer.MethodGet, "/servers/{id}"), transformer.MethodPost: testOp(transformer.MethodPost, "/servers/{id}"), transformer.MethodDelete: testOp(transformer.MethodDelete, "/servers/{id}")},
+		"/uploads":      {transformer.MethodPost: testOp(transformer.MethodPost, "/uploads")},
+		"/widgets":      {transformer.MethodPost: testOp(transformer.MethodPost, "/widgets")},
+		"/widgets/{id}": {transformer.MethodGet: testOp(transformer.MethodGet, "/widgets/{id}")},
 	}
 	cases := []struct {
 		name       string
@@ -1696,14 +1999,92 @@ func TestClassifyOperation_ActionFromVerbOperationId(t *testing.T) {
 		{"non-verb operationId, not a CRUD create", "/uploads", "uploadFile", kindAction},
 		{"non-verb operationId, not a CRUD create on instance path", "/servers/{id}", "updateServer", kindAction},
 		{"CRUD create stays a resource", "/servers", "createServer", kindResource},
+		{"CRUD create without full CRUD is an action", "/widgets", "createWidget", kindAction},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			op := &parser.Operation{OperationID: tc.opID}
-			if got := classifyOperation(tc.path, "POST", op, pathOps); got != tc.want {
+			if got := classifyOperation(tc.path, "POST", op, pathOps, true); got != tc.want {
 				t.Errorf("classifyOperation(%q, POST, %q) = %q, want %q", tc.path, tc.opID, got, tc.want)
 			}
 		})
+	}
+}
+
+// TestActionFromOperation_RequestBodySurfacesConfigSchema locks in that a
+// body-bearing action's config schema includes the request-body properties, so
+// a scaffolded action (the client cannot send its body) still presents its
+// intended inputs to the practitioner instead of an empty schema. The register
+// action on the SpaceTraders spec is the motivating case: without this, it
+// would expose no symbol/faction inputs at all.
+func TestActionFromOperation_RequestBodySurfacesConfigSchema(t *testing.T) {
+	body := []byte(`{
+		"openapi": "3.0.1",
+		"info": {"title": "Register API", "version": "1.0.0"},
+		"components": {
+			"schemas": {
+				"FactionSymbol": {"type": "string", "enum": ["COSMIC", "VOID"]}
+			}
+		},
+		"paths": {
+			"/register": {
+				"post": {
+					"operationId": "register",
+					"requestBody": {
+						"required": true,
+						"content": {
+							"application/json": {
+								"schema": {
+									"type": "object",
+									"required": ["symbol", "faction"],
+									"properties": {
+										"symbol": {"type": "string", "minLength": 3, "maxLength": 14},
+										"faction": {"$ref": "#/components/schemas/FactionSymbol"}
+									}
+								}
+							}
+						}
+					},
+					"responses": {"201": {"description": "created"}}
+				}
+			}
+		}
+	}`)
+
+	resp := Validate(body)
+	if !resp.Valid {
+		t.Fatalf("expected valid response, got diagnostics: %+v", resp.Diagnostics)
+	}
+	if len(resp.IRPreview.Actions) != 1 {
+		t.Fatalf("expected 1 action, got %d", len(resp.IRPreview.Actions))
+	}
+	action := resp.IRPreview.Actions[0]
+	if action.Name != "register" {
+		t.Errorf("expected action register, got %q", action.Name)
+	}
+	attrs := make(map[string]ir.AttributeIR, len(action.ConfigSchema.Attributes))
+	for _, a := range action.ConfigSchema.Attributes {
+		attrs[a.Name] = a
+	}
+	for _, want := range []struct {
+		name     string
+		typ      ir.PrimitiveType
+		required bool
+	}{
+		{"symbol", ir.TypeString, true},
+		{"faction", ir.TypeString, true},
+	} {
+		a, ok := attrs[want.name]
+		if !ok {
+			t.Errorf("expected config attribute %q, got %v", want.name, attrs)
+			continue
+		}
+		if a.Schema.Type != want.typ {
+			t.Errorf("attribute %q type = %q, want %q", want.name, a.Schema.Type, want.typ)
+		}
+		if a.Required != want.required {
+			t.Errorf("attribute %q Required = %v, want %v", want.name, a.Required, want.required)
+		}
 	}
 }
 

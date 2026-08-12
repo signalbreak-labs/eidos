@@ -278,20 +278,38 @@ func validateContext(ctx context.Context, body []byte, contentType string) Valid
 	return resp
 }
 
+// loadRequestBodyWithContentType parses a spec body using the fixed display
+// name "request.yaml"/"request.json" — appropriate for the HTTP validate
+// endpoint, where the request body has no real filename.
 func loadRequestBodyWithContentType(body []byte, contentType string) (parser.Node, error) {
+	return loadRequestBody(body, contentType, "request.yaml", "request.json")
+}
+
+// loadRequestBodyWithName parses a spec body, attributing parse errors to name
+// (the caller's real spec path or URL) so diagnostics point at the actual file
+// rather than the generic "request.yaml". The name is used verbatim for both
+// formats: the file's own extension is authoritative.
+func loadRequestBodyWithName(body []byte, contentType, name string) (parser.Node, error) {
+	return loadRequestBody(body, contentType, name, name)
+}
+
+func loadRequestBody(body []byte, contentType, yamlName, jsonName string) (parser.Node, error) {
 	trimmed := bytes.TrimSpace(body)
 	if len(trimmed) == 0 {
 		return nil, fmt.Errorf("empty request body")
 	}
 
 	ct := strings.ToLower(strings.TrimSpace(contentType))
+	// Route explicitly by Content-Type / first byte (not by the display name's
+	// extension) so a spec body is always parsed with the right parser and errors
+	// are attributed to the caller's real file name.
 	if strings.Contains(ct, "yaml") || strings.Contains(ct, "yml") {
-		return parser.LoadFile("request.yaml", body)
+		return parser.LoadFileAsYAML(yamlName, body)
 	}
 	if strings.Contains(ct, "json") || trimmed[0] == '{' || trimmed[0] == '[' {
-		return parser.LoadFile("request.json", body)
+		return parser.LoadFileAsJSON(jsonName, body)
 	}
-	return parser.LoadFile("request.yaml", body)
+	return parser.LoadFileAsYAML(yamlName, body)
 }
 
 // extractConfig removes an optional top-level "config" string from the parsed
@@ -674,7 +692,13 @@ func buildIRPreview(spec *parser.Spec, version parser.Version, cfg *config.Confi
 	// auth surface and Configure has nothing to read even though the generated
 	// client ships ready-made interceptors.
 	applySecurityConfigAttributes(preview, &previewDiags)
-	applyConfigOverrides(preview, cfg, name, &previewDiags)
+	applyConfigOverrides(preview, cfg, name, pathOps, consumed, &previewDiags)
+
+	// Two operations that normalize to the same construct name (e.g. duplicate
+	// operationIds) would make the generator emit two files at one path. Fail
+	// loud here with a diagnostic naming both source operations instead of
+	// surfacing a confusing "duplicate output path" error from the generator.
+	previewDiags = append(previewDiags, checkDuplicateConstructNames(preview)...)
 
 	return preview, previewDiags
 }
@@ -738,21 +762,63 @@ func addSpecPathOperations(preview *ir.ProviderIR, spec *parser.Spec, providerNa
 // applyConfigOverrides appends generator.yaml-declared actions, ephemeral
 // resources, list resources, and functions to the preview, applies the
 // remaining overrides, and surfaces override failures.
-func applyConfigOverrides(preview *ir.ProviderIR, cfg *config.Config, providerName string, diags *diagnostics.Diagnostics) {
+//
+// An override that matches an already-inferred construct modifies that
+// construct (via ApplyOverrides) rather than declaring a new one: appending a
+// fresh construct from the override would emit two constructs with the same
+// name — the override-created one and the renamed existing one. The override
+// fields that ApplyOverrides does not handle (preflight endpoints, lifecycle
+// mappings, function arguments) are applied to the matched construct here so
+// they are not silently dropped.
+//
+// pathOps and consumed thread the resolved operation map and the set of
+// operations already claimed by resources so an action override that targets a
+// resource-claimed operation fails loud instead of silently appending an empty
+// scaffold action (the operation was consumed by the resource, so no action was
+// inferred, and the bare actionFromOverride carries no ConfigSchema or
+// InvokeMapping).
+func applyConfigOverrides(preview *ir.ProviderIR, cfg *config.Config, providerName string, pathOps map[string]map[transformer.HTTPMethod]transformer.Operation, consumed map[string]map[string]bool, diags *diagnostics.Diagnostics) {
 	if cfg == nil {
 		return
 	}
 	for _, ao := range cfg.ActionOverrides {
+		if idx := matchingActionIndex(preview.Actions, ao); idx >= 0 {
+			applyActionOverrideExtras(&preview.Actions[idx], ao)
+			continue
+		}
+		if path, method, ok := actionOverrideDoubleClaimed(ao, pathOps, consumed); ok {
+			*diags = append(*diags, diagnostics.Diagnostic{
+				Severity: diagnostics.Warning,
+				Summary:  "Action override references an operation already claimed by a resource",
+				Detail: fmt.Sprintf(
+					"Action override %q targets %s %s, which a resource already consumes. The operation "+
+						"can be claimed by exactly one construct, so the action is skipped. Remove the "+
+						"operation from action_overrides or from the resource's create/read/update/delete "+
+						"operations so the claim is unambiguous.",
+					ao.Operation, strings.ToUpper(method), path),
+			})
+			continue
+		}
 		preview.Actions = append(preview.Actions, actionFromOverride(ao, providerName))
 	}
 	for _, eo := range cfg.EphemeralOverrides {
-		preview.EphemeralResources = append(preview.EphemeralResources, ephemeralFromOverride(eo, providerName))
+		if idx := matchingEphemeralIndex(preview.EphemeralResources, eo); idx >= 0 {
+			applyEphemeralOverrideExtras(&preview.EphemeralResources[idx], eo)
+		} else {
+			preview.EphemeralResources = append(preview.EphemeralResources, ephemeralFromOverride(eo, providerName))
+		}
 	}
 	for _, lo := range cfg.ListResourceOverrides {
-		preview.ListResources = append(preview.ListResources, listResourceFromOverride(lo, providerName))
+		if matchingListResourceIndex(preview.ListResources, lo) < 0 {
+			preview.ListResources = append(preview.ListResources, listResourceFromOverride(lo, providerName))
+		}
 	}
 	for _, fo := range cfg.FunctionOverrides {
-		preview.Functions = append(preview.Functions, functionFromOverride(fo, providerName))
+		if idx := matchingFunctionIndex(preview.Functions, fo); idx >= 0 {
+			applyFunctionOverrideExtras(&preview.Functions[idx], fo)
+		} else {
+			preview.Functions = append(preview.Functions, functionFromOverride(fo, providerName))
+		}
 	}
 
 	if err := transformer.ApplyOverrides(preview, cfg); err != nil {
@@ -763,6 +829,109 @@ func applyConfigOverrides(preview *ir.ProviderIR, cfg *config.Config, providerNa
 		})
 	}
 	applyWriteOnlyAttributesToProvider(preview, diags)
+}
+
+// actionOverrideDoubleClaimed reports whether an action override's operation is
+// already consumed by a resource (a grouped resource or a resource creation
+// override). The operation resolves in the spec but was claimed before
+// applyConfigOverrides ran, so appending an actionFromOverride would emit an
+// empty scaffold (no ConfigSchema, no InvokeMapping) for an operation the
+// resource already owns. Overrides that name a method+path or an operation with
+// no operationId leave ok=false — those legitimately declare a fresh construct.
+func actionOverrideDoubleClaimed(ao config.ActionOverride, pathOps map[string]map[transformer.HTTPMethod]transformer.Operation, consumed map[string]map[string]bool) (string, string, bool) {
+	path, method, op := resolveOperationByID(pathOps, ao.Operation)
+	if op == nil || !isConsumed(consumed, path, method) {
+		return "", "", false
+	}
+	return path, method, true
+}
+
+// matchingActionIndex returns the index of the first action an override matches
+// (by source operation, method+path, or name identity), or -1. When an override
+// matches an already-inferred action, it modifies that action rather than
+// declaring a new one.
+func matchingActionIndex(actions []ir.ActionIR, ao config.ActionOverride) int {
+	for i := range actions {
+		if transformer.OverrideMatchesEntity(actions[i].SourceOperation, actions[i].InvokeMapping, ao.Operation, actions[i].Name, actions[i].TypeName, actions[i].FullName) {
+			return i
+		}
+	}
+	return -1
+}
+
+// applyActionOverrideExtras applies the action-override fields that
+// transformer.ApplyOverrides does not handle — the explicit preflight and
+// server-side validation endpoints — to an existing action matched by an
+// override. Without this, an override that matches an existing action would
+// silently drop its declared modify_plan_operation / validate_config_operation.
+func applyActionOverrideExtras(a *ir.ActionIR, ao config.ActionOverride) {
+	if strings.TrimSpace(ao.ModifyPlanOperation) != "" {
+		m := operationMappingFromString(ao.ModifyPlanOperation)
+		a.ModifyPlanMapping = &m
+		a.ModifyPlan = true
+	}
+	if strings.TrimSpace(ao.ValidateConfigOperation) != "" {
+		m := operationMappingFromString(ao.ValidateConfigOperation)
+		a.ValidateConfigMapping = &m
+	}
+}
+
+func matchingEphemeralIndex(ephemerals []ir.EphemeralResourceIR, eo config.EphemeralOverride) int {
+	for i := range ephemerals {
+		if transformer.OverrideMatchesEntity(ephemerals[i].SourceOperation, ephemerals[i].OpenMapping, eo.Operation, ephemerals[i].Name, ephemerals[i].TypeName, ephemerals[i].FullName) {
+			return i
+		}
+	}
+	return -1
+}
+
+// applyEphemeralOverrideExtras applies the ephemeral-override fields that
+// transformer.ApplyOverrides does not handle — the Open/Renew/Close lifecycle
+// mappings — to an existing ephemeral resource matched by an override.
+func applyEphemeralOverrideExtras(e *ir.EphemeralResourceIR, eo config.EphemeralOverride) {
+	if strings.TrimSpace(eo.OpenMapping) != "" {
+		e.OpenMapping = operationMappingFromString(eo.OpenMapping)
+	}
+	if strings.TrimSpace(eo.RenewMapping) != "" {
+		rm := operationMappingFromString(eo.RenewMapping)
+		e.RenewMapping = &rm
+		e.HasRenew = true
+	}
+	if strings.TrimSpace(eo.CloseMapping) != "" {
+		cm := operationMappingFromString(eo.CloseMapping)
+		e.CloseMapping = &cm
+		e.HasClose = true
+	}
+}
+
+func matchingListResourceIndex(listResources []ir.ListResourceIR, lo config.ListResourceOverride) int {
+	for i := range listResources {
+		if transformer.OverrideMatchesEntity(listResources[i].SourceOperation, listResources[i].ListMapping, lo.Operation, listResources[i].Name, listResources[i].TypeName, listResources[i].FullName) {
+			return i
+		}
+	}
+	return -1
+}
+
+func matchingFunctionIndex(functions []ir.FunctionIR, fo config.FunctionOverride) int {
+	for i := range functions {
+		if transformer.OverrideMatchesEntity(functions[i].SourceOperation, ir.OperationMappingIR{}, fo.Operation, functions[i].Name, functions[i].TypeName, functions[i].FullName) {
+			return i
+		}
+	}
+	return -1
+}
+
+// applyFunctionOverrideExtras applies the function-override fields that
+// transformer.ApplyOverrides does not handle — the declared arguments — to an
+// existing function matched by an override.
+func applyFunctionOverrideExtras(f *ir.FunctionIR, fo config.FunctionOverride) {
+	for _, arg := range fo.Arguments {
+		f.Arguments = append(f.Arguments, ir.FunctionParamIR{
+			Name:   arg.Name,
+			Schema: ir.SchemaIR{Type: primitiveTypeFromString(arg.Type)},
+		})
+	}
 }
 
 // sortedKeys returns the keys of m in lexicographic order. It is used to make
@@ -1020,7 +1189,7 @@ func applySecurityConfigAttributes(preview *ir.ProviderIR, diags *diagnostics.Di
 		seen[a.Name] = struct{}{}
 	}
 	for _, scheme := range preview.SecurityIR.Schemes {
-		attrs, err := transformer.MapSecuritySchemeToProviderConfig(scheme)
+		attrs, err := transformer.MapSecuritySchemeToProviderConfig(scheme, preview.SecurityIR.Schemes)
 		if err != nil {
 			*diags = append(*diags, diagnostics.Diagnostic{
 				Severity: diagnostics.Error,
@@ -1193,7 +1362,11 @@ func providerName(spec *parser.Spec, cfg *config.Config) string {
 		return cfg.Provider.Name
 	}
 	if spec.Info != nil && strings.TrimSpace(spec.Info.Title) != "" {
-		return transformer.ToSnakeCase(spec.Info.Title)
+		// Terraform provider type names allow only letters, digits, and hyphens
+		// (no underscores or dots), so derive the default from the title as
+		// kebab-case rather than snake_case (e.g. "Example Cloud API" ->
+		// "example-cloud-api", not the invalid "example_cloud_api").
+		return transformer.ToProviderTypeName(spec.Info.Title)
 	}
 	return "generated"
 }
@@ -1217,9 +1390,9 @@ func addPathOperations(preview *ir.ProviderIR, spec *parser.Spec, path string, p
 			continue
 		}
 		op = mergePathParams(op, pi.Parameters)
-		switch classifyOperation(path, method, op, pathOps) {
+		switch classifyOperation(path, method, op, pathOps, true) {
 		case kindResource:
-			preview.Resources = append(preview.Resources, resourceFromOperation(op, providerName, path, method))
+			preview.Resources = append(preview.Resources, resourceFromOperation(op, providerName, path, method, pathOps))
 		case kindDataSource:
 			preview.DataSources = append(preview.DataSources, dataSourceFromOperation(op, providerName, path, method, pathOps, preview.ClientIR.Pagination))
 			// A collection GET paired with an instance Read is also a list
@@ -1233,7 +1406,7 @@ func addPathOperations(preview *ir.ProviderIR, spec *parser.Spec, path string, p
 				warnListUniqueItems(diags, pathOps, path, method)
 			}
 		case kindAction:
-			preview.Actions = append(preview.Actions, actionFromOperation(op, providerName, path, method))
+			preview.Actions = append(preview.Actions, actionFromOperation(op, providerName, path, method, pathOps))
 		case kindEphemeral:
 			preview.EphemeralResources = append(preview.EphemeralResources, ephemeralFromOperation(spec, op, providerName, path, method, pathOps))
 			// The sibling lifecycle operations the ephemeral claims as its
@@ -1308,20 +1481,20 @@ func buildGroupedResources(spec *parser.Spec, providerName string, pathOps map[s
 			TypeName:        providerName + "_" + g.Name,
 			SourceOperation: groupSourceOperation(g),
 		}
-		res.CRUDMapping.Create = operationMapping("POST", g.CollectionPath, parserOp(spec, g.CollectionPath, "POST"))
+		res.CRUDMapping.Create = operationMapping("POST", g.CollectionPath, parserOp(spec, g.CollectionPath, "POST"), envelopeOf(g.Create))
 		res.CRUDMapping.Create.MediaType = mediaTypeOf(g.Create)
-		res.CRUDMapping.Read = operationMapping("GET", g.InstancePath, parserOp(spec, g.InstancePath, "GET"))
+		res.CRUDMapping.Read = operationMapping("GET", g.InstancePath, parserOp(spec, g.InstancePath, "GET"), envelopeOf(g.Read))
 		res.CRUDMapping.Read.MediaType = mediaTypeOf(g.Read)
 		if g.Update != nil {
 			updMethod := "PUT"
 			if g.FullUpdate == nil && g.PartialUpdate != nil {
 				updMethod = "PATCH"
 			}
-			upd := operationMapping(updMethod, g.InstancePath, parserOp(spec, g.InstancePath, updMethod))
+			upd := operationMapping(updMethod, g.InstancePath, parserOp(spec, g.InstancePath, updMethod), envelopeOf(g.Update))
 			upd.MediaType = mediaTypeOf(g.Update)
 			res.CRUDMapping.Update = &upd
 		}
-		res.CRUDMapping.Delete = operationMapping("DELETE", g.InstancePath, parserOp(spec, g.InstancePath, "DELETE"))
+		res.CRUDMapping.Delete = operationMapping("DELETE", g.InstancePath, parserOp(spec, g.InstancePath, "DELETE"), envelopeOf(g.Delete))
 		res.CRUDMapping.Delete.MediaType = mediaTypeOf(g.Delete)
 
 		schema, idAttr := transformer.ManagedResourceSchema(g)
@@ -1409,7 +1582,7 @@ func applyResourceCreationOverrides(preview *ir.ProviderIR, spec *parser.Spec, p
 		}
 		readPath, _, readOp := resolveOperationByID(pathOps, ro.ReadOperation)
 		updatePath, updateMethod, updateOp := resolveOperationByID(pathOps, ro.UpdateOperation)
-		deletePath, _, deleteOp := resolveOperationByID(pathOps, ro.DeleteOperation)
+		deletePath, deleteMethod, deleteOp := resolveOperationByID(pathOps, ro.DeleteOperation)
 
 		g := transformer.ResourceCRUD{
 			Name:           resourceNameFromOverride(ro, createPath),
@@ -1436,7 +1609,11 @@ func applyResourceCreationOverrides(preview *ir.ProviderIR, spec *parser.Spec, p
 			markConsumed(consumed, updatePath, updateMethod)
 		}
 		if deletePath != "" {
-			markConsumed(consumed, deletePath, "DELETE")
+			// The delete operation may be a non-DELETE method (e.g. SpaceTraders
+			// scraps a ship via POST /my/ships/{shipSymbol}/scrap); consume the
+			// actual method so the per-operation pass does not double-emit it as an
+			// action.
+			markConsumed(consumed, deletePath, deleteMethod)
 		}
 	}
 }
@@ -1468,20 +1645,20 @@ func resourceFromOverrideCRUD(spec *parser.Spec, providerName string, g transfor
 		SourceOperation: groupSourceOperation(g),
 	}
 	if g.Create != nil {
-		res.CRUDMapping.Create = operationMapping(string(g.Create.Method), g.Create.Path, parserOp(spec, g.Create.Path, string(g.Create.Method)))
+		res.CRUDMapping.Create = operationMapping(string(g.Create.Method), g.Create.Path, parserOp(spec, g.Create.Path, string(g.Create.Method)), envelopeOf(g.Create))
 		res.CRUDMapping.Create.MediaType = mediaTypeOf(g.Create)
 	}
 	if g.Read != nil {
-		res.CRUDMapping.Read = operationMapping(string(g.Read.Method), g.Read.Path, parserOp(spec, g.Read.Path, string(g.Read.Method)))
+		res.CRUDMapping.Read = operationMapping(string(g.Read.Method), g.Read.Path, parserOp(spec, g.Read.Path, string(g.Read.Method)), envelopeOf(g.Read))
 		res.CRUDMapping.Read.MediaType = mediaTypeOf(g.Read)
 	}
 	if g.Update != nil {
-		upd := operationMapping(string(g.Update.Method), g.Update.Path, parserOp(spec, g.Update.Path, string(g.Update.Method)))
+		upd := operationMapping(string(g.Update.Method), g.Update.Path, parserOp(spec, g.Update.Path, string(g.Update.Method)), envelopeOf(g.Update))
 		upd.MediaType = mediaTypeOf(g.Update)
 		res.CRUDMapping.Update = &upd
 	}
 	if g.Delete != nil {
-		res.CRUDMapping.Delete = operationMapping(string(g.Delete.Method), g.Delete.Path, parserOp(spec, g.Delete.Path, string(g.Delete.Method)))
+		res.CRUDMapping.Delete = operationMapping(string(g.Delete.Method), g.Delete.Path, parserOp(spec, g.Delete.Path, string(g.Delete.Method)), envelopeOf(g.Delete))
 		res.CRUDMapping.Delete.MediaType = mediaTypeOf(g.Delete)
 	}
 	schema, idAttr := transformer.ManagedResourceSchema(g)
@@ -1500,6 +1677,26 @@ func mediaTypeOf(op *transformer.Operation) string {
 		return ""
 	}
 	return op.RequestMediaType
+}
+
+// envelopeOf returns the response-envelope key carried on a transformer
+// Operation (the {data: ...} property the transformer flattened out of the
+// response schema). It is nil-safe so a CRUD group missing one step yields the
+// empty key the generator treats as "no envelope".
+func envelopeOf(op *transformer.Operation) string {
+	if op == nil {
+		return ""
+	}
+	return op.ResponseEnvelope
+}
+
+// envelopeOfTransformerOp returns the response-envelope key for a path/method
+// pair from the transformer path-operation map, or "" when the pair is absent.
+func envelopeOfTransformerOp(pathOps map[string]map[transformer.HTTPMethod]transformer.Operation, path, method string) string {
+	if top := lookupTransformerOp(pathOps, path, method); top != nil {
+		return top.ResponseEnvelope
+	}
+	return ""
 }
 
 // groupedImportFormat builds the brace-enclosed import ID format for a grouped
@@ -1572,7 +1769,11 @@ func groupIsResource(spec *parser.Spec, g transformer.ResourceCRUD, pathOps map[
 		if op == nil {
 			return false
 		}
-		switch classifyOperation(ref.path, ref.method, op, pathOps) {
+		// checkFullCRUD is false here: the group's operations are already known
+		// to form a complete CRUD group, so the CRUD-completeness reclassification
+		// (which turns a partial-update PATCH into an action) must not veto the
+		// group. Only explicit extensions and path keywords reject a group.
+		switch classifyOperation(ref.path, ref.method, op, pathOps, false) {
 		case kindAction, kindEphemeral, kindFunction, kindListResource:
 			return false
 		}
@@ -1649,7 +1850,7 @@ func isConsumed(consumed map[string]map[string]bool, path, method string) bool {
 	return consumed[path][strings.ToUpper(method)]
 }
 
-func resourceFromOperation(op *parser.Operation, providerName, path, method string) ir.ResourceIR {
+func resourceFromOperation(op *parser.Operation, providerName, path, method string, pathOps map[string]map[transformer.HTTPMethod]transformer.Operation) ir.ResourceIR {
 	name := resourceName(op, method, path)
 	res := ir.ResourceIR{
 		Name:            name,
@@ -1658,7 +1859,7 @@ func resourceFromOperation(op *parser.Operation, providerName, path, method stri
 		Description:     op.Description,
 		SourceOperation: op.OperationID,
 	}
-	mapping := operationMapping(method, path, op)
+	mapping := operationMapping(method, path, op, envelopeOfTransformerOp(pathOps, path, method))
 	switch method {
 	case "POST":
 		res.CRUDMapping.Create = mapping
@@ -1675,11 +1876,12 @@ func resourceFromOperation(op *parser.Operation, providerName, path, method stri
 func dataSourceFromOperation(op *parser.Operation, providerName, path, method string, pathOps map[string]map[transformer.HTTPMethod]transformer.Operation, pagination *ir.PaginationIR) ir.DataSourceIR {
 	name := resourceName(op, method, path)
 	ds := ir.DataSourceIR{
-		Name:        name,
-		FullName:    providerName + "_" + name,
-		TypeName:    providerName + "_" + name,
-		Description: op.Description,
-		ReadMapping: operationMapping(method, path, op),
+		Name:            name,
+		FullName:        providerName + "_" + name,
+		TypeName:        providerName + "_" + name,
+		Description:     op.Description,
+		SourceOperation: op.OperationID,
+		ReadMapping:     operationMapping(method, path, op, envelopeOfTransformerOp(pathOps, path, method)),
 	}
 	// Build the data source schema from the resolved read operation so the
 	// generator can wire Read against real filter/output attributes instead of
@@ -1724,9 +1926,9 @@ func resourceName(op *parser.Operation, method, path string) string {
 	return transformer.NormalizeOperationID("", method, path)
 }
 
-func operationMapping(method, path string, op *parser.Operation) ir.OperationMappingIR {
+func operationMapping(method, path string, op *parser.Operation, responseEnvelope string) ir.OperationMappingIR {
 	query, header, cookie, formData := paramsFromOperation(op)
-	return ir.OperationMappingIR{
+	m := ir.OperationMappingIR{
 		Method:               method,
 		PathTemplate:         path,
 		SuccessCodes:         successCodesFromResponses(op, method),
@@ -1736,7 +1938,20 @@ func operationMapping(method, path string, op *parser.Operation) ir.OperationMap
 		CookieParams:         cookie,
 		FormDataParams:       formData,
 		SecurityRequirements: securityRequirementsFromOp(op),
+		ResponseEnvelope:     responseEnvelope,
 	}
+	// A declared request body disables bodiless wiring for actions, list
+	// resources, and ephemeral resources: the generated client only encodes
+	// request bodies through the resource CRUD path, so a bodiless call would
+	// silently drop the practitioner's request body. Carry a non-nil BodySchema
+	// so the generator's wiring gates (planActionWiring / planListWiring /
+	// planEphemeralWiring) keep those constructs honestly scaffolded. The value
+	// is a presence marker: no generator path reads BodySchema's contents, and
+	// resource CRUD bodies get their schema from the transformer's RequestSchema.
+	if op != nil && op.RequestBody != nil && len(op.RequestBody.Content) > 0 {
+		m.BodySchema = &ir.SchemaIR{}
+	}
+	return m
 }
 
 // securityRequirementsFromOp carries the operation's declared security
@@ -2040,7 +2255,7 @@ var (
 // in PROJECT_DESIGN.md sections 8.7-8.10 and can be overridden via generator.yaml.
 // pathOps is the transformer's operation map, shared so POST classification
 // agrees with transformer.InferActions instead of running a parallel heuristic.
-func classifyOperation(path, method string, op *parser.Operation, pathOps map[string]map[transformer.HTTPMethod]transformer.Operation) operationKind {
+func classifyOperation(path, method string, op *parser.Operation, pathOps map[string]map[transformer.HTTPMethod]transformer.Operation, checkFullCRUD bool) operationKind {
 	method = strings.ToUpper(method)
 
 	if k, ok := extensionKind(op); ok {
@@ -2052,7 +2267,7 @@ func classifyOperation(path, method string, op *parser.Operation, pathOps map[st
 		return k
 	}
 
-	return methodKind(method, path, op, pathOps)
+	return methodKind(method, path, op, pathOps, checkFullCRUD)
 }
 
 // extensionKind returns the kind implied by explicit Terraform extension keys,
@@ -2116,7 +2331,7 @@ func keywordKind(method, pathLower string) (operationKind, bool) {
 // action, as is a POST whose trailing path segment or operationId leading verb
 // is a recognized action verb. Only a POST that is a CRUD Create stays a
 // (partial) resource.
-func methodKind(method, path string, op *parser.Operation, pathOps map[string]map[transformer.HTTPMethod]transformer.Operation) operationKind {
+func methodKind(method, path string, op *parser.Operation, pathOps map[string]map[transformer.HTTPMethod]transformer.Operation, checkFullCRUD bool) operationKind {
 	itemPath := isItemPath(path)
 	lastSegment := lastPathSegment(path)
 	lastLower := strings.ToLower(lastSegment)
@@ -2140,15 +2355,30 @@ func methodKind(method, path string, op *parser.Operation, pathOps map[string]ma
 		if !transformer.IsCRUDCreatePath(path, pathOps) {
 			return kindAction
 		}
+		// A POST that is a CRUD Create but whose group lacks a full
+		// Create+Read+Delete mapping is reclassified as an action: a scaffolded
+		// resource with an empty model is worse than a wired action, and a
+		// resource without a Delete cannot be destroyed by Terraform. The check
+		// is skipped when classifying a group's own operations (groupIsResource),
+		// which are already known to form a complete CRUD group.
+		if checkFullCRUD && !transformer.HasFullCRUD(path, transformer.HTTPMethod(method), pathOps) {
+			return kindAction
+		}
 		return kindResource
 	case "PUT", "PATCH":
 		if itemPath {
+			if checkFullCRUD && !transformer.HasFullCRUD(path, transformer.HTTPMethod(method), pathOps) {
+				return kindAction
+			}
 			return kindResource
 		}
 		// PUT/PATCH on a collection is an unusual bulk update; treat as action.
 		return kindAction
 	case "DELETE":
 		if itemPath {
+			if checkFullCRUD && !transformer.HasFullCRUD(path, transformer.HTTPMethod(method), pathOps) {
+				return kindAction
+			}
 			return kindResource
 		}
 		// DELETE on a collection is a bulk/clear action.
@@ -2217,18 +2447,28 @@ func operationIDVerb(op *parser.Operation) string {
 	return ""
 }
 
-func actionFromOperation(op *parser.Operation, providerName, path, method string) ir.ActionIR {
+func actionFromOperation(op *parser.Operation, providerName, path, method string, pathOps map[string]map[transformer.HTTPMethod]transformer.Operation) ir.ActionIR {
 	name := resourceName(op, method, path)
+	// Build the config schema from the operation's parameters AND request-body
+	// properties (via the transformer's ObjectSchemaFromOperation, the same
+	// builder the ephemeral path uses) so a body-bearing action — even one the
+	// generator keeps honestly scaffolded because the client cannot send its
+	// body — still surfaces its intended inputs to the practitioner. Without
+	// this, the essential register action would present an empty schema.
+	configSchema := ir.ObjectSchemaIR{Attributes: actionConfigAttributes(op)}
+	if top := lookupTransformerOp(pathOps, path, method); top != nil {
+		configSchema = transformer.ObjectSchemaFromOperation(*top)
+	}
 	return ir.ActionIR{
 		Name:            name,
 		FullName:        providerName + "_" + name,
 		TypeName:        providerName + "_" + name,
 		Description:     op.Description,
 		SourceOperation: op.OperationID,
-		InvokeMapping:   operationMapping(method, path, op),
-		ConfigSchema: ir.ObjectSchemaIR{
-			Attributes: actionConfigAttributes(op),
-		},
+		// Actions have no result surface: the wired Invoke neither decodes a
+		// response nor sets a result, so no response envelope is carried.
+		InvokeMapping: operationMapping(method, path, op, ""),
+		ConfigSchema:  configSchema,
 	}
 }
 
@@ -2240,11 +2480,13 @@ func actionFromOperation(op *parser.Operation, providerName, path, method string
 // parameters preserve their declared Required flag. formData parameters are
 // intentionally not surfaced here because the generated client only encodes
 // JSON bodies; an action with formData parameters stays honestly scaffolded
-// (REMAINING_GAPS §2). The request body (BodySchema) is not modeled for
-// auto-inferred actions, so a bodiless action is the wired shape. Non-primitive
-// parameters yield an empty type, which the generator treats as unmapped and
-// keeps the action honestly scaffolded rather than wiring a body that cannot
-// send them.
+// (REMAINING_GAPS §2). The request body is not modeled for auto-inferred
+// actions either: operationMapping carries a non-nil BodySchema for body-bearing
+// operations, so the generator keeps such actions honestly scaffolded rather
+// than wiring a bodiless Invoke that would drop the practitioner's body. Only a
+// truly bodiless action is the wired shape. Non-primitive parameters yield an
+// empty type, which the generator treats as unmapped and keeps the action
+// honestly scaffolded rather than wiring a body that cannot send them.
 func actionConfigAttributes(op *parser.Operation) []ir.AttributeIR {
 	if op == nil {
 		return nil
@@ -2283,7 +2525,7 @@ func ephemeralFromOperation(spec *parser.Spec, op *parser.Operation, providerNam
 		TypeName:        providerName + "_" + name,
 		Description:     op.Description,
 		SourceOperation: op.OperationID,
-		OpenMapping:     operationMapping(method, path, op),
+		OpenMapping:     operationMapping(method, path, op, envelopeOfTransformerOp(pathOps, path, method)),
 	}
 	// Build the config (input) schema from the open operation's path/query/header
 	// parameters and the result (output) schema from its resolved response, so an
@@ -2300,18 +2542,18 @@ func ephemeralFromOperation(spec *parser.Spec, op *parser.Operation, providerNam
 	// inferEphemeralResource. When no such operations exist the mappings stay
 	// unset — never a placeholder pointing at the open operation.
 	if renewOp := parserOp(spec, path+"/renew", "POST"); renewOp != nil {
-		rm := operationMapping("POST", path+"/renew", renewOp)
+		rm := operationMapping("POST", path+"/renew", renewOp, "")
 		er.RenewMapping = &rm
 		er.HasRenew = true
 	}
 	if closeOp := parserOp(spec, path+"/close", "DELETE"); closeOp != nil {
-		cm := operationMapping("DELETE", path+"/close", closeOp)
+		cm := operationMapping("DELETE", path+"/close", closeOp, "")
 		er.CloseMapping = &cm
 		er.HasClose = true
 	}
 	if !er.HasClose {
 		if revokeOp := parserOp(spec, path+"/revoke", "DELETE"); revokeOp != nil {
-			cm := operationMapping("DELETE", path+"/revoke", revokeOp)
+			cm := operationMapping("DELETE", path+"/revoke", revokeOp, "")
 			er.CloseMapping = &cm
 			er.HasClose = true
 		}
@@ -2336,7 +2578,7 @@ func listResourceFromOperation(op *parser.Operation, providerName, path, method 
 		TypeName:        providerName + "_" + name,
 		Description:     op.Description,
 		SourceOperation: op.OperationID,
-		ListMapping:     operationMapping(method, path, op),
+		ListMapping:     operationMapping(method, path, op, envelopeOfTransformerOp(pathOps, path, method)),
 	}
 
 	top := lookupTransformerOp(pathOps, path, method)
@@ -2492,7 +2734,7 @@ func functionReturnSchema(spec *transformer.SchemaSpec) ir.SchemaIR {
 // returned slice and are also surfaced through the error when version detection
 // fails.
 func BuildProviderIR(spec []byte, cfg *config.Config) (*ir.ProviderIR, parser.Version, diagnostics.Diagnostics, error) {
-	return buildProviderIRWithContentType(spec, "", cfg)
+	return buildProviderIR(spec, "", "", cfg)
 }
 
 // BuildProviderIRWithContentType parses an OpenAPI document with an explicit
@@ -2500,11 +2742,26 @@ func BuildProviderIR(spec []byte, cfg *config.Config) (*ir.ProviderIR, parser.Ve
 // builds a ProviderIR from it. An empty contentType falls back to the
 // first-byte JSON/YAML sniff shared by the local-file path.
 func BuildProviderIRWithContentType(spec []byte, contentType string, cfg *config.Config) (*ir.ProviderIR, parser.Version, diagnostics.Diagnostics, error) {
-	return buildProviderIRWithContentType(spec, contentType, cfg)
+	return buildProviderIR(spec, "", contentType, cfg)
 }
 
-func buildProviderIRWithContentType(spec []byte, contentType string, cfg *config.Config) (*ir.ProviderIR, parser.Version, diagnostics.Diagnostics, error) {
-	root, err := loadRequestBodyWithContentType(spec, contentType)
+// BuildProviderIRWithName parses an OpenAPI document and builds a ProviderIR,
+// attributing parse errors to name (the spec's real path or URL) rather than
+// the generic "request.yaml" used by the HTTP validate endpoint. The
+// contentType hint (e.g. from a remote fetch's Content-Type header) routes
+// JSON vs YAML parsing; an empty contentType sniffs the first byte.
+func BuildProviderIRWithName(spec []byte, name, contentType string, cfg *config.Config) (*ir.ProviderIR, parser.Version, diagnostics.Diagnostics, error) {
+	return buildProviderIR(spec, name, contentType, cfg)
+}
+
+func buildProviderIR(spec []byte, name, contentType string, cfg *config.Config) (*ir.ProviderIR, parser.Version, diagnostics.Diagnostics, error) {
+	var root parser.Node
+	var err error
+	if name == "" {
+		root, err = loadRequestBodyWithContentType(spec, contentType)
+	} else {
+		root, err = loadRequestBodyWithName(spec, contentType, name)
+	}
 	if err != nil {
 		return nil, parser.VersionUnknown, nil, fmt.Errorf("failed to load spec: %w", err)
 	}
@@ -2520,6 +2777,13 @@ func buildProviderIRWithContentType(spec []byte, contentType string, cfg *config
 	}
 
 	allDiags := append(diagnostics.Diagnostics(versionDiags), convertDiags...)
+	// Run the same structural and $ref validation the HTTP /validate endpoint
+	// applies (parser.Validate). The converter records a schema's $ref string but
+	// never resolves it; only Validate rejects non-local refs and unresolvable
+	// local pointers. Without it, `eidos generate` silently dropped dangling
+	// external refs (e.g. a bundled spec's sibling schema files) and emitted
+	// empty-schema resources instead of failing loud.
+	allDiags = append(allDiags, parser.Validate(root, sp, version)...)
 	preview, previewDiags := buildIRPreview(sp, version, cfg)
 	allDiags = append(allDiags, previewDiags...)
 	return preview, version, allDiags, nil
@@ -2534,7 +2798,28 @@ func buildProviderIRWithContentType(spec []byte, contentType string, cfg *config
 // overall generation succeeds. Version detection diagnostics are returned as
 // part of the error instead.
 func GenerateStarterConfig(spec []byte, providerName string) (*config.Config, parser.Version, diagnostics.Diagnostics, error) {
-	preview, version, allDiags, err := BuildProviderIR(spec, nil)
+	return generateStarterConfig(spec, "", providerName)
+}
+
+// GenerateStarterConfigWithName is GenerateStarterConfig with parse errors
+// attributed to name (the spec's real path or URL) rather than the generic
+// "request.yaml".
+func GenerateStarterConfigWithName(spec []byte, name, providerName string) (*config.Config, parser.Version, diagnostics.Diagnostics, error) {
+	return generateStarterConfig(spec, name, providerName)
+}
+
+func generateStarterConfig(spec []byte, name, providerName string) (*config.Config, parser.Version, diagnostics.Diagnostics, error) {
+	var (
+		preview  *ir.ProviderIR
+		version  parser.Version
+		allDiags diagnostics.Diagnostics
+		err      error
+	)
+	if name == "" {
+		preview, version, allDiags, err = BuildProviderIR(spec, nil)
+	} else {
+		preview, version, allDiags, err = BuildProviderIRWithName(spec, name, "", nil)
+	}
 	if err != nil {
 		return nil, version, allDiags, err
 	}

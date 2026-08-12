@@ -354,6 +354,11 @@ func registerResourceImports(f *astgen.File, r ir.ResourceIR, wiring resourceWir
 		if !parsed.simple {
 			f.AddImports("fmt", "strings")
 		}
+		// Non-string import attributes parse the string ID segment with strconv;
+		// the parse-failure diagnostic is formatted with fmt.Sprintf.
+		if importNeedsParsing(r, parsed.attrs) {
+			f.AddImports("strconv", "fmt")
+		}
 	}
 	needsList, needsSet := blockValidatorPackageImports(r.Schema)
 	if needsList {

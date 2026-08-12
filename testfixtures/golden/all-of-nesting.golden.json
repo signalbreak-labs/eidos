@@ -69,15 +69,19 @@
   },
   {
     "path": "internal/provider/action_create_shipment.go",
-    "reason": "action all_of_nesting_api_create_shipment"
+    "reason": "action all-of-nesting-api_create_shipment"
   },
   {
     "path": "internal/provider/data_source_get_shipment.go",
-    "reason": "data source all_of_nesting_api_get_shipment"
+    "reason": "data source all-of-nesting-api_get_shipment"
   },
   {
     "path": "internal/provider/data_source_get_shipment_test.go",
     "reason": "unit tests for data source get_shipment"
+  },
+  {
+    "path": "internal/provider/json_convert.go",
+    "reason": "JSON/model conversion helpers for wired CRUD bodies"
   },
   {
     "path": "internal/provider/provider.go",

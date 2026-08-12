@@ -69,15 +69,19 @@
   },
   {
     "path": "internal/provider/action_create_department.go",
-    "reason": "action circular_references_api_create_department"
+    "reason": "action circular-references-api_create_department"
   },
   {
     "path": "internal/provider/data_source_list_departments.go",
-    "reason": "data source circular_references_api_list_departments"
+    "reason": "data source circular-references-api_list_departments"
   },
   {
     "path": "internal/provider/data_source_list_departments_test.go",
     "reason": "unit tests for data source list_departments"
+  },
+  {
+    "path": "internal/provider/json_convert.go",
+    "reason": "JSON/model conversion helpers for wired CRUD bodies"
   },
   {
     "path": "internal/provider/provider.go",

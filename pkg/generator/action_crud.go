@@ -8,6 +8,7 @@ import (
 
 	"github.com/signalbreak-labs/eidos/pkg/generator/astgen"
 	"github.com/signalbreak-labs/eidos/pkg/ir"
+	"github.com/signalbreak-labs/eidos/pkg/transformer"
 )
 
 // This file builds the wired Invoke body for actions whose InvokeMapping is a
@@ -27,27 +28,27 @@ import (
 
 // actionWiringPlan describes how an action's methods are wired to the
 // generated API client. wired is true when at least one mapping resolves as a
-// bodiless request against the config schema (it gates the client-carrying
-// struct and Configure method); each method body is wired individually from
-// its own plan pointer, so a resolvable ModifyPlan does not force a wired
-// Invoke and vice versa.
+// request against the config schema (it gates the client-carrying struct and
+// Configure method); each method body is wired individually from its own plan
+// pointer, so a resolvable ModifyPlan does not force a wired Invoke and vice
+// versa. sendsBody is true when the wired Invoke encodes a JSON request body
+// from the config model (modelToJSONMap + json.Marshal + bytes.NewReader),
+// gating the encoding/json and bytes imports and the json_convert.go helper.
 type actionWiringPlan struct {
 	wired          bool
 	invoke         *crudOperationPlan
 	modifyPlan     *crudOperationPlan
 	validateConfig *crudOperationPlan
 
+	sendsBody    bool
 	needsStrings bool
 	needsStrconv bool
 }
 
-// AnyActionWired reports whether at least one action has a resolvable bodiless
-// mapping (invoke, modify-plan, or validate-config). It gates the provider
-// Configure client construction (via ActionData) so providers with no wired
-// actions carry no dead code. It does not gate the json_convert.go helper
-// file: wired action bodies are bodiless and neither encode a request body nor
-// decode a response, so they reference neither modelToJSONMap nor
-// applyJSONToModel.
+// AnyActionWired reports whether at least one action has a resolvable mapping
+// (invoke, modify-plan, or validate-config). It gates the provider Configure
+// client construction (via ActionData) so providers with no wired actions
+// carry no dead code.
 func AnyActionWired(actions []ir.ActionIR) bool {
 	for _, a := range actions {
 		if planActionWiring(a).wired {
@@ -57,27 +58,47 @@ func AnyActionWired(actions []ir.ActionIR) bool {
 	return false
 }
 
+// AnyActionSendsBody reports whether at least one action's wired Invoke
+// encodes a JSON request body from its config model. It gates the
+// json_convert.go helper file: a body-bearing wired action references
+// modelToJSONMap, which lives there. Bodiless wired actions reference neither
+// modelToJSONMap nor applyJSONToModel.
+func AnyActionSendsBody(actions []ir.ActionIR) bool {
+	for _, a := range actions {
+		if planActionWiring(a).sendsBody {
+			return true
+		}
+	}
+	return false
+}
+
 // planActionWiring resolves the generation plan for an action's wired bodies.
-// Only bodiless operations are wired: a mapping with a request body
-// (BodySchema) or formData parameters cannot be sent by the generated
-// client's JSON-only request path, so the corresponding method keeps its
-// honest scaffold. Each mapping's path placeholders and required query/header
-// parameters must each resolve to a primitive config (input) attribute, since
-// the bodies read their inputs from req.Config. An action has no result
-// surface, so unlike an ephemeral resource there is no result-output
-// requirement.
+// The Invoke mapping is wired when its path placeholders and required
+// query/header parameters resolve to primitive config attributes; a JSON
+// request body (BodySchema with a JSON media type) is additionally wired by
+// encoding the config model, so the essential body-bearing actions (register,
+// navigate, purchase, sell, refuel, deliver, install) work instead of staying
+// scaffolded. formData parameters and non-JSON body media types cannot be sent
+// by the generated JSON-only request path, so the corresponding method keeps
+// its honest scaffold. ModifyPlan/ValidateConfig preflight mappings stay
+// bodiless (allowBody=false): the preflight body is not modeled. Each mapping's
+// path placeholders and required query/header parameters must each resolve to a
+// primitive config (input) attribute, since the bodies read their inputs from
+// req.Config. An action has no result surface, so unlike an ephemeral resource
+// there is no result-output requirement.
 func planActionWiring(a ir.ActionIR) actionWiringPlan {
 	var plan actionWiringPlan
-	if invoke, ok := planActionOperation(a.ConfigSchema.Attributes, a.InvokeMapping); ok {
+	if invoke, ok := planActionOperation(a.ConfigSchema.Attributes, a.InvokeMapping, true); ok {
 		plan.invoke = &invoke
+		plan.sendsBody = invoke.hasBody
 	}
 	if a.ModifyPlanMapping != nil {
-		if mp, ok := planActionOperation(a.ConfigSchema.Attributes, *a.ModifyPlanMapping); ok {
+		if mp, ok := planActionOperation(a.ConfigSchema.Attributes, *a.ModifyPlanMapping, false); ok {
 			plan.modifyPlan = &mp
 		}
 	}
 	if a.ValidateConfigMapping != nil {
-		if vc, ok := planActionOperation(a.ConfigSchema.Attributes, *a.ValidateConfigMapping); ok {
+		if vc, ok := planActionOperation(a.ConfigSchema.Attributes, *a.ValidateConfigMapping, false); ok {
 			plan.validateConfig = &vc
 		}
 	}
@@ -116,12 +137,17 @@ func planActionWiring(a ir.ActionIR) actionWiringPlan {
 // resolve against the config (input) schema by normalized (PascalCase) field
 // name with no ID fallback, since an action identifies its target through
 // declared config attributes (mirroring the data source and ephemeral
-// resolvers). A request body (BodySchema) or formData parameters disable
-// wiring: the generated client only encodes JSON bodies, and action methods
-// are modeled as bodiless side-effecting calls. Required query/header
-// parameters with no matching attribute disable wiring; optional unmapped
-// parameters are skipped.
-func planActionOperation(attrs []ir.AttributeIR, op ir.OperationMappingIR) (crudOperationPlan, bool) {
+// resolvers). When allowBody is true and the operation declares a JSON request
+// body (BodySchema with a JSON media type), the plan carries bodyJSON so the
+// wired Invoke encodes the config model as the request body — the essential
+// body-bearing actions (register, navigate, purchase, sell, refuel, deliver,
+// install) are wired instead of scaffolded. formData parameters and non-JSON
+// body media types disable wiring: the generated client only encodes JSON
+// bodies, so the method keeps its honest scaffold rather than emitting a body
+// that would fail at runtime (the transformer emits a fail-loud warning for
+// formData). Required query/header parameters with no matching attribute
+// disable wiring; optional unmapped parameters are skipped.
+func planActionOperation(attrs []ir.AttributeIR, op ir.OperationMappingIR, allowBody bool) (crudOperationPlan, bool) {
 	var planned crudOperationPlan
 	planned.method = strings.ToUpper(strings.TrimSpace(op.Method))
 	planned.template = strings.TrimSpace(op.PathTemplate)
@@ -130,13 +156,24 @@ func planActionOperation(attrs []ir.AttributeIR, op ir.OperationMappingIR) (crud
 	if planned.method == "" || planned.template == "" {
 		return planned, false
 	}
-	// Only bodiless operations are wired (REMAINING_GAPS §4). A request body or
 	// formData parameters require a body the generated JSON-only request path
 	// cannot satisfy, so the method keeps its honest scaffold rather than
 	// emitting a body that would fail at runtime. The transformer emits a
 	// fail-loud warning for formData.
-	if op.BodySchema != nil || len(op.FormDataParams) > 0 {
+	if len(op.FormDataParams) > 0 {
 		return crudOperationPlan{}, false
+	}
+	// A JSON request body is wired when allowBody (the Invoke mapping) and the
+	// media type is JSON. XML and unsupported media types keep the method
+	// scaffolded: actions have no XML root element to wrap the body in, and an
+	// unsupported type cannot be encoded (the transformer already warned).
+	if op.BodySchema != nil {
+		if !allowBody || transformer.RequestBodyKind(op.MediaType) != "json" {
+			return crudOperationPlan{}, false
+		}
+		planned.hasBody = true
+		planned.bodyEncoding = bodyJSON
+		// contentType empty → defaults to application/json in sendRequestStmts.
 	}
 	for _, placeholder := range pathPlaceholders(planned.template) {
 		sub, ok := resolveDataSourcePathSubstitution(attrs, placeholder)
@@ -161,12 +198,14 @@ func planActionOperation(attrs []ir.AttributeIR, op ir.OperationMappingIR) (crud
 	planned.headerParams = headerParams
 	planned.cookieParams = cookieParams
 	// A Required config attribute that no path/query/header/cookie parameter
-	// references would be silently dropped by the bodiless body, which only
-	// sends declared parameters. That violates the honest-bodies rule, so the
-	// action keeps its scaffold rather than wiring a body that ignores a
-	// required practitioner input. Optional unreferenced attributes are
-	// acceptable (the practitioner may leave them unset).
-	if !allRequiredConfigAttrsReferenced(attrs, planned) {
+	// references would be silently dropped by a bodiless body, which only sends
+	// declared parameters. That violates the honest-bodies rule, so the action
+	// keeps its scaffold rather than wiring a body that ignores a required
+	// practitioner input. A body-bearing action sends every config attribute
+	// (modelToJSONMap encodes the whole model), so the check is skipped there.
+	// Optional unreferenced attributes are acceptable (the practitioner may leave
+	// them unset).
+	if op.BodySchema == nil && !allRequiredConfigAttrsReferenced(attrs, planned) {
 		return crudOperationPlan{}, false
 	}
 	// Per-operation security (REMAINING_GAPS §1). See applySecurityRequirements.
@@ -203,12 +242,16 @@ func scaffoldActionInvokeBody(modelName string) []ast.Stmt {
 
 // wiredActionInvokeBody returns the Invoke body wired to the generated API
 // client: it reads the practitioner-supplied config attributes, issues the
-// bodiless invoke request, and surfaces any error via Diagnostics. An action
-// has no result surface, so — unlike resource/data-source/ephemeral bodies —
-// there is no response to decode and no state/result to set; the Invoke
-// succeeds by completing the request without a non-success status. The local
-// model variable is named `config`, matching the scaffold body and avoiding
-// collision with any future decode helper's `data` map.
+// invoke request, and surfaces any error via Diagnostics. A body-bearing
+// action (plan.bodyEncoding == bodyJSON) encodes the config model as the JSON
+// request body via modelToJSONMap + json.Marshal + bytes.NewReader, so the
+// essential body-bearing actions (register, navigate, purchase, sell, refuel,
+// deliver, install) send their payloads instead of staying scaffolded. An
+// action has no result surface, so — unlike resource/data-source/ephemeral
+// bodies — there is no response to decode and no state/result to set; the
+// Invoke succeeds by completing the request without a non-success status. The
+// local model variable is named `config`, matching the scaffold body and
+// avoiding collision with any future decode helper's `data` map.
 func wiredActionInvokeBody(a ir.ActionIR, plan crudOperationPlan, modelName string) []ast.Stmt {
 	summary := fmt.Sprintf("Error invoking %s", actionTypeName(a))
 	stmts := make([]ast.Stmt, 0, 16)
@@ -242,11 +285,19 @@ func wiredActionInvokeBody(a ir.ActionIR, plan crudOperationPlan, modelName stri
 		)))
 	}
 	stmts = append(stmts, requestPathStmts(plan, "config")...)
+	// A body-bearing action encodes the config model as the JSON request body;
+	// a bodiless action passes nil (sendRequestStmts sets no Content-Type).
+	var body ast.Expr
+	if plan.hasBody {
+		bodyStmts, bodyExpr := requestBodyStmts(plan, summary, "config")
+		stmts = append(stmts, bodyStmts...)
+		body = bodyExpr
+	}
 	// An action has no state to drop on a 404; a non-success status is surfaced
 	// as an error by the generic non-success branch. There is no response body
 	// to decode and no result surface to populate, so the Invoke completes by
 	// issuing the request and returning on success.
-	stmts = append(stmts, sendRequestStmts(plan, "r", summary, "config", nil, nil)...)
+	stmts = append(stmts, sendRequestStmts(plan, "r", summary, "config", body, nil)...)
 	return stmts
 }
 

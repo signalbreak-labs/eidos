@@ -461,6 +461,9 @@ func generateMapperTestModule(t *testing.T, r ir.ResourceIR) string {
 // source, and mapper test files in a deterministic order.
 func TestTestFiles(t *testing.T) {
 	pir := sampleProviderIR()
+	// A wired resource (full CRUD mapping) so the acceptance test file is
+	// emitted; scaffolded resources are skipped by ResourceAcceptanceTestFiles.
+	pir.Resources = []ir.ResourceIR{sampleResourceIR()}
 	cfg := BuildConfig{ProviderName: pir.Name, Namespace: pir.Name}
 
 	files := TestFiles(pir, cfg)

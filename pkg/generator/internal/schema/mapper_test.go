@@ -227,6 +227,12 @@ func TestGenerateValueMappersFile_NestedObject(t *testing.T) {
 		"func PetModelSponsorType() tftypes.Type",
 		"func PetModelSponsorFromValue",
 		"nested, err := PetModelOwnerFromValue(val)",
+		// ToValue: `nested`/`err` are declared once at function-body scope and
+		// every object-like field assigns with =, so multiple object fields and
+		// optional ones (whose assignment sits inside an if-block) all compile.
+		"var nested tftypes.Value",
+		"nested, err = PetModelOwnerToValue(m.Owner)",
+		"nested, err = PetModelSponsorToValue(*m.Sponsor)",
 		// The else branch reports missing required attributes for required
 		// objects. The message is emitted as a %q format string with the
 		// attribute name as an argument.
@@ -390,9 +396,50 @@ func TestGenerateValueMappersFile_DynamicElementCollection(t *testing.T) {
 
 // TestGenerateValueMappersFile_NestedCollectionUnsupported asserts nested
 // collections (array of array) surface a clear decode/encode error (M-21)
-// rather than being silently dropped.
+// rather than being silently dropped, and that a field following the nested
+// collection is not emitted after the unconditional error return (which would
+// be unreachable code).
 func TestGenerateValueMappersFile_NestedCollectionUnsupported(t *testing.T) {
 	r := resource("widget",
+		ir.AttributeIR{
+			Name:     "matrix",
+			Optional: true,
+			Schema: ir.SchemaIR{Collection: &ir.CollectionType{
+				Kind: ir.List,
+				ElementType: ir.SchemaIR{Collection: &ir.CollectionType{
+					Kind:        ir.List,
+					ElementType: ir.SchemaIR{Type: ir.TypeString},
+				}},
+			}},
+		},
+		// A field after the nested collection: the error return is terminal, so
+		// this field must not be emitted after it.
+		stringAttr("name", true),
+	)
+	got := renderFile(t, []ir.ResourceIR{r}, "example.com/t/internal/provider")
+
+	for _, want := range []string{
+		"decode nested collection for %s is not yet supported",
+		"encode nested collection for %s is not yet supported",
+		"\"matrix\"",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("generated mapper missing nested-collection diagnostic %q\ncontent:\n%s", want, got)
+		}
+	}
+	// The trailing field must not appear after the terminal error return.
+	if strings.Contains(got, `vals["name"]`) {
+		t.Errorf("generated mapper emits unreachable code after the nested-collection error return\ncontent:\n%s", got)
+	}
+}
+
+// TestGenerateValueMappersFile_NestedCollectionUnsupported_AfterField asserts a
+// nested-collection field that follows a normal field still declares `vals`
+// (the earlier field reads it) while the terminal error return leaves no
+// unreachable code after it.
+func TestGenerateValueMappersFile_NestedCollectionUnsupported_AfterField(t *testing.T) {
+	r := resource("widget",
+		stringAttr("name", true),
 		ir.AttributeIR{
 			Name:     "matrix",
 			Optional: true,
@@ -410,11 +457,17 @@ func TestGenerateValueMappersFile_NestedCollectionUnsupported(t *testing.T) {
 	for _, want := range []string{
 		"decode nested collection for %s is not yet supported",
 		"encode nested collection for %s is not yet supported",
-		"\"matrix\"",
+		// The earlier field reads `vals`, so it must still be declared.
+		`vals["name"]`,
 	} {
 		if !strings.Contains(got, want) {
-			t.Errorf("generated mapper missing nested-collection diagnostic %q\ncontent:\n%s", want, got)
+			t.Errorf("generated mapper missing %q\ncontent:\n%s", want, got)
 		}
+	}
+	// The terminal error return must be the last statement of FromValue/ToValue:
+	// no trailing `return m, nil` / `return tftypes.NewValue(...)` after it.
+	if strings.Contains(got, "return m, nil\n}") {
+		t.Errorf("generated mapper has unreachable trailing return after nested-collection error\ncontent:\n%s", got)
 	}
 }
 

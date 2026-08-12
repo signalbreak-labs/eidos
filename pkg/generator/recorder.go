@@ -206,7 +206,7 @@ func CollectFromProviderIR(provider *ir.ProviderIR, opts CollectOptions) []FileE
 				rec.Record("internal/protocol/value_mappers_test.go", "value mapper round-trip tests")
 			}
 		}
-		if AnyResourceWired(provider.Resources) {
+		if AnyResourceWired(provider.Resources) || AnyDataSourceWired(provider.DataSources) || AnyEphemeralWired(provider.EphemeralResources) || AnyActionSendsBody(provider.Actions) {
 			rec.Record("internal/provider/json_convert.go", "JSON/model conversion helpers for wired CRUD bodies")
 		}
 	}
@@ -232,7 +232,13 @@ func collectResourceFiles(rec *Recorder, res ir.ResourceIR, opts CollectOptions)
 	rec.Record(fmt.Sprintf("internal/provider/model_%s.go", name), fmt.Sprintf("API model for resource %s", res.Name))
 	if opts.IncludeTests {
 		rec.Record(fmt.Sprintf("internal/provider/resource_%s_test.go", name), fmt.Sprintf("unit tests for resource %s", res.Name))
-		rec.Record(fmt.Sprintf("internal/provider/resource_%s_acceptance_test.go", name), fmt.Sprintf("acceptance tests for resource %s", res.Name))
+		// A scaffolded (unwired) resource gets no acceptance test: its CRUD
+		// bodies report "is not wired to a remote API endpoint", so a lifecycle
+		// test against a mock server could never pass. This mirrors
+		// ResourceAcceptanceTestFiles so record and write modes stay in lockstep.
+		if planResourceWiring(res).wired {
+			rec.Record(fmt.Sprintf("internal/provider/resource_%s_acceptance_test.go", name), fmt.Sprintf("acceptance tests for resource %s", res.Name))
+		}
 	}
 	if opts.IncludeDocs {
 		rec.Record(fmt.Sprintf("docs/resources/%s.md", name), fmt.Sprintf("documentation for resource %s", res.Name))

@@ -53,6 +53,30 @@ func SanitizeAttributeName(name string) string {
 	return snake
 }
 
+// ToProviderTypeName sanitizes a free-form string (e.g. a spec title) into a
+// Terraform-valid provider type name: lower-case kebab-case using only letters,
+// digits, and hyphens, with no leading or trailing hyphen. Terraform rejects
+// underscores and dots in provider type names (verified against terraform
+// v1.14.7), so this differs from ToSnakeCase, which would produce an unusable
+// name for multi-word titles (e.g. "Example Cloud API" -> "example_cloud_api"). A
+// leading digit is prefixed with "x" (idempotent), mirroring ToSnakeCase.
+func ToProviderTypeName(s string) string {
+	words := splitWords(s)
+	if len(words) == 0 {
+		return ""
+	}
+	for i, w := range words {
+		words[i] = strings.ToLower(w)
+	}
+	result := strings.Join(words, "-")
+	if result != "" {
+		if r, _ := utf8.DecodeRuneInString(result); unicode.IsDigit(r) {
+			result = "x" + result
+		}
+	}
+	return result
+}
+
 // ToPascalCase sanitizes an identifier into PascalCase. It handles camelCase,
 // snake_case, kebab-case, space-separated phrases, and mixed inputs.
 func ToPascalCase(s string) string {

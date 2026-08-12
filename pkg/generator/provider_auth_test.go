@@ -336,7 +336,7 @@ func TestProviderAuthWiring_Compiles(t *testing.T) {
 		seen[a.Name] = struct{}{}
 	}
 	for _, s := range schemes {
-		attrs, err := transformer.MapSecuritySchemeToProviderConfig(s)
+		attrs, err := transformer.MapSecuritySchemeToProviderConfig(s, schemes)
 		if err != nil {
 			t.Fatalf("MapSecuritySchemeToProviderConfig(%s): %v", s.Name, err)
 		}

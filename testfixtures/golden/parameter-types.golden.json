@@ -16,6 +16,10 @@
     "reason": "provider overview and usage guide"
   },
   {
+    "path": "docs/actions/delete_item.md",
+    "reason": "documentation for action delete_item"
+  },
+  {
     "path": "docs/data-sources/get_item.md",
     "reason": "documentation for data source get_item"
   },
@@ -32,8 +36,8 @@
     "reason": "documentation for list resource list_items"
   },
   {
-    "path": "docs/resources/delete_item.md",
-    "reason": "documentation for resource delete_item"
+    "path": "examples/actions/delete_item/action.tf",
+    "reason": "example for action delete_item"
   },
   {
     "path": "examples/data-sources/get_item/data-source.tf",
@@ -42,10 +46,6 @@
   {
     "path": "examples/data-sources/list_items/data-source.tf",
     "reason": "example for data source list_items"
-  },
-  {
-    "path": "examples/resources/delete_item/resource.tf",
-    "reason": "example for resource delete_item"
   },
   {
     "path": "generator.yaml",
@@ -80,16 +80,12 @@
     "reason": "retry logic with exponential backoff"
   },
   {
-    "path": "internal/protocol/value_mappers.go",
-    "reason": "tftypes.Value to Go struct converters"
-  },
-  {
-    "path": "internal/protocol/value_mappers_test.go",
-    "reason": "value mapper round-trip tests"
+    "path": "internal/provider/action_delete_item.go",
+    "reason": "action parameter-types-api_delete_item"
   },
   {
     "path": "internal/provider/data_source_get_item.go",
-    "reason": "data source parameter_types_api_get_item"
+    "reason": "data source parameter-types-api_get_item"
   },
   {
     "path": "internal/provider/data_source_get_item_test.go",
@@ -97,7 +93,7 @@
   },
   {
     "path": "internal/provider/data_source_list_items.go",
-    "reason": "data source parameter_types_api_list_items"
+    "reason": "data source parameter-types-api_list_items"
   },
   {
     "path": "internal/provider/data_source_list_items_test.go",
@@ -105,11 +101,7 @@
   },
   {
     "path": "internal/provider/list_list_items.go",
-    "reason": "list resource parameter_types_api_list_items"
-  },
-  {
-    "path": "internal/provider/model_delete_item.go",
-    "reason": "API model for resource delete_item"
+    "reason": "list resource parameter-types-api_list_items"
   },
   {
     "path": "internal/provider/provider.go",
@@ -118,18 +110,6 @@
   {
     "path": "internal/provider/provider_test.go",
     "reason": "provider-level unit tests"
-  },
-  {
-    "path": "internal/provider/resource_delete_item.go",
-    "reason": "resource parameter_types_api_delete_item"
-  },
-  {
-    "path": "internal/provider/resource_delete_item_acceptance_test.go",
-    "reason": "acceptance tests for resource delete_item"
-  },
-  {
-    "path": "internal/provider/resource_delete_item_test.go",
-    "reason": "unit tests for resource delete_item"
   },
   {
     "path": "internal/provider/validators.go",

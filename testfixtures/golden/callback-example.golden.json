@@ -61,7 +61,11 @@
   },
   {
     "path": "internal/provider/action_subscribe_to_stream.go",
-    "reason": "action callback_example_api_subscribe_to_stream"
+    "reason": "action callback-example-api_subscribe_to_stream"
+  },
+  {
+    "path": "internal/provider/json_convert.go",
+    "reason": "JSON/model conversion helpers for wired CRUD bodies"
   },
   {
     "path": "internal/provider/provider.go",

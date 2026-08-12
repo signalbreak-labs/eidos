@@ -509,11 +509,21 @@ func TestBuildConfig_Validate(t *testing.T) {
 			wantErr: `Namespace "ac/me" must match`,
 		},
 		{
-			name: "namespace with hyphen and dot accepted (M-10)",
+			name: "namespace with hyphen accepted (M-10)",
+			cfg: BuildConfig{
+				ProviderName: "mycloud",
+				Namespace:    "ac-me-org",
+			},
+		},
+		{
+			// Terraform v1.14.7 rejects dots in the provider namespace
+			// ("Invalid provider namespace"), matching registrySegmentPattern.
+			name: "namespace with dot rejected (M-10)",
 			cfg: BuildConfig{
 				ProviderName: "mycloud",
 				Namespace:    "ac.me-org",
 			},
+			wantErr: `Namespace "ac.me-org" must match`,
 		},
 	}
 

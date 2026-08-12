@@ -66,10 +66,11 @@ func planListResourceWiring(lr ir.ListResourceIR) listResourceWiringPlan {
 	}
 	op := lr.ListMapping
 	planned := crudOperationPlan{
-		method:        strings.ToUpper(strings.TrimSpace(op.Method)),
-		template:      strings.TrimSpace(op.PathTemplate),
-		successCodes:  op.SuccessCodes,
-		errorMappings: errorMappingDescriptions(op.ErrorMappings),
+		method:           strings.ToUpper(strings.TrimSpace(op.Method)),
+		template:         strings.TrimSpace(op.PathTemplate),
+		successCodes:     op.SuccessCodes,
+		errorMappings:    errorMappingDescriptions(op.ErrorMappings),
+		responseEnvelope: op.ResponseEnvelope,
 	}
 	if planned.method == "" || planned.template == "" {
 		return plan
@@ -148,6 +149,90 @@ func listResourcePaginationStyle(lr ir.ListResourceIR) string {
 		return lr.PaginationStyle
 	}
 	return ir.PaginationStyleNone
+}
+
+// listPageItemsStmts emits the statements decoding a fetched page into the
+// items []json.RawMessage slice the per-item loop iterates. Without an envelope
+// the page is a bare JSON array decoded directly; with an envelope the page is
+// a JSON object whose envelope key holds the item array (e.g. SpaceTraders'
+// {data: [...], meta: ...}), decoded by unmarshaling the key's raw value so a
+// malformed page surfaces an error rather than silently streaming nothing.
+func listPageItemsStmts(summary, envelope string) []ast.Stmt {
+	if envelope == "" {
+		return []ast.Stmt{
+			astgen.AssignSingle(
+				astgen.Ident("items"),
+				astgen.CompositeLit(astgen.SliceType(astgen.QualExpr("json", "RawMessage"))),
+			),
+			&ast.IfStmt{
+				Init: astgen.AssignSingle(astgen.Ident("err"), astgen.Call(
+					astgen.QualExpr("json", "Unmarshal"), astgen.Ident("page"), astgen.UnaryPtr(astgen.Ident("items")),
+				)),
+				Cond: astgen.NotEqual(astgen.Ident("err"), astgen.Nil()),
+				Body: astgen.Block(
+					astgen.ExprStmt(astgen.Call(
+						astgen.Ident("pushError"),
+						astgen.Lit(summary),
+						astgen.Call(astgen.QualExpr("fmt", "Sprintf"), astgen.Lit("Could not decode list page: %s"), astgen.Ident("err")),
+					)),
+					astgen.Return(),
+				),
+			},
+		}
+	}
+	return []ast.Stmt{
+		astgen.AssignSingle(
+			astgen.Ident("pageObj"),
+			astgen.CompositeLit(astgen.MapType(astgen.Ident("string"), astgen.QualExpr("json", "RawMessage"))),
+		),
+		&ast.IfStmt{
+			Init: astgen.AssignSingle(astgen.Ident("err"), astgen.Call(
+				astgen.QualExpr("json", "Unmarshal"), astgen.Ident("page"), astgen.UnaryPtr(astgen.Ident("pageObj")),
+			)),
+			Cond: astgen.NotEqual(astgen.Ident("err"), astgen.Nil()),
+			Body: astgen.Block(
+				astgen.ExprStmt(astgen.Call(
+					astgen.Ident("pushError"),
+					astgen.Lit(summary),
+					astgen.Call(astgen.QualExpr("fmt", "Sprintf"), astgen.Lit("Could not decode list page: %s"), astgen.Ident("err")),
+				)),
+				astgen.Return(),
+			),
+		},
+		astgen.Assign(
+			[]ast.Expr{astgen.Ident("rawItems"), astgen.Ident("ok")},
+			[]ast.Expr{astgen.IndexExpr(astgen.Ident("pageObj"), astgen.Lit(envelope))},
+		),
+		astgen.If(
+			astgen.Unary(token.NOT, astgen.Ident("ok")),
+			astgen.Block(
+				astgen.ExprStmt(astgen.Call(
+					astgen.Ident("pushError"),
+					astgen.Lit(summary),
+					astgen.Call(astgen.QualExpr("fmt", "Sprintf"), astgen.Lit("Could not decode list page: missing %q array"), astgen.Lit(envelope)),
+				)),
+				astgen.Return(),
+			),
+		),
+		astgen.AssignSingle(
+			astgen.Ident("items"),
+			astgen.CompositeLit(astgen.SliceType(astgen.QualExpr("json", "RawMessage"))),
+		),
+		&ast.IfStmt{
+			Init: astgen.AssignSingle(astgen.Ident("err"), astgen.Call(
+				astgen.QualExpr("json", "Unmarshal"), astgen.Ident("rawItems"), astgen.UnaryPtr(astgen.Ident("items")),
+			)),
+			Cond: astgen.NotEqual(astgen.Ident("err"), astgen.Nil()),
+			Body: astgen.Block(
+				astgen.ExprStmt(astgen.Call(
+					astgen.Ident("pushError"),
+					astgen.Lit(summary),
+					astgen.Call(astgen.QualExpr("fmt", "Sprintf"), astgen.Lit("Could not decode list page: %s"), astgen.Ident("err")),
+				)),
+				astgen.Return(),
+			),
+		},
+	}
 }
 
 // wiredListBody returns the List body wired to the generated API client,
@@ -299,28 +384,12 @@ func wiredListBody(lr ir.ListResourceIR, plan listResourceWiringPlan, modelName 
 		astgen.RangeStmt(
 			astgen.Ident("_"), astgen.Ident("page"), token.DEFINE, astgen.Ident("pages"),
 			astgen.Block(
-				astgen.AssignSingle(
-					astgen.Ident("items"),
-					astgen.CompositeLit(astgen.SliceType(astgen.QualExpr("json", "RawMessage"))),
-				),
-				&ast.IfStmt{
-					Init: astgen.AssignSingle(astgen.Ident("err"), astgen.Call(
-						astgen.QualExpr("json", "Unmarshal"), astgen.Ident("page"), astgen.UnaryPtr(astgen.Ident("items")),
-					)),
-					Cond: astgen.NotEqual(astgen.Ident("err"), astgen.Nil()),
-					Body: astgen.Block(
-						astgen.ExprStmt(astgen.Call(
-							astgen.Ident("pushError"),
-							astgen.Lit(summary),
-							astgen.Call(astgen.QualExpr("fmt", "Sprintf"), astgen.Lit("Could not decode list page: %s"), astgen.Ident("err")),
-						)),
-						astgen.Return(),
+				append(listPageItemsStmts(summary, plan.read.responseEnvelope),
+					astgen.RangeStmt(
+						astgen.Ident("_"), astgen.Ident("item"), token.DEFINE, astgen.Ident("items"),
+						astgen.Block(listItemResultStmts(lr, summary)...),
 					),
-				},
-				astgen.RangeStmt(
-					astgen.Ident("_"), astgen.Ident("item"), token.DEFINE, astgen.Ident("items"),
-					astgen.Block(listItemResultStmts(lr, summary)...),
-				),
+				)...,
 			),
 		))
 

@@ -85,7 +85,7 @@ func dataSourceModuleFiles(t *testing.T, p ir.ProviderIR, cfg BuildConfig) []Fil
 	files = append(files, DataSourceFiles(p.DataSources, clientImport)...)
 	files = append(files, ClientFiles(p)...)
 	if AnyDataSourceWired(p.DataSources) {
-		files = append(files, JSONConvertFile())
+		files = append(files, JSONConvertFile(&p))
 	}
 	return files
 }

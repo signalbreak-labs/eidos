@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"go/ast"
+	"go/token"
 	"log"
 	"strings"
 
@@ -33,20 +34,7 @@ func importStateBody(r ir.ResourceIR) []ast.Stmt {
 	}
 
 	if parsed.simple {
-		return []ast.Stmt{
-			astgen.ExprStmt(astgen.Call(
-				astgen.Selector(astgen.Selector(astgen.Ident("resp"), "Diagnostics"), "Append"),
-				astgen.Ellipsis(astgen.Call(
-					astgen.Selector(astgen.Selector(astgen.Ident("resp"), "State"), "SetAttribute"),
-					astgen.Ident("ctx"),
-					astgen.Call(
-						astgen.QualExpr("path", "Root"),
-						astgen.Lit(parsed.attrs[0]),
-					),
-					astgen.Selector(astgen.Ident("req"), "ID"),
-				)),
-			)),
-		}
+		return importSetStmts(r, parsed.attrs[0], astgen.Selector(astgen.Ident("req"), "ID"))
 	}
 
 	partsVar := importPartsVar(r)
@@ -81,22 +69,104 @@ func importStateBody(r ir.ResourceIR) []ast.Stmt {
 
 	for i, attr := range parsed.attrs {
 		stmts = append(stmts,
-			astgen.ExprStmt(astgen.Call(
-				astgen.Selector(astgen.Selector(astgen.Ident("resp"), "Diagnostics"), "Append"),
-				astgen.Ellipsis(astgen.Call(
-					astgen.Selector(astgen.Selector(astgen.Ident("resp"), "State"), "SetAttribute"),
-					astgen.Ident("ctx"),
-					astgen.Call(
-						astgen.QualExpr("path", "Root"),
-						astgen.Lit(attr),
-					),
-					astgen.IndexExpr(astgen.Ident(partsVar), astgen.IntLit(i)),
-				)),
-			)),
+			importSetStmts(r, attr, astgen.IndexExpr(astgen.Ident(partsVar), astgen.IntLit(i)))...,
 		)
 	}
 
 	return stmts
+}
+
+// importAttributeType returns the schema primitive type of an import target
+// attribute. Unknown attribute names default to TypeString so an import ID
+// segment is stored verbatim rather than parsed into a type the attribute does
+// not have.
+func importAttributeType(r ir.ResourceIR, attr string) ir.PrimitiveType {
+	for _, a := range r.Schema.Attributes {
+		if a.Name == attr {
+			return a.Schema.Type
+		}
+	}
+	return ir.TypeString
+}
+
+// importNeedsParsing reports whether any import target attribute has a
+// non-string primitive type that requires the string ID segment to be parsed
+// with strconv before it can be stored.
+func importNeedsParsing(r ir.ResourceIR, attrs []string) bool {
+	for _, attr := range attrs {
+		switch importAttributeType(r, attr) {
+		case ir.TypeInt, ir.TypeFloat, ir.TypeBool:
+			return true
+		}
+	}
+	return false
+}
+
+// importSetStmts emits the statements that store one import ID segment into a
+// single Terraform attribute. String attributes receive the segment verbatim;
+// int, float, and bool attributes parse it first, because storing a Go string
+// into an Int64/Float64/Bool attribute makes the framework's SetAttribute fail
+// with a tftypes conversion error ("can't unmarshal tftypes.String into
+// *big.Float"). Dynamic and null attributes store the segment verbatim.
+func importSetStmts(r ir.ResourceIR, attr string, segment ast.Expr) []ast.Stmt {
+	typ := importAttributeType(r, attr)
+	var parseFn string
+	var extraArgs []ast.Expr
+	var errPhrase string
+	switch typ {
+	case ir.TypeInt:
+		parseFn, extraArgs, errPhrase = "ParseInt", []ast.Expr{astgen.IntLit(10), astgen.IntLit(64)}, "an integer"
+	case ir.TypeFloat:
+		parseFn, extraArgs, errPhrase = "ParseFloat", []ast.Expr{astgen.IntLit(64)}, "a number"
+	case ir.TypeBool:
+		parseFn, errPhrase = "ParseBool", "a boolean"
+	}
+	if parseFn == "" {
+		return []ast.Stmt{setAttributeStmt(attr, segment)}
+	}
+
+	varName := "import" + naming.SanitizeGoIdentifier(naming.PascalCase(attr))
+	callArgs := append([]ast.Expr{segment}, extraArgs...)
+	// Parse, error guard, and the SetAttribute append: three statements.
+	stmts := make([]ast.Stmt, 0, 3)
+	stmts = append(stmts,
+		astgen.AssignStmt(
+			[]ast.Expr{astgen.Ident(varName), astgen.Ident("err")},
+			[]ast.Expr{astgen.Call(astgen.QualExpr("strconv", parseFn), callArgs...)},
+			token.DEFINE,
+		),
+		astgen.If(
+			astgen.NotEqual(astgen.Ident("err"), astgen.Nil()),
+			astgen.Block(
+				astgen.ExprStmt(astgen.Call(
+					astgen.Selector(astgen.Selector(astgen.Ident("resp"), "Diagnostics"), "AddError"),
+					astgen.Lit("Error importing "+resourceTypeName(r)),
+					astgen.Call(
+						astgen.QualExpr("fmt", "Sprintf"),
+						astgen.Lit(fmt.Sprintf("Could not parse import identifier %%q as %s: %%s", errPhrase)),
+						segment,
+						astgen.Ident("err"),
+					),
+				)),
+				astgen.Return(),
+			),
+		),
+	)
+	return append(stmts, setAttributeStmt(attr, astgen.Ident(varName)))
+}
+
+// setAttributeStmt emits a resp.State.SetAttribute diagnostic append for the
+// given attribute and value expression.
+func setAttributeStmt(attr string, value ast.Expr) ast.Stmt {
+	return astgen.ExprStmt(astgen.Call(
+		astgen.Selector(astgen.Selector(astgen.Ident("resp"), "Diagnostics"), "Append"),
+		astgen.Ellipsis(astgen.Call(
+			astgen.Selector(astgen.Selector(astgen.Ident("resp"), "State"), "SetAttribute"),
+			astgen.Ident("ctx"),
+			astgen.Call(astgen.QualExpr("path", "Root"), astgen.Lit(attr)),
+			value,
+		),
+		)))
 }
 
 // importPartsVar returns a local variable name for the split import identifier

@@ -85,7 +85,7 @@ func runGenerateConfig(cmd *cobra.Command, flags *generateConfigFlags) error {
 }
 
 func writeStarterConfigFromSpec(specData []byte, specPath, absOutput, providerName string, force bool) (diagnostics.Diagnostics, error) {
-	cfg, version, convertDiags, err := api.GenerateStarterConfig(specData, providerName)
+	cfg, version, convertDiags, err := api.GenerateStarterConfigWithName(specData, specPath, providerName)
 	if err != nil {
 		return convertDiags, fmt.Errorf("failed to generate starter config: %w", err)
 	}

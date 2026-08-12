@@ -124,6 +124,7 @@ func planDataSourceRead(ds ir.DataSourceIR) (crudOperationPlan, bool) {
 	planned.template = strings.TrimSpace(ds.ReadMapping.PathTemplate)
 	planned.successCodes = ds.ReadMapping.SuccessCodes
 	planned.errorMappings = errorMappingDescriptions(ds.ReadMapping.ErrorMappings)
+	planned.responseEnvelope = ds.ReadMapping.ResponseEnvelope
 	if planned.method == "" || planned.template == "" {
 		return planned, false
 	}
@@ -213,7 +214,7 @@ func wiredDataSourceReadBody(ds ir.DataSourceIR, plan crudOperationPlan, modelNa
 		astgen.Return(),
 	}
 	stmts = append(stmts, sendRequestStmts(plan, "d", summary, "config", nil, notFound)...)
-	stmts = append(stmts, decodeAndApplyStmts(summary, "config")...)
+	stmts = append(stmts, decodeAndApplyStmts(summary, "config", plan.responseEnvelope)...)
 	stmts = append(stmts, stateSetStmt("config"))
 	return stmts
 }
@@ -302,7 +303,7 @@ func wiredListDataSourceReadBody(ds ir.DataSourceIR, plan crudOperationPlan, mod
 			astgen.Return(),
 		),
 	)
-	stmts = append(stmts, listAccumulateStmts(summary)...)
+	stmts = append(stmts, listAccumulateStmts(summary, plan.responseEnvelope)...)
 	stmts = append(stmts, stateSetStmt("config"))
 	return stmts
 }
@@ -538,11 +539,14 @@ func listLinkHeaderNextBody(nextLinkRel string) []ast.Stmt {
 	}
 }
 
-// listAccumulateStmts emits the loop that decodes each fetched page (a JSON
-// array) into []any, appends its elements to an accumulator, and applies the
-// accumulated collection to the model as the `items` List attribute by wrapping
-// it in an {"items": items} object for applyJSONToModel.
-func listAccumulateStmts(summary string) []ast.Stmt {
+// listAccumulateStmts emits the loop that decodes each fetched page into []any,
+// appends its elements to an accumulator, and applies the accumulated collection
+// to the model as the `items` List attribute by wrapping it in an
+// {"items": items} object for applyJSONToModel. When the read mapping carries a
+// response envelope (e.g. SpaceTraders' {data: [...], meta: ...} list shape), each
+// page is decoded as a JSON object and the envelope key is extracted as the item
+// array before accumulation.
+func listAccumulateStmts(summary, envelope string) []ast.Stmt {
 	return []ast.Stmt{
 		astgen.AssignSingle(
 			astgen.Ident("items"),
@@ -550,27 +554,7 @@ func listAccumulateStmts(summary string) []ast.Stmt {
 		),
 		astgen.RangeStmt(
 			astgen.Ident("_"), astgen.Ident("page"), token.DEFINE, astgen.Ident("pages"),
-			astgen.Block(
-				astgen.AssignSingle(
-					astgen.Ident("pageItems"),
-					astgen.CompositeLit(astgen.SliceType(astgen.Ident("any"))),
-				),
-				&ast.IfStmt{
-					Init: astgen.AssignSingle(astgen.Ident("err"), astgen.Call(
-						astgen.QualExpr("json", "Unmarshal"), astgen.Ident("page"), astgen.UnaryPtr(astgen.Ident("pageItems")),
-					)),
-					Cond: astgen.NotEqual(astgen.Ident("err"), astgen.Nil()),
-					Body: astgen.Block(
-						addErrorfStmt(summary, "Could not decode list page: %s", astgen.Ident("err")),
-						astgen.Return(),
-					),
-				},
-				astgen.AssignStmt(
-					[]ast.Expr{astgen.Ident("items")},
-					[]ast.Expr{astgen.Call(astgen.Ident("append"), astgen.Ident("items"), astgen.Ellipsis(astgen.Ident("pageItems")))},
-					token.ASSIGN,
-				),
-			),
+			astgen.Block(listPageDecodeStmts(summary, envelope)...),
 		),
 		&ast.IfStmt{
 			Init: astgen.AssignSingle(astgen.Ident("err"), astgen.Call(
@@ -587,6 +571,73 @@ func listAccumulateStmts(summary string) []ast.Stmt {
 				astgen.Return(),
 			),
 		},
+	}
+}
+
+// listPageDecodeStmts decodes a single fetched page into the pageItems slice and
+// appends it to the items accumulator. Without an envelope the page is a bare
+// JSON array decoded directly; with an envelope the page is a JSON object whose
+// envelope key holds the item array (e.g. SpaceTraders' {data: [...], meta: ...}),
+// extracted by type assertion so a malformed page surfaces an error rather than
+// silently accumulating nothing.
+func listPageDecodeStmts(summary, envelope string) []ast.Stmt {
+	if envelope == "" {
+		return []ast.Stmt{
+			astgen.AssignSingle(
+				astgen.Ident("pageItems"),
+				astgen.CompositeLit(astgen.SliceType(astgen.Ident("any"))),
+			),
+			&ast.IfStmt{
+				Init: astgen.AssignSingle(astgen.Ident("err"), astgen.Call(
+					astgen.QualExpr("json", "Unmarshal"), astgen.Ident("page"), astgen.UnaryPtr(astgen.Ident("pageItems")),
+				)),
+				Cond: astgen.NotEqual(astgen.Ident("err"), astgen.Nil()),
+				Body: astgen.Block(
+					addErrorfStmt(summary, "Could not decode list page: %s", astgen.Ident("err")),
+					astgen.Return(),
+				),
+			},
+			astgen.AssignStmt(
+				[]ast.Expr{astgen.Ident("items")},
+				[]ast.Expr{astgen.Call(astgen.Ident("append"), astgen.Ident("items"), astgen.Ellipsis(astgen.Ident("pageItems")))},
+				token.ASSIGN,
+			),
+		}
+	}
+	return []ast.Stmt{
+		astgen.AssignSingle(
+			astgen.Ident("pageObj"),
+			astgen.CompositeLit(astgen.MapType(astgen.Ident("string"), astgen.Ident("any"))),
+		),
+		&ast.IfStmt{
+			Init: astgen.AssignSingle(astgen.Ident("err"), astgen.Call(
+				astgen.QualExpr("json", "Unmarshal"), astgen.Ident("page"), astgen.UnaryPtr(astgen.Ident("pageObj")),
+			)),
+			Cond: astgen.NotEqual(astgen.Ident("err"), astgen.Nil()),
+			Body: astgen.Block(
+				addErrorfStmt(summary, "Could not decode list page: %s", astgen.Ident("err")),
+				astgen.Return(),
+			),
+		},
+		astgen.Assign(
+			[]ast.Expr{astgen.Ident("pageItems"), astgen.Ident("ok")},
+			[]ast.Expr{astgen.TypeAssertExpr(
+				astgen.IndexExpr(astgen.Ident("pageObj"), astgen.Lit(envelope)),
+				astgen.SliceType(astgen.Ident("any")),
+			)},
+		),
+		astgen.If(
+			astgen.Unary(token.NOT, astgen.Ident("ok")),
+			astgen.Block(
+				addErrorfStmt(summary, "Could not decode list page: missing %q array", astgen.Lit(envelope)),
+				astgen.Return(),
+			),
+		),
+		astgen.AssignStmt(
+			[]ast.Expr{astgen.Ident("items")},
+			[]ast.Expr{astgen.Call(astgen.Ident("append"), astgen.Ident("items"), astgen.Ellipsis(astgen.Ident("pageItems")))},
+			token.ASSIGN,
+		),
 	}
 }
 

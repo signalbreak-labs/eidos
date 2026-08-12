@@ -21,6 +21,16 @@ import (
 	"github.com/hashicorp/terraform-plugin-go/tftypes"
 )
 
+// wireNames maps each generated model struct's nested attribute paths to the
+// API's original property names when they differ from the snake_case Terraform
+// attribute names (G18). Paths are dot-joined tfsdk attribute names; collection
+// elements are denoted with a "*" segment (e.g. "modules.*.symbol"). The map is
+// consulted by modelToJSONMap and applyJSONToModel so request bodies and
+// response mapping use the API's wire names for nested objects.
+var wireNames = map[string]map[string]string{
+{{ .WireNamesBody }}
+}
+
 // modelToJSONMap converts a generated Terraform model struct into a JSON-ready
 // map keyed by tfsdk attribute name. Null and unknown attribute values are
 // omitted so optional attributes are not sent to the API. Dynamic attribute
@@ -35,6 +45,7 @@ func modelToJSONMap(model any) (map[string]any, error) {
 		return nil, fmt.Errorf("expected a struct model, got %s", v.Kind())
 	}
 	t := v.Type()
+	wireMap := wireNames[t.Name()]
 	out := make(map[string]any, t.NumField())
 	for i := 0; i < t.NumField(); i++ {
 		name := t.Field(i).Tag.Get("tfsdk")
@@ -51,7 +62,7 @@ func modelToJSONMap(model any) (map[string]any, error) {
 		if !ok {
 			continue
 		}
-		converted, keep, err := attrValueToJSON(value)
+		converted, keep, err := attrValueToJSON(value, wireMap, name)
 		if err != nil {
 			return nil, fmt.Errorf("attribute %q: %w", name, err)
 		}
@@ -75,6 +86,7 @@ func applyJSONToModel(model any, data map[string]any) error {
 		return fmt.Errorf("expected a struct model, got %s", v.Kind())
 	}
 	t := v.Type()
+	wireMap := wireNames[t.Name()]
 	for i := 0; i < t.NumField(); i++ {
 		name := t.Field(i).Tag.Get("tfsdk")
 		if name == "" {
@@ -98,7 +110,7 @@ func applyJSONToModel(model any, data map[string]any) error {
 		if !ok {
 			continue
 		}
-		converted, err := jsonToAttrValue(current, raw)
+		converted, err := jsonToAttrValue(current, raw, wireMap, name)
 		if err != nil {
 			return fmt.Errorf("attribute %q: %w", name, err)
 		}
@@ -127,8 +139,10 @@ func applyJSONToModel(model any, data map[string]any) error {
 
 // attrValueToJSON converts a framework attribute value to a JSON-ready Go
 // value. The boolean result reports whether the value should be included in
-// the output; null and unknown values are excluded.
-func attrValueToJSON(value attr.Value) (any, bool, error) {
+// the output; null and unknown values are excluded. wireMap carries the model's
+// nested wire names and path is the dot-joined tfsdk path of the value, so
+// nested object attributes are emitted under their API property names (G18).
+func attrValueToJSON(value attr.Value, wireMap map[string]string, path string) (any, bool, error) {
 	if value == nil || value.IsNull() || value.IsUnknown() {
 		return nil, false, nil
 	}
@@ -142,26 +156,26 @@ func attrValueToJSON(value attr.Value) (any, bool, error) {
 	case types.Bool:
 		return v.ValueBool(), true, nil
 	case types.List:
-		return elementsToJSON(v.Elements())
+		return elementsToJSON(v.Elements(), wireMap, path+".*")
 	case types.Set:
-		return elementsToJSON(v.Elements())
+		return elementsToJSON(v.Elements(), wireMap, path+".*")
 	case types.Map:
-		return stringMapToJSON(v.Elements())
+		return mapToJSON(v.Elements(), wireMap, path+".*")
 	case types.Object:
-		return stringMapToJSON(v.Attributes())
+		return stringMapToJSON(v.Attributes(), wireMap, path)
 	case types.Dynamic:
 		// A dynamic attribute wraps an arbitrary attr.Value; convert the
 		// wrapped value so the request body carries the practitioner's dynamic
 		// payload (G18).
-		return attrValueToJSON(v.UnderlyingValue())
+		return attrValueToJSON(v.UnderlyingValue(), wireMap, path)
 	}
 	return nil, false, fmt.Errorf("unsupported attribute value type %T", value)
 }
 
-func elementsToJSON(elements []attr.Value) (any, bool, error) {
+func elementsToJSON(elements []attr.Value, wireMap map[string]string, path string) (any, bool, error) {
 	out := make([]any, 0, len(elements))
 	for _, element := range elements {
-		converted, keep, err := attrValueToJSON(element)
+		converted, keep, err := attrValueToJSON(element, wireMap, path)
 		if err != nil {
 			return nil, false, err
 		}
@@ -173,10 +187,38 @@ func elementsToJSON(elements []attr.Value) (any, bool, error) {
 	return out, true, nil
 }
 
-func stringMapToJSON(values map[string]attr.Value) (any, bool, error) {
+// stringMapToJSON converts an object's attributes to a JSON object keyed by
+// wire name. The wire map is consulted per attribute so nested objects use the
+// API's property names (G18).
+func stringMapToJSON(values map[string]attr.Value, wireMap map[string]string, path string) (any, bool, error) {
 	out := make(map[string]any, len(values))
 	for name, value := range values {
-		converted, keep, err := attrValueToJSON(value)
+		wire := name
+		if wireMap != nil {
+			if w, ok := wireMap[path+"."+name]; ok {
+				wire = w
+			}
+		}
+		converted, keep, err := attrValueToJSON(value, wireMap, path+"."+name)
+		if err != nil {
+			return nil, false, err
+		}
+		if !keep {
+			converted = nil
+		}
+		out[wire] = converted
+	}
+	return out, true, nil
+}
+
+// mapToJSON converts a map attribute to a JSON object. Map keys are arbitrary
+// practitioner data, not schema attributes, so they are emitted verbatim; only
+// the element values are converted (with the "*" path segment standing in for
+// the map key so nested object elements resolve their wire names).
+func mapToJSON(values map[string]attr.Value, wireMap map[string]string, path string) (any, bool, error) {
+	out := make(map[string]any, len(values))
+	for name, value := range values {
+		converted, keep, err := attrValueToJSON(value, wireMap, path)
 		if err != nil {
 			return nil, false, err
 		}
@@ -190,8 +232,10 @@ func stringMapToJSON(values map[string]attr.Value) (any, bool, error) {
 
 // jsonToAttrValue converts a decoded JSON value back into a framework
 // attribute value with the same type as current. A nil raw value produces the
-// null value for the attribute type.
-func jsonToAttrValue(current attr.Value, raw any) (attr.Value, error) {
+// null value for the attribute type. wireMap carries the model's nested wire
+// names and path is the dot-joined tfsdk path of the value, so nested object
+// attributes are read from the API's property names (G18).
+func jsonToAttrValue(current attr.Value, raw any, wireMap map[string]string, path string) (attr.Value, error) {
 	if raw == nil {
 		return nullAttrValue(current)
 	}
@@ -229,7 +273,7 @@ func jsonToAttrValue(current attr.Value, raw any) (attr.Value, error) {
 		}
 		return types.BoolValue(b), nil
 	case types.List:
-		elements, err := jsonToElements(v.ElementType(context.Background()), raw)
+		elements, err := jsonToElements(v.ElementType(context.Background()), raw, wireMap, path+".*")
 		if err != nil {
 			return nil, err
 		}
@@ -239,7 +283,7 @@ func jsonToAttrValue(current attr.Value, raw any) (attr.Value, error) {
 		}
 		return list, nil
 	case types.Set:
-		elements, err := jsonToElements(v.ElementType(context.Background()), raw)
+		elements, err := jsonToElements(v.ElementType(context.Background()), raw, wireMap, path+".*")
 		if err != nil {
 			return nil, err
 		}
@@ -249,7 +293,7 @@ func jsonToAttrValue(current attr.Value, raw any) (attr.Value, error) {
 		}
 		return set, nil
 	case types.Map:
-		values, err := jsonToStringMap(v.ElementType(context.Background()), raw)
+		values, err := jsonToStringMap(v.ElementType(context.Background()), raw, wireMap, path+".*")
 		if err != nil {
 			return nil, err
 		}
@@ -266,7 +310,17 @@ func jsonToAttrValue(current attr.Value, raw any) (attr.Value, error) {
 		}
 		values := make(map[string]attr.Value, len(attrTypes))
 		for name, attrType := range attrTypes {
-			converted, err := jsonToAttrValueOfType(attrType, obj[name])
+			wire := name
+			if wireMap != nil {
+				if w, ok := wireMap[path+"."+name]; ok {
+					wire = w
+				}
+			}
+			raw, ok := obj[wire]
+			if !ok && wire != name {
+				raw, ok = obj[name]
+			}
+			converted, err := jsonToAttrValueOfType(attrType, raw, wireMap, path+"."+name)
 			if err != nil {
 				return nil, fmt.Errorf("attribute %q: %w", name, err)
 			}
@@ -295,22 +349,22 @@ func jsonToAttrValue(current attr.Value, raw any) (attr.Value, error) {
 
 // jsonToAttrValueOfType converts a decoded JSON value into a framework
 // attribute value of the given type.
-func jsonToAttrValueOfType(attrType attr.Type, raw any) (attr.Value, error) {
+func jsonToAttrValueOfType(attrType attr.Type, raw any, wireMap map[string]string, path string) (attr.Value, error) {
 	null, err := nullAttrValueOfType(attrType)
 	if err != nil {
 		return nil, err
 	}
-	return jsonToAttrValue(null, raw)
+	return jsonToAttrValue(null, raw, wireMap, path)
 }
 
-func jsonToElements(elementType attr.Type, raw any) ([]attr.Value, error) {
+func jsonToElements(elementType attr.Type, raw any, wireMap map[string]string, path string) ([]attr.Value, error) {
 	items, ok := raw.([]any)
 	if !ok {
 		return nil, fmt.Errorf("expected JSON array, got %T", raw)
 	}
 	elements := make([]attr.Value, 0, len(items))
 	for _, item := range items {
-		converted, err := jsonToAttrValueOfType(elementType, item)
+		converted, err := jsonToAttrValueOfType(elementType, item, wireMap, path)
 		if err != nil {
 			return nil, err
 		}
@@ -319,14 +373,14 @@ func jsonToElements(elementType attr.Type, raw any) ([]attr.Value, error) {
 	return elements, nil
 }
 
-func jsonToStringMap(elementType attr.Type, raw any) (map[string]attr.Value, error) {
+func jsonToStringMap(elementType attr.Type, raw any, wireMap map[string]string, path string) (map[string]attr.Value, error) {
 	obj, ok := raw.(map[string]any)
 	if !ok {
 		return nil, fmt.Errorf("expected JSON object, got %T", raw)
 	}
 	values := make(map[string]attr.Value, len(obj))
 	for name, item := range obj {
-		converted, err := jsonToAttrValueOfType(elementType, item)
+		converted, err := jsonToAttrValueOfType(elementType, item, wireMap, path)
 		if err != nil {
 			return nil, err
 		}

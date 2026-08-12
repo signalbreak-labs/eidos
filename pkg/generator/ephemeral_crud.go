@@ -219,6 +219,7 @@ func planEphemeralOpen(er ir.EphemeralResourceIR) (crudOperationPlan, bool) {
 	planned.template = strings.TrimSpace(op.PathTemplate)
 	planned.successCodes = op.SuccessCodes
 	planned.errorMappings = errorMappingDescriptions(op.ErrorMappings)
+	planned.responseEnvelope = op.ResponseEnvelope
 	if planned.method == "" || planned.template == "" {
 		return planned, false
 	}
@@ -365,7 +366,7 @@ func wiredEphemeralOpenBody(er ir.EphemeralResourceIR, wiring ephemeralWiringPla
 	// An ephemeral Open has no state to drop on a 404; a non-success status is
 	// surfaced as an error by the generic non-success branch.
 	stmts = append(stmts, sendRequestStmts(plan, "e", summary, "config", nil, nil)...)
-	stmts = append(stmts, decodeAndApplyStmts(summary, "config")...)
+	stmts = append(stmts, decodeAndApplyStmts(summary, "config", plan.responseEnvelope)...)
 	stmts = append(stmts, privateParamStashStmts(wiring.privateParams)...)
 	stmts = append(stmts, resultSetStmt("config"))
 	return stmts
