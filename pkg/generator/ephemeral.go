@@ -414,7 +414,26 @@ func ephemeralMergedAttributes(er ir.EphemeralResourceIR) []ir.AttributeIR {
 	for _, attr := range er.ResultSchema.Attributes {
 		if existing, ok := byName[attr.Name]; ok {
 			if !ephemeralAttributeTypesCompatible(existing, attr) {
-				panic(fmt.Sprintf("ephemeral resource %q: attribute %q has incompatible types in config and result schemas", er.Name, attr.Name))
+				// The config and result schemas disagree on the shape of this
+				// attribute (e.g. an object on the request side and a primitive
+				// on the response side). The plugin-framework ephemeral schema
+				// has no first-class union attribute, so degrade the merged
+				// attribute to a DynamicAttribute instead of panicking (G2): a
+				// conflicting config/result value can only be represented as
+				// dynamic, and generation must stay honest rather than crash.
+				// The attribute-level Name/WireName/Description/Sensitive are
+				// preserved; only the schema shape is reset to dynamic.
+				existing.Schema = ir.SchemaIR{
+					Type:        ir.TypeDynamic,
+					Description: existing.Schema.Description,
+				}
+				if existing.Required {
+					existing.Required = false
+					existing.Optional = true
+				}
+				existing.Computed = true
+				byName[attr.Name] = existing
+				continue
 			}
 			// Same attribute in config and result: allow optional+computed.
 			// The config schema's IR (including SchemaIR type) takes precedence.
