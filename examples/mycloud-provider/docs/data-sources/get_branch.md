@@ -2,12 +2,12 @@
 page_title: "mycloud_get_branch Data Source - mycloud"
 subcategory: ""
 description: |-
-  
+  Get a branch
 ---
 
 # mycloud_get_branch Data Source
 
-
+Get a branch
 
 ## Example Usage
 

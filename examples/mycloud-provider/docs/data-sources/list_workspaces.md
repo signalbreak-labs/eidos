@@ -2,12 +2,12 @@
 page_title: "mycloud_list_workspaces Data Source - mycloud"
 subcategory: ""
 description: |-
-  
+  List Workspaces
 ---
 
 # mycloud_list_workspaces Data Source
 
-
+List Workspaces
 
 ## Example Usage
 

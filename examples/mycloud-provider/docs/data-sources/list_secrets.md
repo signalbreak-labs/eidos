@@ -2,12 +2,12 @@
 page_title: "mycloud_list_secrets Data Source - mycloud"
 subcategory: ""
 description: |-
-  
+  List Secrets
 ---
 
 # mycloud_list_secrets Data Source
 
-
+List Secrets
 
 ## Example Usage
 

@@ -69,10 +69,10 @@ func TestUnescapeYAMLDoubleQuoted(t *testing.T) {
 		{in: `a\eb`, want: "a\x1Bb"},
 		{in: `a\ b`, want: "a b"},
 		{in: `a\/b`, want: "a/b"},
-		{in: `a\Nb`, want: "ab"},
-		{in: `a\_b`, want: "a b"},
-		{in: `a\Lb`, want: "a b"},
-		{in: `a\Pb`, want: "a b"},
+		{in: `a\Nb`, want: "a\u0085b"},
+		{in: `a\_b`, want: "a\u00A0b"},
+		{in: `a\Lb`, want: "a\u2028b"},
+		{in: `a\Pb`, want: "a\u2029b"},
 		{in: `\x41`, want: "A"},
 		{in: `\U00000041`, want: "A"},
 		{in: `\U0001F600`, want: "\U0001F600"},

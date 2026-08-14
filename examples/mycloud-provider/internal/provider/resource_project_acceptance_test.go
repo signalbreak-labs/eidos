@@ -19,12 +19,14 @@ import (
 func testAccProjectResourceConfig(serverURL string, name string) string {
 	return fmt.Sprintf("provider \"mycloud\" {\n  endpoint = \"%s\"\n  bearer_token = \"example\"\n}\nresource \"mycloud_project\" \"example\" {\n  default_branch = \"%s\"\n  description = \"example\"\n  full_name = \"example\"\n  html_url = \"example\"\n  id = 1\n  name = \"example\"\n  organization = \"example\"\n  private = true\n  project = \"example\"\n}\n", serverURL, name)
 }
+
 // newProjectResourceMockServer returns an httptest server that stubs the ProjectResource CRUD endpoints.
 // The server echoes request bodies so that create/update responses reflect the values sent by the test.
 func newProjectResourceMockServer() *httptest.Server {
 	mux := http.NewServeMux()
 	state0 := make(map[string]map[string]interface{})
 	var mu0 sync.Mutex
+	lastKey0 := ""
 	handler0 := func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Authorization") != "Bearer example" {
 			http.Error(w, "missing bearer token", http.StatusUnauthorized)
@@ -34,7 +36,7 @@ func newProjectResourceMockServer() *httptest.Server {
 		defer mu0.Unlock()
 		id := strings.Trim(strings.TrimPrefix(r.URL.Path, "/organizations"), "/")
 		if id == "" {
-			id = "example-id"
+			id = "1"
 		}
 		switch r.Method {
 		case http.MethodPost:
@@ -43,19 +45,20 @@ func newProjectResourceMockServer() *httptest.Server {
 				http.Error(w, err.Error(), http.StatusBadRequest)
 				return
 			}
-			body["id"] = "example-id"
+			if _, ok := body["id"]; !ok {
+				body["id"] = 1
+			}
+			id = fmt.Sprintf("%v", body["id"])
 			state0[id] = body
+			lastKey0 = id
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(201)
 			_ = json.NewEncoder(w).Encode(body)
 			return
 		case http.MethodGet:
 			body, ok := state0[id]
-			if !ok && len(state0) == 1 {
-				for _, v := range state0 {
-					body = v
-					break
-				}
+			if !ok && lastKey0 != "" {
+				body = state0[lastKey0]
 			}
 			if body == nil {
 				http.NotFound(w, r)
@@ -71,8 +74,11 @@ func newProjectResourceMockServer() *httptest.Server {
 				http.Error(w, err.Error(), http.StatusBadRequest)
 				return
 			}
-			body["id"] = id
+			if _, ok := body["id"]; !ok {
+				body["id"] = 1
+			}
 			state0[id] = body
+			lastKey0 = id
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(200)
 			_ = json.NewEncoder(w).Encode(body)
@@ -89,6 +95,7 @@ func newProjectResourceMockServer() *httptest.Server {
 	mux.HandleFunc("/organizations/", handler0)
 	return httptest.NewServer(mux)
 }
+
 // TestAccProjectResourceLifecycle verifies create, update, delete, and import flows against a mock API.
 func TestAccProjectResourceLifecycle(t *testing.T) {
 	t.Setenv("TF_ACC", "1")

@@ -2,12 +2,12 @@
 page_title: "mycloud_workspace Resource - mycloud"
 subcategory: ""
 description: |-
-  
+  Read a Workspace
 ---
 
 # mycloud_workspace Resource
 
-
+Read a Workspace
 
 ## Example Usage
 
@@ -32,7 +32,7 @@ The following arguments are supported:
 * `labels` (Map(String), optional)
 * `name` (String, required)
 * `status` (Object({phase}), optional)
-  * `phase` (String, computed)
+  * `phase` (String, optional)
 
 ### Attributes
 
@@ -42,7 +42,7 @@ In addition to all arguments above, the following computed attributes are export
 * `kind` (String, computed)
 * `labels` (Map(String), computed)
 * `status` (Object({phase}), computed)
-  * `phase` (String, computed)
+  * `phase` (String, optional)
 
 ## Import
 

@@ -2,6 +2,7 @@ package provider
 
 import "context"
 import (
+	"github.com/hashicorp/terraform-plugin-framework/action"
 	"github.com/hashicorp/terraform-plugin-framework/datasource"
 	"github.com/hashicorp/terraform-plugin-framework/ephemeral"
 	"github.com/hashicorp/terraform-plugin-framework/function"
@@ -17,10 +18,13 @@ var _ tfframeworkprovider.Provider = (*mycloudProvider)(nil)
 var _ tfframeworkprovider.ProviderWithFunctions = (*mycloudProvider)(nil)
 var _ tfframeworkprovider.ProviderWithEphemeralResources = (*mycloudProvider)(nil)
 var _ tfframeworkprovider.ProviderWithListResources = (*mycloudProvider)(nil)
+var _ tfframeworkprovider.ProviderWithActions = (*mycloudProvider)(nil)
+
 // mycloudProvider is the generated Terraform provider implementation.
 type mycloudProvider struct {
 	configured bool
 }
+
 // mycloudProviderModel describes the provider-level configuration shape.
 type mycloudProviderModel struct {
 	Endpoint                  types.String `tfsdk:"endpoint"`
@@ -32,27 +36,29 @@ type mycloudProviderModel struct {
 	LogCaptureResponseBody    types.Bool   `tfsdk:"log_capture_response_body"`
 	LogMaxBodyBytes           types.Int64  `tfsdk:"log_max_body_bytes"`
 }
+
 // New returns a new instance of the generated provider.
 func New() tfframeworkprovider.Provider {
 	return &mycloudProvider{}
 }
+
 // Metadata returns the provider type name.
 func (p *mycloudProvider) Metadata(_ context.Context, _ tfframeworkprovider.MetadataRequest, resp *tfframeworkprovider.MetadataResponse) {
 	resp.TypeName = "mycloud"
 }
+
 // Schema returns the provider configuration schema.
 func (p *mycloudProvider) Schema(_ context.Context, _ tfframeworkprovider.SchemaRequest, resp *tfframeworkprovider.SchemaResponse) {
 	resp.Schema = schema.Schema{Description: "Trimmed MyCloud API reference spec for golden file regression tests. The schemas expose the path parameters (name, workspace) as top-level properties rather than nested under a metadata wrapper (a single-level metadata flattening is a documented follow-up in PROJECT_DESIGN §23) so the generator's path-parameter wiring is exercised end to end. The compute family (workspaces, instances, networks, stacks, configs, secrets) exercises workspace-scoped CRUD and list resources; the projects family (organizations, projects, tasks, pull requests, members, branches, commits) exercises organization-scoped data sources and list resources.", Attributes: map[string]schema.Attribute{"endpoint": schema.StringAttribute{MarkdownDescription: "Overrides the default API base URL derived from the OpenAPI servers. Useful for directing the provider at a test or mock server.", Optional: true}, "bearer_token": schema.StringAttribute{MarkdownDescription: "Bearer token used for HTTP bearer authentication.", Optional: true, Sensitive: true}, "log_file": schema.StringAttribute{MarkdownDescription: "Path to a file that receives HTTP request/response trace logs. When unset, trace logging is disabled.", Optional: true}, "log_capture_request_headers": schema.BoolAttribute{MarkdownDescription: "Capture request headers in the trace log. Sensitive headers are redacted.", Optional: true}, "log_capture_request_body": schema.BoolAttribute{MarkdownDescription: "Capture request bodies in the trace log. Disabled by default to avoid writing sensitive payloads to disk.", Optional: true}, "log_capture_response_headers": schema.BoolAttribute{MarkdownDescription: "Capture response headers in the trace log. Sensitive headers are redacted.", Optional: true}, "log_capture_response_body": schema.BoolAttribute{MarkdownDescription: "Capture response bodies in the trace log. Disabled by default to avoid writing sensitive payloads to disk.", Optional: true}, "log_max_body_bytes": schema.Int64Attribute{MarkdownDescription: "Maximum number of body bytes captured per log entry before truncation. Defaults to 4096.", Optional: true}}}
 }
+
 // Configure decodes practitioner configuration and marks the provider as configured.
 func (p *mycloudProvider) Configure(ctx context.Context, req tfframeworkprovider.ConfigureRequest, resp *tfframeworkprovider.ConfigureResponse) {
 	var config mycloudProviderModel
 	diags := req.Config.Get(ctx, &config)
 	resp.Diagnostics.Append(diags...)
 	if resp.Diagnostics.HasError() {
-		{
-			return
-		}
+		return
 	}
 	opts := []client.ClientOption{}
 	if !config.Endpoint.IsNull() && !config.Endpoint.IsUnknown() {
@@ -91,6 +97,7 @@ func (p *mycloudProvider) Configure(ctx context.Context, req tfframeworkprovider
 	resp.ListResourceData = c
 	p.configured = true
 }
+
 // DataSources returns the data sources registered with this provider.
 func (p *mycloudProvider) DataSources(_ context.Context) []func() datasource.DataSource {
 	return []func() datasource.DataSource{func() datasource.DataSource {
@@ -129,6 +136,7 @@ func (p *mycloudProvider) DataSources(_ context.Context) []func() datasource.Dat
 		return &ListStacksDataSource{}
 	}}
 }
+
 // Resources returns the managed resources registered with this provider.
 func (p *mycloudProvider) Resources(_ context.Context) []func() resource.Resource {
 	return []func() resource.Resource{func() resource.Resource {
@@ -145,24 +153,32 @@ func (p *mycloudProvider) Resources(_ context.Context) []func() resource.Resourc
 		return &StackResource{}
 	}, func() resource.Resource {
 		return &WorkspaceResource{}
-	}, func() resource.Resource {
-		return &CreatePullRequestResource{}
-	}, func() resource.Resource {
-		return &UpdatePullRequestResource{}
-	}, func() resource.Resource {
-		return &CreateTaskResource{}
-	}, func() resource.Resource {
-		return &UpdateTaskResource{}
 	}}
 }
+
+// Actions returns the actions registered with this provider.
+func (p *mycloudProvider) Actions(_ context.Context) []func() action.Action {
+	return []func() action.Action{func() action.Action {
+		return &CreatePullRequestAction{}
+	}, func() action.Action {
+		return &UpdatePullRequestAction{}
+	}, func() action.Action {
+		return &CreateTaskAction{}
+	}, func() action.Action {
+		return &UpdateTaskAction{}
+	}}
+}
+
 // Functions returns the provider-defined functions registered with this provider.
 func (p *mycloudProvider) Functions(_ context.Context) []func() function.Function {
 	return nil
 }
+
 // EphemeralResources returns the ephemeral resources registered with this provider.
 func (p *mycloudProvider) EphemeralResources(_ context.Context) []func() ephemeral.EphemeralResource {
 	return nil
 }
+
 // ListResources returns the list resources registered with this provider.
 func (p *mycloudProvider) ListResources(_ context.Context) []func() list.ListResource {
 	return nil

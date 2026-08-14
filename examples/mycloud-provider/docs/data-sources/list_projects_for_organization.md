@@ -2,12 +2,12 @@
 page_title: "mycloud_list_projects_for_organization Data Source - mycloud"
 subcategory: ""
 description: |-
-  
+  List organization projects
 ---
 
 # mycloud_list_projects_for_organization Data Source
 
-
+List organization projects
 
 ## Example Usage
 

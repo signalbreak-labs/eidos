@@ -2,12 +2,12 @@
 page_title: "mycloud_stack Resource - mycloud"
 subcategory: ""
 description: |-
-  
+  Read a Stack
 ---
 
 # mycloud_stack Resource
 
-
+Read a Stack
 
 ## Example Usage
 
@@ -32,10 +32,10 @@ The following arguments are supported:
 * `kind` (String, optional)
 * `name` (String, required)
 * `spec` (Object({replicas, selector}), optional)
-  * `replicas` (Number, computed)
-  * `selector` (Map(String), computed)
+  * `replicas` (Number, optional)
+  * `selector` (Map(String), optional)
 * `status` (Object({ready_replicas}), optional)
-  * `ready_replicas` (Number, computed)
+  * `ready_replicas` (Number, optional)
 * `workspace` (String, required)
 
 ### Attributes
@@ -46,10 +46,10 @@ In addition to all arguments above, the following computed attributes are export
 * `id` (String, computed)
 * `kind` (String, computed)
 * `spec` (Object({replicas, selector}), computed)
-  * `replicas` (Number, computed)
-  * `selector` (Map(String), computed)
+  * `replicas` (Number, optional)
+  * `selector` (Map(String), optional)
 * `status` (Object({ready_replicas}), computed)
-  * `ready_replicas` (Number, computed)
+  * `ready_replicas` (Number, optional)
 
 ## Import
 

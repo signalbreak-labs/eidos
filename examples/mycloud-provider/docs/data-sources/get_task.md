@@ -2,12 +2,12 @@
 page_title: "mycloud_get_task Data Source - mycloud"
 subcategory: ""
 description: |-
-  
+  Get an task
 ---
 
 # mycloud_get_task Data Source
 
-
+Get an task
 
 ## Example Usage
 

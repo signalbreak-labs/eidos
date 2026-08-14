@@ -2,12 +2,12 @@
 page_title: "mycloud_get_pull_request Data Source - mycloud"
 subcategory: ""
 description: |-
-  
+  Get a pull request
 ---
 
 # mycloud_get_pull_request Data Source
 
-
+Get a pull request
 
 ## Example Usage
 

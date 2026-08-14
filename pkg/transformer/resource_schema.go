@@ -639,15 +639,16 @@ func DataSourceSchema(op Operation, diags *diagnostics.Diagnostics) ir.ObjectSch
 		upsert(snake, func(a *ir.AttributeIR) {
 			a.Schema = paramSchemaIR(p.In, p.Type, p.ItemsType, p.Style, diags, p.Name)
 			a.WireName = p.Name
-			if p.Required || strings.EqualFold(p.In, "path") {
+			switch {
+			case p.Required || strings.EqualFold(p.In, "path"):
 				a.Required = true
 				a.Optional = false
-			} else if !a.Required {
+			case !a.Required:
 				// No prior required param (e.g. a path param) of the same sanitized
 				// name: this optional query/header param is a plain Optional input.
 				a.Optional = true
 				a.Required = false
-			} else {
+			default:
 				// An optional query/header param whose sanitized name collides with
 				// an already-Required attribute — typically a path param of the same
 				// name. GitLab's GET /api/v4/projects/{id}/terraform/state/{name}

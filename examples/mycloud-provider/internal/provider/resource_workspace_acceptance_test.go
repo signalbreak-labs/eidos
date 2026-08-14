@@ -17,14 +17,16 @@ import (
 )
 
 func testAccWorkspaceResourceConfig(serverURL string, name string) string {
-	return fmt.Sprintf("provider \"mycloud\" {\n  endpoint = \"%s\"\n  bearer_token = \"example\"\n}\nresource \"mycloud_workspace\" \"example\" {\n  api_version = \"%s\"\n  kind = \"example\"\n  labels = {\n    \"key\" = \"example\"\n  }\n  name = \"example\"\n  status = {\n  }\n}\n", serverURL, name)
+	return fmt.Sprintf("provider \"mycloud\" {\n  endpoint = \"%s\"\n  bearer_token = \"example\"\n}\nresource \"mycloud_workspace\" \"example\" {\n  api_version = \"%s\"\n  kind = \"example\"\n  labels = {\n    \"key\" = \"example\"\n  }\n  name = \"example\"\n  status = {\n    phase = \"example\"\n  }\n}\n", serverURL, name)
 }
+
 // newWorkspaceResourceMockServer returns an httptest server that stubs the WorkspaceResource CRUD endpoints.
 // The server echoes request bodies so that create/update responses reflect the values sent by the test.
 func newWorkspaceResourceMockServer() *httptest.Server {
 	mux := http.NewServeMux()
 	state0 := make(map[string]map[string]interface{})
 	var mu0 sync.Mutex
+	lastKey0 := ""
 	handler0 := func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Authorization") != "Bearer example" {
 			http.Error(w, "missing bearer token", http.StatusUnauthorized)
@@ -43,19 +45,20 @@ func newWorkspaceResourceMockServer() *httptest.Server {
 				http.Error(w, err.Error(), http.StatusBadRequest)
 				return
 			}
-			body["id"] = "example-id"
+			if _, ok := body["name"]; !ok {
+				body["name"] = "example-id"
+			}
+			id = fmt.Sprintf("%v", body["name"])
 			state0[id] = body
+			lastKey0 = id
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(201)
 			_ = json.NewEncoder(w).Encode(body)
 			return
 		case http.MethodGet:
 			body, ok := state0[id]
-			if !ok && len(state0) == 1 {
-				for _, v := range state0 {
-					body = v
-					break
-				}
+			if !ok && lastKey0 != "" {
+				body = state0[lastKey0]
 			}
 			if body == nil {
 				http.NotFound(w, r)
@@ -71,15 +74,18 @@ func newWorkspaceResourceMockServer() *httptest.Server {
 				http.Error(w, err.Error(), http.StatusBadRequest)
 				return
 			}
-			body["id"] = id
+			if _, ok := body["name"]; !ok {
+				body["name"] = "example-id"
+			}
 			state0[id] = body
+			lastKey0 = id
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(200)
 			_ = json.NewEncoder(w).Encode(body)
 			return
 		case http.MethodDelete:
 			delete(state0, id)
-			w.WriteHeader(204)
+			w.WriteHeader(200)
 			return
 		default:
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -89,6 +95,7 @@ func newWorkspaceResourceMockServer() *httptest.Server {
 	mux.HandleFunc("/workspaces/", handler0)
 	return httptest.NewServer(mux)
 }
+
 // TestAccWorkspaceResourceLifecycle verifies create, update, delete, and import flows against a mock API.
 func TestAccWorkspaceResourceLifecycle(t *testing.T) {
 	t.Setenv("TF_ACC", "1")

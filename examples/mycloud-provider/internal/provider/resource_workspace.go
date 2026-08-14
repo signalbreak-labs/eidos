@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 )
 import (
@@ -16,16 +17,19 @@ import (
 	types "github.com/hashicorp/terraform-plugin-framework/types"
 	client "github.com/mycloud/terraform-provider-mycloud/internal/client"
 )
+
 // Compile-time interface assertions.
 var (
 	_ resource.Resource                = (*WorkspaceResource)(nil)
 	_ resource.ResourceWithImportState = (*WorkspaceResource)(nil)
 	_ resource.ResourceWithConfigure   = (*WorkspaceResource)(nil)
 )
+
 // WorkspaceResource is the generated Terraform managed resource implementation.
 type WorkspaceResource struct {
 	client *client.Client
 }
+
 // WorkspaceResourceModel describes the Terraform state and plan shape for WorkspaceResource.
 type WorkspaceResourceModel struct {
 	ApiVersion types.String `tfsdk:"api_version" json:"apiVersion"`
@@ -34,14 +38,17 @@ type WorkspaceResourceModel struct {
 	Name       types.String `tfsdk:"name"`
 	Status     types.Object `tfsdk:"status"`
 }
+
 // Metadata returns the resource type name.
 func (r *WorkspaceResource) Metadata(_ context.Context, _ resource.MetadataRequest, resp *resource.MetadataResponse) {
 	resp.TypeName = "mycloud_workspace"
 }
+
 // Schema returns the Terraform schema for this resource.
 func (r *WorkspaceResource) Schema(_ context.Context, _ resource.SchemaRequest, resp *resource.SchemaResponse) {
-	resp.Schema = schema.Schema{Attributes: map[string]schema.Attribute{"api_version": schema.StringAttribute{Optional: true, Computed: true}, "kind": schema.StringAttribute{Optional: true, Computed: true}, "labels": schema.MapAttribute{Optional: true, Computed: true, ElementType: types.StringType}, "name": schema.StringAttribute{Required: true}, "status": schema.SingleNestedAttribute{Optional: true, Computed: true, Attributes: map[string]schema.Attribute{"phase": schema.StringAttribute{Computed: true}}}}}
+	resp.Schema = schema.Schema{MarkdownDescription: "Read a Workspace", Attributes: map[string]schema.Attribute{"api_version": schema.StringAttribute{Optional: true, Computed: true}, "kind": schema.StringAttribute{Optional: true, Computed: true}, "labels": schema.MapAttribute{Optional: true, Computed: true, ElementType: types.StringType}, "name": schema.StringAttribute{Required: true}, "status": schema.SingleNestedAttribute{Optional: true, Computed: true, Attributes: map[string]schema.Attribute{"phase": schema.StringAttribute{Optional: true, Computed: true}}}}}
 }
+
 // Create provisions the remote resource and stores the resulting state.
 func (r *WorkspaceResource) Create(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) {
 	var plan WorkspaceResourceModel
@@ -50,10 +57,8 @@ func (r *WorkspaceResource) Create(ctx context.Context, req resource.CreateReque
 		return
 	}
 	if r.client == nil {
-		{
-			resp.Diagnostics.AddError("Client Not Configured", "The API client was not set on the resource. The provider Configure method must run before resource operations; this is a bug in the generated provider.")
-			return
-		}
+		resp.Diagnostics.AddError("Client Not Configured", "The API client was not set on the resource. The provider Configure method must run before resource operations; this is a bug in the generated provider.")
+		return
 	}
 	body, err := modelToJSONMap(&plan)
 	if err != nil {
@@ -110,6 +115,7 @@ func (r *WorkspaceResource) Create(ctx context.Context, req resource.CreateReque
 	}
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 }
+
 // Read refreshes the Terraform state with the latest remote values.
 func (r *WorkspaceResource) Read(ctx context.Context, req resource.ReadRequest, resp *resource.ReadResponse) {
 	var state WorkspaceResourceModel
@@ -118,13 +124,11 @@ func (r *WorkspaceResource) Read(ctx context.Context, req resource.ReadRequest, 
 		return
 	}
 	if r.client == nil {
-		{
-			resp.Diagnostics.AddError("Client Not Configured", "The API client was not set on the resource. The provider Configure method must run before resource operations; this is a bug in the generated provider.")
-			return
-		}
+		resp.Diagnostics.AddError("Client Not Configured", "The API client was not set on the resource. The provider Configure method must run before resource operations; this is a bug in the generated provider.")
+		return
 	}
 	reqPath := "/workspaces/{name}"
-	reqPath = strings.ReplaceAll(reqPath, "{name}", state.Name.ValueString())
+	reqPath = strings.ReplaceAll(reqPath, "{name}", url.PathEscape(state.Name.ValueString()))
 	httpReq, err := r.client.NewRequest(ctx, http.MethodGet, reqPath, nil)
 	if err != nil {
 		resp.Diagnostics.AddError("Error reading mycloud_workspace", fmt.Sprintf("Could not build request: %s", err))
@@ -163,6 +167,7 @@ func (r *WorkspaceResource) Read(ctx context.Context, req resource.ReadRequest, 
 	}
 	resp.Diagnostics.Append(resp.State.Set(ctx, &state)...)
 }
+
 // Update modifies the remote resource to match the desired plan.
 func (r *WorkspaceResource) Update(ctx context.Context, req resource.UpdateRequest, resp *resource.UpdateResponse) {
 	var plan WorkspaceResourceModel
@@ -179,10 +184,8 @@ func (r *WorkspaceResource) Update(ctx context.Context, req resource.UpdateReque
 	}
 	preserveStateIntoPlan(&plan, &state)
 	if r.client == nil {
-		{
-			resp.Diagnostics.AddError("Client Not Configured", "The API client was not set on the resource. The provider Configure method must run before resource operations; this is a bug in the generated provider.")
-			return
-		}
+		resp.Diagnostics.AddError("Client Not Configured", "The API client was not set on the resource. The provider Configure method must run before resource operations; this is a bug in the generated provider.")
+		return
 	}
 	body, err := modelToJSONMap(&plan)
 	if err != nil {
@@ -195,7 +198,7 @@ func (r *WorkspaceResource) Update(ctx context.Context, req resource.UpdateReque
 		return
 	}
 	reqPath := "/workspaces/{name}"
-	reqPath = strings.ReplaceAll(reqPath, "{name}", plan.Name.ValueString())
+	reqPath = strings.ReplaceAll(reqPath, "{name}", url.PathEscape(plan.Name.ValueString()))
 	httpReq, err := r.client.NewRequest(ctx, http.MethodPut, reqPath, bytes.NewReader(payload))
 	if err != nil {
 		resp.Diagnostics.AddError("Error updating mycloud_workspace", fmt.Sprintf("Could not build request: %s", err))
@@ -231,6 +234,7 @@ func (r *WorkspaceResource) Update(ctx context.Context, req resource.UpdateReque
 	}
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 }
+
 // Delete destroys the remote resource.
 func (r *WorkspaceResource) Delete(ctx context.Context, req resource.DeleteRequest, resp *resource.DeleteResponse) {
 	var state WorkspaceResourceModel
@@ -239,13 +243,11 @@ func (r *WorkspaceResource) Delete(ctx context.Context, req resource.DeleteReque
 		return
 	}
 	if r.client == nil {
-		{
-			resp.Diagnostics.AddError("Client Not Configured", "The API client was not set on the resource. The provider Configure method must run before resource operations; this is a bug in the generated provider.")
-			return
-		}
+		resp.Diagnostics.AddError("Client Not Configured", "The API client was not set on the resource. The provider Configure method must run before resource operations; this is a bug in the generated provider.")
+		return
 	}
 	reqPath := "/workspaces/{name}"
-	reqPath = strings.ReplaceAll(reqPath, "{name}", state.Name.ValueString())
+	reqPath = strings.ReplaceAll(reqPath, "{name}", url.PathEscape(state.Name.ValueString()))
 	httpReq, err := r.client.NewRequest(ctx, http.MethodDelete, reqPath, nil)
 	if err != nil {
 		resp.Diagnostics.AddError("Error deleting mycloud_workspace", fmt.Sprintf("Could not build request: %s", err))
@@ -270,6 +272,7 @@ func (r *WorkspaceResource) Delete(ctx context.Context, req resource.DeleteReque
 		return
 	}
 }
+
 // Configure stores the API client supplied by the provider.
 func (r *WorkspaceResource) Configure(_ context.Context, req resource.ConfigureRequest, resp *resource.ConfigureResponse) {
 	if req.ProviderData == nil {
@@ -277,13 +280,12 @@ func (r *WorkspaceResource) Configure(_ context.Context, req resource.ConfigureR
 	}
 	c, ok := req.ProviderData.(*client.Client)
 	if !ok {
-		{
-			resp.Diagnostics.AddError("Unexpected Resource Configure Type", fmt.Sprintf("Expected *client.Client, got: %T. Please report this issue to the provider developers.", req.ProviderData))
-			return
-		}
+		resp.Diagnostics.AddError("Unexpected Resource Configure Type", fmt.Sprintf("Expected *client.Client, got: %T. Please report this issue to the provider developers.", req.ProviderData))
+		return
 	}
 	r.client = c
 }
+
 // ImportState imports an existing remote resource into Terraform state.
 func (r *WorkspaceResource) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {
 	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("name"), req.ID)...)

@@ -2,12 +2,12 @@
 page_title: "mycloud_list_tasks Data Source - mycloud"
 subcategory: ""
 description: |-
-  
+  List project tasks
 ---
 
 # mycloud_list_tasks Data Source
 
-
+List project tasks
 
 ## Example Usage
 

@@ -2,12 +2,12 @@
 page_title: "mycloud_network Resource - mycloud"
 subcategory: ""
 description: |-
-  
+  Read a Network
 ---
 
 # mycloud_network Resource
 
-
+Read a Network
 
 ## Example Usage
 
@@ -32,11 +32,11 @@ The following arguments are supported:
 * `kind` (String, optional)
 * `name` (String, required)
 * `spec` (Object({ip_address, ports, selector}), optional)
-  * `ip_address` (String, computed)
-  * `ports` (List(Object({name, port, protocol})), computed)
-  * `selector` (Map(String), computed)
+  * `ip_address` (String, optional)
+  * `ports` (List(Object({name, port, protocol})), optional)
+  * `selector` (Map(String), optional)
 * `status` (Object({load_balancer}), optional)
-  * `load_balancer` (Dynamic, computed)
+  * `load_balancer` (Dynamic, optional)
 * `workspace` (String, required)
 
 ### Attributes
@@ -47,11 +47,11 @@ In addition to all arguments above, the following computed attributes are export
 * `id` (String, computed)
 * `kind` (String, computed)
 * `spec` (Object({ip_address, ports, selector}), computed)
-  * `ip_address` (String, computed)
-  * `ports` (List(Object({name, port, protocol})), computed)
-  * `selector` (Map(String), computed)
+  * `ip_address` (String, optional)
+  * `ports` (List(Object({name, port, protocol})), optional)
+  * `selector` (Map(String), optional)
 * `status` (Object({load_balancer}), computed)
-  * `load_balancer` (Dynamic, computed)
+  * `load_balancer` (Dynamic, optional)
 
 ## Import
 

@@ -2,12 +2,12 @@
 page_title: "mycloud_get_commit Data Source - mycloud"
 subcategory: ""
 description: |-
-  
+  Get a commit
 ---
 
 # mycloud_get_commit Data Source
 
-
+Get a commit
 
 ## Example Usage
 

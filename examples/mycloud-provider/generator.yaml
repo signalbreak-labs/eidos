@@ -31,7 +31,6 @@ resource_overrides:
         - containers
         - image
         - image_pull_policy
-        - name
         - status
         - phase
     - schema: network
@@ -102,53 +101,54 @@ resource_overrides:
         - labels
         - status
         - phase
-    - schema: create_pull_request
-      operation: createPullRequest
-      resource_name: create_pull_request
-    - schema: update_pull_request
-      operation: updatePullRequest
-      resource_name: update_pull_request
-    - schema: create_task
-      operation: createTask
-      resource_name: create_task
-    - schema: update_task
-      operation: updateTask
-      resource_name: update_task
 datasource_overrides:
-    - operation: list_members
+    - operation: listMembers
       datasource_name: list_members
-    - operation: get_member
+    - operation: getMember
       datasource_name: get_member
-    - operation: list_projects_for_organization
+    - operation: listProjectsForOrganization
       datasource_name: list_projects_for_organization
-    - operation: list_branches
+    - operation: listBranches
       datasource_name: list_branches
-    - operation: get_branch
+    - operation: getBranch
       datasource_name: get_branch
-    - operation: list_commits
+    - operation: listCommits
       datasource_name: list_commits
-    - operation: get_commit
+    - operation: getCommit
       datasource_name: get_commit
-    - operation: list_pull_requests
+    - operation: listPullRequests
       datasource_name: list_pull_requests
-    - operation: get_pull_request
+    - operation: getPullRequest
       datasource_name: get_pull_request
-    - operation: list_tasks
+    - operation: listTasks
       datasource_name: list_tasks
-    - operation: get_task
+    - operation: getTask
       datasource_name: get_task
-    - operation: list_workspaces
+    - operation: listWorkspaces
       datasource_name: list_workspaces
-    - operation: list_configs
+    - operation: listConfigs
       datasource_name: list_configs
-    - operation: list_instances
+    - operation: listInstances
       datasource_name: list_instances
-    - operation: list_networks
+    - operation: listNetworks
       datasource_name: list_networks
-    - operation: list_secrets
+    - operation: listSecrets
       datasource_name: list_secrets
-    - operation: list_stacks
+    - operation: listStacks
       datasource_name: list_stacks
+action_overrides:
+    - operation: createPullRequest
+      name: create_pull_request
+      description: Create a pull request
+    - operation: updatePullRequest
+      name: update_pull_request
+      description: Update a pull request
+    - operation: createTask
+      name: create_task
+      description: Create an task
+    - operation: updateTask
+      name: update_task
+      description: Update an task
 list_resource_overrides:
     - resource: list_members
       operation: listMembers

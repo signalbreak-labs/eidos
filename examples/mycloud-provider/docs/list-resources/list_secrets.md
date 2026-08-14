@@ -2,12 +2,12 @@
 page_title: "mycloud_list_secrets List Resource - mycloud"
 subcategory: ""
 description: |-
-  
+  List Secrets
 ---
 
 # mycloud_list_secrets List Resource
 
-
+List Secrets
 
 ## Example Usage
 

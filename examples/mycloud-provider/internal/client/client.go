@@ -27,16 +27,16 @@ type RequestInterceptor func(*http.Request) error
 // (AND resolution). schemeOrder preserves registration order so interceptor
 // application is deterministic.
 type Client struct {
-	httpClient        *http.Client
-	baseURL           string
-	userAgent         string
+	httpClient         *http.Client
+	baseURL            string
+	userAgent          string
 	interceptors       []RequestInterceptor
 	schemeInterceptors map[string]RequestInterceptor
-	schemeOrder       []string
-	retryPolicy       RetryPolicy
-	maxRetries        int
-	backoff           BackoffFunc
-	logging           LoggingConfig
+	schemeOrder        []string
+	retryPolicy        RetryPolicy
+	maxRetries         int
+	backoff            BackoffFunc
+	logging            LoggingConfig
 }
 
 // ClientOption configures a Client.

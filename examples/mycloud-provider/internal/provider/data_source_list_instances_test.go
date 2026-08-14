@@ -5,6 +5,7 @@ import (
 	"testing"
 )
 import tfframeworkdatasource "github.com/hashicorp/terraform-plugin-framework/datasource"
+
 // TestListInstancesDataSourceSchemaValidation verifies that the generated data source schema is valid.
 func TestListInstancesDataSourceSchemaValidation(t *testing.T) {
 	d := NewListInstancesDataSource()
@@ -15,6 +16,7 @@ func TestListInstancesDataSourceSchemaValidation(t *testing.T) {
 		t.Fatalf("schema validation failed: %s", diags)
 	}
 }
+
 // TestListInstancesDataSourceMetadata verifies that the generated data source reports the expected type name.
 func TestListInstancesDataSourceMetadata(t *testing.T) {
 	d := NewListInstancesDataSource()

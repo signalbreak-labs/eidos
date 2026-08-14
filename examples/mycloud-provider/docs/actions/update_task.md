@@ -1,0 +1,43 @@
+---
+page_title: "mycloud_update_task Action - mycloud"
+subcategory: ""
+description: |-
+  Update an task
+---
+
+# mycloud_update_task Action
+
+Update an task
+
+## Example Usage
+
+```terraform
+action "mycloud_update_task" "example" {
+  body = "example"
+  html_url = "example"
+  id = 1
+  number = 1
+  organization = "example"
+  project = "example"
+  state = "example"
+  task_number = 1
+  title = "example"
+}
+
+```
+
+## Schema
+
+### Arguments
+
+The following arguments are supported:
+
+* `body` (String, optional)
+* `html_url` (String, optional)
+* `id` (Number, optional)
+* `number` (Number, optional)
+* `organization` (String, required)
+* `project` (String, required)
+* `state` (String, optional)
+* `task_number` (Number, required)
+* `title` (String, optional)

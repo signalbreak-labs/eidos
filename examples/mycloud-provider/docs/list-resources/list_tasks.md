@@ -2,12 +2,12 @@
 page_title: "mycloud_list_tasks List Resource - mycloud"
 subcategory: ""
 description: |-
-  
+  List project tasks
 ---
 
 # mycloud_list_tasks List Resource
 
-
+List project tasks
 
 ## Example Usage
 

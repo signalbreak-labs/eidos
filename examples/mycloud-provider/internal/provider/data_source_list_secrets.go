@@ -14,32 +14,39 @@ import (
 	types "github.com/hashicorp/terraform-plugin-framework/types"
 	client "github.com/mycloud/terraform-provider-mycloud/internal/client"
 )
+
 // Compile-time interface assertion.
 var (
 	_ datasource.DataSource              = (*ListSecretsDataSource)(nil)
 	_ datasource.DataSourceWithConfigure = (*ListSecretsDataSource)(nil)
 )
+
 // ListSecretsDataSource is the generated Terraform data source implementation.
 type ListSecretsDataSource struct {
 	client *client.Client
 }
+
 // ListSecretsDataSourceModel describes the data source state shape.
 type ListSecretsDataSourceModel struct {
 	Items     types.List   `tfsdk:"items"`
 	Workspace types.String `tfsdk:"workspace"`
 }
+
 // NewListSecretsDataSource returns a new instance of the generated data source.
 func NewListSecretsDataSource() datasource.DataSource {
 	return &ListSecretsDataSource{}
 }
+
 // Metadata returns the data source type name.
 func (d *ListSecretsDataSource) Metadata(_ context.Context, _ datasource.MetadataRequest, resp *datasource.MetadataResponse) {
 	resp.TypeName = "mycloud_list_secrets"
 }
+
 // Schema returns the data source schema.
 func (d *ListSecretsDataSource) Schema(_ context.Context, _ datasource.SchemaRequest, resp *datasource.SchemaResponse) {
-	resp.Schema = schema.Schema{Attributes: map[string]schema.Attribute{"items": schema.ListNestedAttribute{Computed: true, NestedObject: schema.NestedAttributeObject{Attributes: map[string]schema.Attribute{"api_version": schema.StringAttribute{Computed: true}, "data": schema.MapAttribute{Computed: true, ElementType: types.StringType}, "kind": schema.StringAttribute{Computed: true}, "name": schema.StringAttribute{Computed: true}, "type": schema.StringAttribute{Computed: true}, "workspace": schema.StringAttribute{Computed: true}}}}, "workspace": schema.StringAttribute{Required: true}}}
+	resp.Schema = schema.Schema{MarkdownDescription: "List Secrets", Attributes: map[string]schema.Attribute{"items": schema.ListNestedAttribute{Computed: true, NestedObject: schema.NestedAttributeObject{Attributes: map[string]schema.Attribute{"api_version": schema.StringAttribute{Computed: true}, "data": schema.MapAttribute{Computed: true, ElementType: types.StringType}, "kind": schema.StringAttribute{Computed: true}, "name": schema.StringAttribute{Computed: true}, "type": schema.StringAttribute{Computed: true}, "workspace": schema.StringAttribute{Computed: true}}}}, "workspace": schema.StringAttribute{Required: true}}}
 }
+
 // Read fetches remote state into the data source model.
 func (d *ListSecretsDataSource) Read(ctx context.Context, req datasource.ReadRequest, resp *datasource.ReadResponse) {
 	var config ListSecretsDataSourceModel
@@ -48,28 +55,22 @@ func (d *ListSecretsDataSource) Read(ctx context.Context, req datasource.ReadReq
 		return
 	}
 	if d.client == nil {
-		{
-			resp.Diagnostics.AddError("Client Not Configured", "The API client was not set on the resource. The provider Configure method must run before resource operations; this is a bug in the generated provider.")
-			return
-		}
+		resp.Diagnostics.AddError("Client Not Configured", "The API client was not set on the resource. The provider Configure method must run before resource operations; this is a bug in the generated provider.")
+		return
 	}
 	reqPath := "/workspaces/{workspace}/secrets"
-	reqPath = strings.ReplaceAll(reqPath, "{workspace}", config.Workspace.ValueString())
+	reqPath = strings.ReplaceAll(reqPath, "{workspace}", url.PathEscape(config.Workspace.ValueString()))
 	params := url.Values{}
 	var nextURL string
 	fetch := func(ctx context.Context, p url.Values) (*http.Response, error) {
 		httpReq, err := d.client.NewRequest(ctx, http.MethodGet, reqPath, nil)
 		if err != nil {
-			{
-				return nil, err
-			}
+			return nil, err
 		}
 		if nextURL != "" {
 			parsed, perr := url.Parse(nextURL)
 			if perr != nil {
-				{
-					return nil, perr
-				}
+				return nil, perr
 			}
 			httpReq.URL = parsed
 		} else {
@@ -97,6 +98,7 @@ func (d *ListSecretsDataSource) Read(ctx context.Context, req datasource.ReadReq
 	}
 	resp.Diagnostics.Append(resp.State.Set(ctx, &config)...)
 }
+
 // Configure stores the API client supplied by the provider.
 func (d *ListSecretsDataSource) Configure(_ context.Context, req datasource.ConfigureRequest, resp *datasource.ConfigureResponse) {
 	if req.ProviderData == nil {
@@ -104,10 +106,8 @@ func (d *ListSecretsDataSource) Configure(_ context.Context, req datasource.Conf
 	}
 	c, ok := req.ProviderData.(*client.Client)
 	if !ok {
-		{
-			resp.Diagnostics.AddError("Unexpected Data Source Configure Type", fmt.Sprintf("Expected *client.Client, got: %T. Please report this issue to the provider developers.", req.ProviderData))
-			return
-		}
+		resp.Diagnostics.AddError("Unexpected Data Source Configure Type", fmt.Sprintf("Expected *client.Client, got: %T. Please report this issue to the provider developers.", req.ProviderData))
+		return
 	}
 	d.client = c
 }

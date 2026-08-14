@@ -2201,15 +2201,24 @@ func unescapeYAMLSingleQuoted(s string) string {
 // double-quoted strings. It supports the common subset needed for OpenAPI files.
 func unescapeYAMLDoubleQuoted(s string) (string, error) {
 	var sb strings.Builder
-	for i := 0; i < len(s); i++ {
+	for i := 0; i < len(s); {
 		if s[i] != '\\' {
 			sb.WriteByte(s[i])
+			i++
 			continue
 		}
 		if i+1 >= len(s) {
 			return "", fmt.Errorf("invalid escape at end of quoted string")
 		}
 		c := s[i+1]
+		if c == 'x' || c == 'u' || c == 'U' {
+			next, err := appendNumericEscape(&sb, s, c, i)
+			if err != nil {
+				return "", err
+			}
+			i = next
+			continue
+		}
 		switch c {
 		case '0':
 			sb.WriteByte(0)
@@ -2247,65 +2256,58 @@ func unescapeYAMLDoubleQuoted(s string) (string, error) {
 			sb.WriteRune('\u2028') // line separator
 		case 'P':
 			sb.WriteRune('\u2029') // paragraph separator
-		case 'x':
-			// \xXX: two hex digits (YAML 1.2 section 5.7).
-			if i+3 >= len(s) {
-				return "", fmt.Errorf("invalid \\x escape")
-			}
-			code, ok := parseHexN(s[i+2:i+4], 2)
-			if !ok {
-				return "", fmt.Errorf("invalid \\x escape")
-			}
-			sb.WriteRune(rune(code))
-			i += 2
-		case 'u':
-			if i+5 >= len(s) {
-				return "", fmt.Errorf("invalid unicode escape")
-			}
-			code, ok := parseHex4(s[i+2 : i+6])
-			if !ok {
-				return "", fmt.Errorf("invalid unicode escape")
-			}
-			if code > 0x10FFFF {
-				return "", fmt.Errorf("invalid unicode escape")
-			}
-			// extra counts the hex digits consumed beyond the leading \u, so
-			// the shared i++ below advances past the final hex digit.
-			extra := 4
-			switch {
-			case isUTF16HighSurrogate(code):
-				// Combine a following \uXXXX low surrogate into one
-				// supplementary code point instead of two replacement chars
-				// (M-34).
-				if i+12 <= len(s) && s[i+6] == '\\' && s[i+7] == 'u' {
-					if low, lowOK := parseHex4(s[i+8 : i+12]); lowOK && isUTF16LowSurrogate(low) {
-						sb.WriteRune(combineUTF16Surrogates(code, low))
-						extra = 10
-						break
-					}
-				}
-				sb.WriteRune('\uFFFD')
-			case isUTF16LowSurrogate(code):
-				sb.WriteRune('\uFFFD')
-			default:
-				sb.WriteRune(rune(code))
-			}
-			i += extra
-		case 'U':
-			// \UXXXXXXXX: eight hex digits (YAML 1.2 \u00A75.7).
-			if i+9 >= len(s) {
-				return "", fmt.Errorf("invalid \\U escape")
-			}
-			code, ok := parseHexN(s[i+2:i+10], 8)
-			if !ok || code > 0x10FFFF {
-				return "", fmt.Errorf("invalid \\U escape")
-			}
-			sb.WriteRune(rune(code))
-			i += 8
 		default:
 			return "", fmt.Errorf("invalid escape sequence %q", "\\"+string(c))
 		}
-		i++
+		i += 2
 	}
 	return sb.String(), nil
+}
+
+// appendNumericEscape decodes a \xXX, \uXXXX, or \UXXXXXXXX escape starting at
+// the backslash s[i] and appends the decoded rune(s) to sb. kind is 'x', 'u',
+// or 'U'. It returns the index of the first byte after the escape and any
+// error. Hex parsing and surrogate handling live here to keep
+// unescapeYAMLDoubleQuoted under the gocognit threshold.
+func appendNumericEscape(sb *strings.Builder, s string, kind byte, i int) (int, error) {
+	digits := 0
+	switch kind {
+	case 'x':
+		digits = 2
+	case 'u':
+		digits = 4
+	case 'U':
+		digits = 8
+	}
+	// s[i] is '\\', s[i+1] is kind, hex digits start at i+2.
+	if i+2+digits > len(s) {
+		return 0, fmt.Errorf("invalid \\%c escape", kind)
+	}
+	code, ok := parseHexN(s[i+2:i+2+digits], digits)
+	if !ok {
+		return 0, fmt.Errorf("invalid \\%c escape", kind)
+	}
+	if code > 0x10FFFF {
+		return 0, fmt.Errorf("invalid \\%c escape", kind)
+	}
+	if kind == 'u' && isUTF16HighSurrogate(code) {
+		// Combine a following \uXXXX low surrogate into one supplementary code
+		// point instead of two replacement chars (M-34).
+		if i+12 <= len(s) && s[i+6] == '\\' && s[i+7] == 'u' {
+			if low, lowOK := parseHex4(s[i+8 : i+12]); lowOK && isUTF16LowSurrogate(low) {
+				sb.WriteRune(combineUTF16Surrogates(code, low))
+				return i + 12, nil
+			}
+		}
+		sb.WriteRune('\uFFFD')
+		return i + 2 + digits, nil
+	}
+	if kind == 'u' && isUTF16LowSurrogate(code) {
+		sb.WriteRune('\uFFFD')
+		return i + 2 + digits, nil
+	}
+	// code was validated as <= 0x10FFFF above and is not a surrogate, so it is
+	// always a valid rune; the bound check keeps this conversion safe (G115).
+	sb.WriteRune(rune(code))
+	return i + 2 + digits, nil
 }

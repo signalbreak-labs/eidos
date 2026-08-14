@@ -2,12 +2,12 @@
 page_title: "mycloud_config Resource - mycloud"
 subcategory: ""
 description: |-
-  
+  Read a Config
 ---
 
 # mycloud_config Resource
 
-
+Read a Config
 
 ## Example Usage
 

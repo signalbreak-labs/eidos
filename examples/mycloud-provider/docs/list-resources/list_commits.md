@@ -2,12 +2,12 @@
 page_title: "mycloud_list_commits List Resource - mycloud"
 subcategory: ""
 description: |-
-  
+  List commits
 ---
 
 # mycloud_list_commits List Resource
 
-
+List commits
 
 ## Example Usage
 

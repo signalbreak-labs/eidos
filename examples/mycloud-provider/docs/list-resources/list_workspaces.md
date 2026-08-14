@@ -2,12 +2,12 @@
 page_title: "mycloud_list_workspaces List Resource - mycloud"
 subcategory: ""
 description: |-
-  
+  List Workspaces
 ---
 
 # mycloud_list_workspaces List Resource
 
-
+List Workspaces
 
 ## Example Usage
 
