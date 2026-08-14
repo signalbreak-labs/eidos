@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.2](https://github.com/signalbreak-labs/eidos/compare/v0.3.1...v0.3.2) (2026-08-14)
+
+
+### Bug Fixes
+
+* ephemeral and provider updates ([6b09e05](https://github.com/signalbreak-labs/eidos/commit/6b09e0593979131e4a343af5948b5fa57fe13ad9))
+* failing ci checks ([c6bd8e3](https://github.com/signalbreak-labs/eidos/commit/c6bd8e3ab20a63ab2be0dabf51c881ae8a130a17))
+* generation testing fixes ([08bcd46](https://github.com/signalbreak-labs/eidos/commit/08bcd46cb70c521e3a97796a5906e3d1267be548))
+* many changes and corrections ([84b74db](https://github.com/signalbreak-labs/eidos/commit/84b74dbeff911ede3d89b1979b52f64a54237eb2))
+* vulncheck ci ([2ac90c5](https://github.com/signalbreak-labs/eidos/commit/2ac90c5c40a1d98086b10aa8de9929d71cbfe2ac))
+
+
+### Miscellaneous Chores
+
+* updates from real provider generations ([ce7c2af](https://github.com/signalbreak-labs/eidos/commit/ce7c2afe1e45e523fde1a72ec5a749a20c555726))
+
 ## [0.3.1](https://github.com/signalbreak-labs/eidos/compare/v0.3.0...v0.3.1) (2026-08-09)
 
 
