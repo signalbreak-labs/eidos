@@ -1,8 +1,10 @@
 package transformer
 
 import (
+	"strings"
 	"testing"
 
+	"github.com/signalbreak-labs/eidos/pkg/diagnostics"
 	"github.com/signalbreak-labs/eidos/pkg/ir"
 )
 
@@ -108,7 +110,7 @@ func TestDataSourceSchema(t *testing.T) {
 			},
 		},
 	}
-	obj := DataSourceSchema(op)
+	obj := DataSourceSchema(op, nil)
 	// ownerId path param merges with the response property into one attribute, so
 	// the cookie param is the only one skipped: owner_id, limit, token, created_at.
 	if len(obj.Attributes) != 4 {
@@ -136,6 +138,88 @@ func TestDataSourceSchema(t *testing.T) {
 	}
 }
 
+// TestDataSourceSchemaReservedNameParam ensures a path/query/header parameter
+// whose name normalizes to a reserved Terraform root attribute name (e.g.
+// "provider") is suffixed with "_" via SanitizeAttributeName — not left as the
+// bare reserved name, which fails provider schema validation at runtime — and
+// merges with a same-named response property under the sanitized key so the
+// data source has one attribute, not two (L-102).
+func TestDataSourceSchemaReservedNameParam(t *testing.T) {
+	op := Operation{
+		Parameters: []Parameter{
+			{Name: "provider", In: "query", Type: "string"},
+		},
+		ResponseSchema: &SchemaSpec{
+			Type: "object",
+			Properties: map[string]SchemaSpec{
+				"provider": {Type: "string"},
+			},
+		},
+	}
+	obj := DataSourceSchema(op, nil)
+	byName := map[string]ir.AttributeIR{}
+	for _, a := range obj.Attributes {
+		byName[a.Name] = a
+	}
+	if _, bad := byName["provider"]; bad {
+		t.Errorf("found unsanitized reserved attribute \"provider\"; attrs=%+v", obj.Attributes)
+	}
+	merged, ok := byName["provider_"]
+	if !ok {
+		t.Fatalf("expected sanitized attribute \"provider_\"; attrs=%+v", obj.Attributes)
+	}
+	if merged.Schema.Type != ir.TypeString {
+		t.Errorf("provider_ schema = %s, want string", merged.Schema.Type)
+	}
+}
+
+// TestDataSourceSchemaParamNameCollision verifies that an optional query/header
+// parameter whose name normalizes to the same attribute name as a required path
+// parameter (e.g. GitLab's GET /api/v4/projects/{id}/terraform/state/{name},
+// which declares a path param `id` and a query param `ID`, both → "id") does not
+// produce an invalid Required+Optional attribute. The path param wins (it is the
+// essential instance identifier); the colliding optional param is dropped and the
+// collision is surfaced as a fail-loud warning rather than lost silently.
+func TestDataSourceSchemaParamNameCollision(t *testing.T) {
+	var diags diagnostics.Diagnostics
+	op := Operation{
+		Parameters: []Parameter{
+			{Name: "id", In: "path", Required: true, Type: "integer"},
+			{Name: "name", In: "path", Required: true, Type: "string"},
+			{Name: "ID", In: "query", Required: false, Type: "integer"},
+		},
+		ResponseSchema: &SchemaSpec{
+			Type:       "object",
+			Properties: map[string]SchemaSpec{"content": {Type: "string"}},
+		},
+	}
+	obj := DataSourceSchema(op, &diags)
+	byName := map[string]ir.AttributeIR{}
+	for _, a := range obj.Attributes {
+		byName[a.Name] = a
+		if a.Required && a.Optional {
+			t.Errorf("attribute %q has both Required and Optional set: %+v", a.Name, a)
+		}
+	}
+	id, ok := byName["id"]
+	if !ok {
+		t.Fatalf("expected merged id attribute; attrs=%+v", obj.Attributes)
+	}
+	if !id.Required || id.Optional {
+		t.Errorf("id = %+v, want Required and not Optional (path param wins)", id)
+	}
+	// The dropped optional query param must surface a warning (fail-loud).
+	found := false
+	for _, d := range diags {
+		if d.Severity == diagnostics.Warning && strings.Contains(d.Summary, "collides") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected a collision warning for the dropped optional query param; diags=%+v", diags)
+	}
+}
+
 // TestDataSourceSchemaUnionResponse covers the top-level oneOf response wrapper.
 func TestDataSourceSchemaUnionResponse(t *testing.T) {
 	op := Operation{ResponseSchema: &SchemaSpec{
@@ -143,7 +227,7 @@ func TestDataSourceSchemaUnionResponse(t *testing.T) {
 		RefName: "Pet",
 		OneOf:   []SchemaSpec{{Type: "object", RefName: "Cat"}, {Type: "object", RefName: "Dog"}},
 	}}
-	obj := DataSourceSchema(op)
+	obj := DataSourceSchema(op, nil)
 	if len(obj.Attributes) != 1 || obj.Attributes[0].Name != "pet" || !obj.Attributes[0].Computed {
 		t.Errorf("union response = %+v, want computed pet wrapper", obj.Attributes)
 	}
@@ -155,7 +239,7 @@ func TestDataSourceSchemaArrayResponse(t *testing.T) {
 		Type:  "array",
 		Items: &SchemaSpec{Type: "string"},
 	}}
-	obj := DataSourceSchema(listOp)
+	obj := DataSourceSchema(listOp, nil)
 	if len(obj.Attributes) != 1 {
 		t.Fatalf("list response = %+v, want one items attribute", obj.Attributes)
 	}
@@ -168,7 +252,7 @@ func TestDataSourceSchemaArrayResponse(t *testing.T) {
 		UniqueItems: true,
 		Items:       &SchemaSpec{Type: "string"},
 	}}
-	set := DataSourceSchema(setOp)
+	set := DataSourceSchema(setOp, nil)
 	if set.Attributes[0].Schema.Collection.Kind != ir.Set {
 		t.Errorf("uniqueItems response = %+v, want Set", set.Attributes[0])
 	}

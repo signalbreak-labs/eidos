@@ -54,15 +54,37 @@ func ResourceAcceptanceTestFile(pir ir.ProviderIR, r ir.ResourceIR, cfg BuildCon
 // server could never pass; skipping it keeps the generated provider's own
 // `go test ./...` green while the scaffold's honest runtime diagnostic still
 // surfaces when the resource is used.
+//
+// A resource whose wired create sends a multipart/form-data body with a binary
+// formData parameter (a file upload, OpenAPI format: binary) is also skipped:
+// the generated client reads each such attribute's value as a local file path
+// via os.Open, and the mock server JSON-decodes request bodies, so a
+// placeholder-driven acceptance lifecycle cannot round-trip a file upload. The
+// resource keeps its (non-acceptance) schema test; skipping the lifecycle here
+// is honest rather than emitting a test that fails at runtime.
 func ResourceAcceptanceTestFiles(pir ir.ProviderIR, cfg BuildConfig) []File {
 	files := make([]File, 0, len(pir.Resources))
 	for _, r := range pir.Resources {
-		if !planResourceWiring(r).wired {
+		if !planResourceWiring(r).wired || resourceCreateHasBinaryUpload(r) {
 			continue
 		}
 		files = append(files, ResourceAcceptanceTestFile(pir, r, cfg))
 	}
 	return files
+}
+
+// resourceCreateHasBinaryUpload reports whether the resource's wired create
+// operation sends a multipart/form-data body with at least one binary formData
+// parameter (a file upload, OpenAPI format: binary). Such resources cannot be
+// exercised by the placeholder-driven mock acceptance lifecycle (see
+// ResourceAcceptanceTestFiles).
+func resourceCreateHasBinaryUpload(r ir.ResourceIR) bool {
+	for _, p := range r.CRUDMapping.Create.FormDataParams {
+		if strings.EqualFold(p.Schema.Format, "binary") {
+			return true
+		}
+	}
+	return false
 }
 
 // AcceptanceTestFiles returns the complete set of generated acceptance-test
@@ -95,8 +117,6 @@ func generateResourceAcceptanceTestFile(pir ir.ProviderIR, r ir.ResourceIR, cfg 
 	// Register imports used by the test function and helpers.
 	f.AddImport("net/http", "http")
 	f.AddImport("net/http/httptest", "httptest")
-	f.AddImport("strings", "")
-	f.AddImport("sync", "")
 	f.AddImport("testing", "")
 	f.AddImport("github.com/hashicorp/terraform-plugin-testing/helper/resource", "resource")
 	f.AddImport("github.com/hashicorp/terraform-plugin-go/tfprotov6", "tfprotov6")
@@ -104,14 +124,30 @@ func generateResourceAcceptanceTestFile(pir ir.ProviderIR, r ir.ResourceIR, cfg 
 
 	needsJSON := false
 	needsIO := false
+	needsFmt := false
 
 	routes := mockRoutes(r.CRUDMapping)
+	// The mock handler closure uses strings.Trim/TrimPrefix to extract the
+	// resource id from the request path and a sync.Mutex to serialize state, so
+	// those imports are only needed when at least one route is stubbed. A wired
+	// resource whose path collapses to an empty prefix (every leading segment is
+	// an unresolved dynamic placeholder) produces no routes; adding them
+	// unconditionally would leave them imported-and-unused and fail go vet.
+	if len(routes) > 0 {
+		f.AddImport("strings", "")
+		f.AddImport("sync", "")
+	}
 	for _, route := range routes {
 		if route.create || route.read || route.update {
 			needsJSON = true
 		}
 		if route.create || route.update {
 			needsIO = true
+		}
+		// The create handler stringifies the identity value (body[idAttr]) to
+		// key state, so it emits fmt.Sprintf whenever a create route exists.
+		if route.create {
+			needsFmt = true
 		}
 	}
 	if needsJSON {
@@ -122,7 +158,7 @@ func generateResourceAcceptanceTestFile(pir ir.ProviderIR, r ir.ResourceIR, cfg 
 	}
 
 	generateAcceptanceConfigFunction(f, configFuncName, configTmpl, hasEndpoint, hasTokenURL, hasOIDCTokenURL, hasParam)
-	if hasEndpoint || hasTokenURL || hasOIDCTokenURL || hasParam {
+	if needsFmt || hasEndpoint || hasTokenURL || hasOIDCTokenURL || hasParam {
 		f.AddImport("fmt", "")
 	}
 	generateMockServerFunction(f, r, mockFuncName, routes, pir.SecurityIR.Schemes)
@@ -447,8 +483,49 @@ func writeHCLAcceptanceBody(h *hclBuilder, obj ir.ObjectSchemaIR, paramAttr stri
 
 func writeHCLAcceptanceAttribute(h *hclBuilder, attr ir.AttributeIR, _ string) {
 	s := attr.Schema
+	// A DynamicAttribute (a primitive dynamic, or a collection degraded to
+	// dynamic because its element is/nests a dynamic) carries arbitrary JSON.
+	// Configure it with a SCALAR placeholder, never a collection literal: a list
+	// literal on a DynamicAttribute is parsed by the framework as a Tuple, whose
+	// concrete element types the response mapping (dynamicValueFromRaw ->
+	// inferTFTypes) cannot reliably reproduce, causing "wrong final value type:
+	// tuple required" at apply (G18). null round-trips for an Optional Dynamic
+	// (omitted from the request body, absent from the echoed response); a string
+	// literal round-trips for a Required Dynamic (the request side unwraps
+	// UnderlyingValue, the response side rebuilds via dynamicValueFromRaw). Seen
+	// on GitLab application.scopes (Required) and protected_branch.allowed_to_*
+	// (Optional, degraded from array), and Grafana alert_rule.data (G-22).
+	if schema.IsDynamicAttribute(s) {
+		if attr.Required {
+			h.writeLinef("%s = %s", attr.Name, `"example"`)
+		} else {
+			h.writeLinef("%s = %s", attr.Name, "null")
+		}
+		return
+	}
 	if s.Collection != nil {
 		writeHCLAcceptanceCollectionAttribute(h, attr)
+		return
+	}
+	// Union types (oneOf/anyOf): a discriminated union renders as a
+	// SingleNestedAttribute merging variant fields plus the discriminator, with
+	// a DiscriminatorValidator (D2); any other union degrades to a
+	// DynamicAttribute and is emitted as a scalar placeholder. Mirrors the
+	// resource schema emission order (resource.go) so the config matches the
+	// generated schema shape. Without this branch a union attribute (empty
+	// Attributes in the IR) falls through to primitiveExampleValue and emits a
+	// string for an object attribute, failing schema validation at plan time.
+	if s.Union != nil {
+		if writeHCLDiscriminatedUnion(h, attr, func(hh *hclBuilder, a ir.AttributeIR) {
+			writeHCLAcceptanceAttribute(hh, a, "")
+		}) {
+			return
+		}
+		if attr.Required {
+			h.writeLinef("%s = %s", attr.Name, `"example"`)
+		} else {
+			h.writeLinef("%s = %s", attr.Name, "null")
+		}
 		return
 	}
 	if schema.IsObjectLike(s) {
@@ -759,7 +836,14 @@ const (
 func mockRoutes(m ir.CRUDMappingIR) []mockRoute {
 	byPath := map[string]mockRoute{}
 
-	addRoute := func(pathTemplate, method string, status int, kind routeKind) {
+	addRoute := func(pathTemplate, method string, status int, kind routeKind, pathParams []ir.ParamIR) {
+		// Substitute static path placeholders (those with a const/default/enum
+		// in pathParams) with their literal values before computing the route
+		// prefix. A leading static segment such as {apiVersion} (enum
+		// ["v4beta"]) resolves to "v4beta", turning /{apiVersion}/things into
+		// /v4beta/things so the mock registers a real handler path instead of
+		// truncating at the first '{' to an empty prefix and dropping the route.
+		pathTemplate = substituteStaticPathPlaceholders(pathTemplate, pathParams)
 		path := pathTemplate
 		if idx := strings.Index(pathTemplate, "{"); idx >= 0 {
 			path = pathTemplate[:idx]
@@ -788,12 +872,12 @@ func mockRoutes(m ir.CRUDMappingIR) []mockRoute {
 		byPath[path] = route
 	}
 
-	addRoute(m.Create.PathTemplate, m.Create.Method, firstSuccessCode(m.Create.SuccessCodes, 201), routeCreate)
-	addRoute(m.Read.PathTemplate, m.Read.Method, firstSuccessCode(m.Read.SuccessCodes, 200), routeRead)
+	addRoute(m.Create.PathTemplate, m.Create.Method, firstSuccessCode(m.Create.SuccessCodes, 201), routeCreate, m.Create.PathParams)
+	addRoute(m.Read.PathTemplate, m.Read.Method, firstSuccessCode(m.Read.SuccessCodes, 200), routeRead, m.Read.PathParams)
 	if m.Update != nil {
-		addRoute(m.Update.PathTemplate, m.Update.Method, firstSuccessCode(m.Update.SuccessCodes, 200), routeUpdate)
+		addRoute(m.Update.PathTemplate, m.Update.Method, firstSuccessCode(m.Update.SuccessCodes, 200), routeUpdate, m.Update.PathParams)
 	}
-	addRoute(m.Delete.PathTemplate, m.Delete.Method, firstSuccessCode(m.Delete.SuccessCodes, 204), routeDelete)
+	addRoute(m.Delete.PathTemplate, m.Delete.Method, firstSuccessCode(m.Delete.SuccessCodes, 204), routeDelete, m.Delete.PathParams)
 
 	keys := make([]string, 0, len(byPath))
 	for k := range byPath {
@@ -806,6 +890,21 @@ func mockRoutes(m ir.CRUDMappingIR) []mockRoute {
 		routes = append(routes, byPath[k])
 	}
 	return routes
+}
+
+// substituteStaticPathPlaceholders replaces path placeholders that resolve to a
+// static literal (const/default/first enum value, via staticPathValue) with
+// their literal values, leaving dynamic placeholders (instance ids, parent
+// ids) in place. The result is the most concrete path the mock can register:
+// /{apiVersion}/things/{id} with apiVersion enum ["v4beta"] becomes
+// /v4beta/things/{id}. Placeholders absent from pathParams are left unchanged.
+func substituteStaticPathPlaceholders(pathTemplate string, pathParams []ir.ParamIR) string {
+	for _, ph := range pathPlaceholders(pathTemplate) {
+		if v, ok := staticPathValue(pathParams, ph); ok {
+			pathTemplate = strings.ReplaceAll(pathTemplate, "{"+ph+"}", v)
+		}
+	}
+	return pathTemplate
 }
 
 // mockAuthExpectedCredential is the credential value the generated acceptance
@@ -865,6 +964,36 @@ func httpBearerInSchemes(schemes []ir.SecuritySchemeIR) bool {
 	return false
 }
 
+// httpBasicInSchemes reports whether any scheme is an HTTP basic scheme.
+func httpBasicInSchemes(schemes []ir.SecuritySchemeIR) bool {
+	for _, s := range schemes {
+		if s.Type == ir.SecuritySchemeHTTP && strings.EqualFold(s.Scheme, "basic") {
+			return true
+		}
+	}
+	return false
+}
+
+// apiKeyAuthorizationHeaderInSchemes reports whether any apiKey scheme writes
+// the Authorization header (in: header, name: Authorization). Such a scheme
+// contests the Authorization header with HTTP basic and HTTP bearer schemes,
+// all of which the generated client writes to Authorization.
+func apiKeyAuthorizationHeaderInSchemes(schemes []ir.SecuritySchemeIR) bool {
+	for _, s := range schemes {
+		if s.Type != ir.SecuritySchemeAPIKey {
+			continue
+		}
+		loc := s.In
+		if loc == "" {
+			loc = "header"
+		}
+		if strings.EqualFold(loc, "header") && strings.EqualFold(s.NameField, "Authorization") {
+			return true
+		}
+	}
+	return false
+}
+
 // mockAuthCandidates builds the per-scheme credential-check candidates. The
 // hasTokenFetching and hasHTTPBearer flags carry the cross-scheme
 // Authorization-header conflict: when both are present neither Authorization
@@ -872,9 +1001,11 @@ func httpBearerInSchemes(schemes []ir.SecuritySchemeIR) bool {
 // spuriously fail depending on interceptor order.
 func mockAuthCandidates(schemes []ir.SecuritySchemeIR, hasTokenFetching bool) []mockAuthCandidate {
 	hasHTTPBearer := httpBearerInSchemes(schemes)
+	hasHTTPBasic := httpBasicInSchemes(schemes)
+	hasAPIKeyAuthorization := apiKeyAuthorizationHeaderInSchemes(schemes)
 	var candidates []mockAuthCandidate
 	for i, s := range schemes {
-		if c, ok := mockAuthCandidateForScheme(s, i, hasTokenFetching, hasHTTPBearer); ok {
+		if c, ok := mockAuthCandidateForScheme(s, i, hasTokenFetching, hasHTTPBearer, hasHTTPBasic, hasAPIKeyAuthorization); ok {
 			candidates = append(candidates, c)
 		}
 	}
@@ -884,7 +1015,7 @@ func mockAuthCandidates(schemes []ir.SecuritySchemeIR, hasTokenFetching bool) []
 // mockAuthCandidateForScheme returns the credential-check candidate for a single
 // scheme, or ok=false when the scheme has no assertable interceptor. The
 // Authorization-header conflict skips are applied here.
-func mockAuthCandidateForScheme(s ir.SecuritySchemeIR, i int, hasTokenFetching, hasHTTPBearer bool) (mockAuthCandidate, bool) {
+func mockAuthCandidateForScheme(s ir.SecuritySchemeIR, i int, hasTokenFetching, hasHTTPBearer, hasHTTPBasic, hasAPIKeyAuthorization bool) (mockAuthCandidate, bool) {
 	switch s.Type {
 	case ir.SecuritySchemeAPIKey:
 		loc := s.In
@@ -895,10 +1026,27 @@ func mockAuthCandidateForScheme(s ir.SecuritySchemeIR, i int, hasTokenFetching, 
 		if name == "" {
 			name = "X-API-Key"
 		}
+		// An apiKey scheme that writes the Authorization header contests the
+		// same header as an HTTP basic scheme (e.g. Grafana declares alternative
+		// basic and api_key schemes, both writing Authorization). Under AND
+		// semantics the mock would require both, which is impossible on a single
+		// Authorization header, so neither side is asserted when both are
+		// present (mirroring the bearer/token-fetching mutual skip above). The
+		// provider's single Authorization header — whichever interceptor wins —
+		// is then accepted.
+		if hasHTTPBasic && strings.EqualFold(loc, "header") && strings.EqualFold(name, "Authorization") {
+			return mockAuthCandidate{}, false
+		}
 		return mockAuthCandidate{s.Name, mockAPIKeyAuthCheck(loc, name, i)}, true
 	case ir.SecuritySchemeHTTP:
 		switch strings.ToLower(s.Scheme) {
 		case "basic":
+			// Symmetric skip: when an apiKey-in-Authorization scheme is also
+			// present, the Authorization header is contested (see above), so do
+			// not assert basic auth either.
+			if hasAPIKeyAuthorization {
+				return mockAuthCandidate{}, false
+			}
 			return mockAuthCandidate{s.Name, mockBasicAuthCheck(i)}, true
 		case "bearer":
 			// Skip when a token-fetching scheme is also present: both
@@ -1178,6 +1326,17 @@ func statefulMockRouteHandler(route mockRoute, index int, schemes []ir.SecurityS
 	stateVar := fmt.Sprintf("state%d", index)
 	muVar := fmt.Sprintf("mu%d", index)
 	handlerVar := fmt.Sprintf("handler%d", index)
+	// lastKey tracks the storage key of the most recent create/update so the
+	// read handler can fall back to it when a direct path lookup misses. A
+	// composite-identity resource (e.g. GitLab /groups/{id}/labels/{name}) is
+	// created on a collection path but read/updated on an instance path, so the
+	// create's storage key (the collection path tail) never equals the instance
+	// read's lookup key; import reads yet another path (the imported name). The
+	// single-entry (len==1) fallback could not bridge this once create and update
+	// land in separate slots. lastKey deterministically returns the most recent
+	// resource, which is the one an import against the mock should resolve to
+	// (G-22).
+	lastKeyVar := fmt.Sprintf("lastKey%d", index)
 
 	var cases []ast.Stmt
 
@@ -1216,14 +1375,50 @@ func statefulMockRouteHandler(route mockRoute, index int, schemes []ir.SecurityS
 			// body was initialized with make(map[string]interface{}) above, so it
 			// is never nil; the prior `if body == nil` re-initialization was dead
 			// (L-25).
+			//
+			// Only synthesize the identity when the practitioner did not supply
+			// it. A Required identity attribute (e.g. GitLab variable.key, Grafana
+			// mute_timing.name) is sent in the create body; overwriting it with the
+			// mock placeholder would make the echoed response disagree with the
+			// plan ("was \"example\", but now \"example-id\""). A Computed identity
+			// (server-generated id) is absent from the body, so it is synthesized
+			// (G-22).
+			&ast.IfStmt{
+				Init: astgen.AssignStmt(
+					[]ast.Expr{astgen.Ident("_"), astgen.Ident("ok")},
+					[]ast.Expr{astgen.IndexExpr(astgen.Ident("body"), astgen.Lit(idAttr))},
+					token.DEFINE,
+				),
+				Cond: astgen.Unary(token.NOT, astgen.Ident("ok")),
+				Body: astgen.Block(
+					astgen.AssignStmt(
+						[]ast.Expr{astgen.IndexExpr(astgen.Ident("body"), astgen.Lit(idAttr))},
+						[]ast.Expr{mockIDValue(idPrimitive)},
+						token.ASSIGN,
+					),
+				),
+			},
+			// Key state by the identity value (body[idAttr]) rather than the
+			// request path tail: a collection POST carries no id in the path, so
+			// the path tail is the bare placeholder, while a practitioner-supplied
+			// identity has the value the client will send on subsequent
+			// Read/Update/Delete. Storing by identity value keeps create and update
+			// in the same state slot (so the single-entry read fallback serves
+			// import) and lets instance Read/Update/Delete look up by path
+			// directly (G-22).
 			astgen.AssignStmt(
-				[]ast.Expr{astgen.IndexExpr(astgen.Ident("body"), astgen.Lit(idAttr))},
-				[]ast.Expr{mockIDValue(idPrimitive)},
+				[]ast.Expr{astgen.Ident("id")},
+				[]ast.Expr{astgen.Call(astgen.QualExpr("fmt", "Sprintf"), astgen.Lit("%v"), astgen.IndexExpr(astgen.Ident("body"), astgen.Lit(idAttr)))},
 				token.ASSIGN,
 			),
 			astgen.AssignStmt(
 				[]ast.Expr{astgen.IndexExpr(astgen.Ident(stateVar), astgen.Ident("id"))},
 				[]ast.Expr{astgen.Ident("body")},
+				token.ASSIGN,
+			),
+			astgen.AssignStmt(
+				[]ast.Expr{astgen.Ident(lastKeyVar)},
+				[]ast.Expr{astgen.Ident("id")},
 				token.ASSIGN,
 			),
 			astgen.ExprStmt(astgen.Call(astgen.Selector(astgen.Call(astgen.Selector(astgen.Ident("w"), "Header")), "Set"), astgen.Lit("Content-Type"), astgen.Lit("application/json"))),
@@ -1244,25 +1439,25 @@ func statefulMockRouteHandler(route mockRoute, index int, schemes []ir.SecurityS
 				[]ast.Expr{astgen.Ident("body"), astgen.Ident("ok")},
 				[]ast.Expr{astgen.IndexExpr(astgen.Ident(stateVar), astgen.Ident("id"))},
 			),
+			// Fall back to the most recent create/update key when a direct
+			// path-tail lookup misses. A composite-identity resource (e.g. GitLab
+			// /groups/{id}/labels/{name}) is created on a collection path and read
+			// on an instance path, so the create's storage key (the identity value)
+			// never equals the instance read's lookup key (the path tail). lastKey
+			// deterministically resolves the read to the most recent resource, which
+			// is the one an import against the mock should resolve to. This supersedes
+			// the single-entry (len==1) range fallback, which could not bridge create
+			// and update once they land in separate slots (G-22).
 			astgen.If(
 				astgen.Binary(
 					astgen.Unary(token.NOT, astgen.Ident("ok")),
 					token.LAND,
-					astgen.Equal(astgen.Call(astgen.Ident("len"), astgen.Ident(stateVar)), astgen.IntLit(1)),
+					astgen.Binary(astgen.Ident(lastKeyVar), token.NEQ, astgen.Lit("")),
 				),
-				astgen.RangeStmt(
-					astgen.Ident("_"),
-					astgen.Ident("v"),
-					token.DEFINE,
-					astgen.Ident(stateVar),
-					astgen.Block(
-						astgen.AssignStmt(
-							[]ast.Expr{astgen.Ident("body")},
-							[]ast.Expr{astgen.Ident("v")},
-							token.ASSIGN,
-						),
-						astgen.Break(),
-					),
+				astgen.AssignStmt(
+					[]ast.Expr{astgen.Ident("body")},
+					[]ast.Expr{astgen.IndexExpr(astgen.Ident(stateVar), astgen.Ident(lastKeyVar))},
+					token.ASSIGN,
 				),
 			),
 			astgen.If(astgen.Equal(astgen.Ident("body"), astgen.Nil()),
@@ -1302,14 +1497,34 @@ func statefulMockRouteHandler(route mockRoute, index int, schemes []ir.SecurityS
 			// body was initialized with make(map[string]interface{}) above, so it
 			// is never nil; the prior `if body == nil` re-initialization was dead
 			// (L-25).
-			astgen.AssignStmt(
-				[]ast.Expr{astgen.IndexExpr(astgen.Ident("body"), astgen.Lit(idAttr))},
-				[]ast.Expr{mockIDValue(idPrimitive)},
-				token.ASSIGN,
-			),
+			//
+			// Only synthesize the identity when absent, mirroring create: a
+			// practitioner-supplied identity (GitLab variable.key) is already in
+			// the update body and must not be overwritten, or the echoed response
+			// would disagree with the plan (G-22).
+			&ast.IfStmt{
+				Init: astgen.AssignStmt(
+					[]ast.Expr{astgen.Ident("_"), astgen.Ident("ok")},
+					[]ast.Expr{astgen.IndexExpr(astgen.Ident("body"), astgen.Lit(idAttr))},
+					token.DEFINE,
+				),
+				Cond: astgen.Unary(token.NOT, astgen.Ident("ok")),
+				Body: astgen.Block(
+					astgen.AssignStmt(
+						[]ast.Expr{astgen.IndexExpr(astgen.Ident("body"), astgen.Lit(idAttr))},
+						[]ast.Expr{mockIDValue(idPrimitive)},
+						token.ASSIGN,
+					),
+				),
+			},
 			astgen.AssignStmt(
 				[]ast.Expr{astgen.IndexExpr(astgen.Ident(stateVar), astgen.Ident("id"))},
 				[]ast.Expr{astgen.Ident("body")},
+				token.ASSIGN,
+			),
+			astgen.AssignStmt(
+				[]ast.Expr{astgen.Ident(lastKeyVar)},
+				[]ast.Expr{astgen.Ident("id")},
 				token.ASSIGN,
 			),
 			astgen.ExprStmt(astgen.Call(astgen.Selector(astgen.Call(astgen.Selector(astgen.Ident("w"), "Header")), "Set"), astgen.Lit("Content-Type"), astgen.Lit("application/json"))),
@@ -1370,6 +1585,7 @@ func statefulMockRouteHandler(route mockRoute, index int, schemes []ir.SecurityS
 	return []ast.Stmt{
 		astgen.AssignSingle(astgen.Ident(stateVar), astgen.Call(astgen.Ident("make"), astgen.MapType(astgen.Ident("string"), astgen.MapType(astgen.Ident("string"), astgen.Ident("interface{}"))))),
 		astgen.DeclStmt(astgen.VarDeclGen(astgen.VarSpec(muVar, astgen.QualExpr("sync", "Mutex"), nil))),
+		astgen.AssignSingle(astgen.Ident(lastKeyVar), astgen.Lit("")),
 		// The handler is bound to a variable so it can be registered on both the
 		// exact collection path and its subtree: net/http's ServeMux pattern
 		// "/pets" matches only that exact path, so instance URLs like

@@ -66,6 +66,18 @@ type Parameter struct {
 	In       string // path, query, header, cookie
 	Required bool
 	Type     string
+	// ItemsType is the scalar element type when Type is "array" (the `items`
+	// type of an array parameter); empty for non-array parameters. Used to model
+	// an array query parameter as a List of the element primitive so the
+	// generator serializes one repeated query value per element.
+	ItemsType string
+	// Style is the OpenAPI 3.x serialization style of the parameter (e.g.
+	// "form", "spaceDelimited", "pipeDelimited"); the v2 parser converts
+	// collectionFormat to style. Empty means the default ("form" for query). The
+	// array-query-parameter modeling serializes repeated values (form +
+	// explode: true); a non-form style is lossy and surfaced with a fail-loud
+	// warning rather than dropped silently.
+	Style string
 }
 
 // IDKind classifies how a resource instance is identified.

@@ -301,17 +301,15 @@ func wiredListDataSourceReadBody(ds ir.DataSourceIR, plan crudOperationPlan, mod
 		astgen.CompositeLit(astgen.QualExpr("url", "Values")),
 	))
 	for _, p := range plan.queryParams {
-		setCall := astgen.Call(
-			astgen.Selector(astgen.Ident("params"), "Set"),
-			astgen.Lit(p.name),
-			paramValueExpr("config", p),
-		)
-		// Gate optional query parameters on a non-null model value so an unset
-		// optional parameter is omitted from the request rather than sent as the
-		// zero-value empty string/0, which the API may reject or misinterpret
-		// (e.g. a 1-indexed `page=0` or an empty `type=` filter). Required
-		// parameters pass through ungated. Mirrors requestHeaderStmts.
-		stmts = append(stmts, gateParamStmts(p, "config", astgen.ExprStmt(setCall))...)
+		// A scalar query parameter emits a single params.Set; a collection
+		// (an array query parameter modeled as a List) emits one params.Add per
+		// element (repeated query values). Gate optional parameters on a non-null
+		// model value so an unset optional parameter is omitted from the request
+		// rather than sent as the zero-value empty string/0, which the API may
+		// reject or misinterpret (e.g. a 1-indexed `page=0` or an empty `type=`
+		// filter). Required parameters pass through ungated. Mirrors
+		// requestHeaderStmts.
+		stmts = append(stmts, paramSetStmts(p, "config", astgen.Ident("params"))...)
 	}
 	if style == ir.PaginationStyleOffset {
 		// Offset pagination starts at page 1; the next callback increments it

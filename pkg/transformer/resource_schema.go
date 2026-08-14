@@ -1,9 +1,11 @@
 package transformer
 
 import (
+	"fmt"
 	"sort"
 	"strings"
 
+	"github.com/signalbreak-labs/eidos/pkg/diagnostics"
 	"github.com/signalbreak-labs/eidos/pkg/ir"
 )
 
@@ -434,7 +436,7 @@ func appendFormDataOnlyAttributes(attrs []ir.AttributeIR, formData []Parameter, 
 		presentNames[a.Name] = true
 	}
 	for _, p := range formData {
-		snake := ToSnakeCase(p.Name)
+		snake := SanitizeAttributeName(p.Name)
 		if presentNames[snake] {
 			continue
 		}
@@ -606,7 +608,7 @@ func ObjectSchemaFromSpec(spec *SchemaSpec) ir.ObjectSchemaIR {
 // placeholder and required query/header parameter maps to a primitive attribute
 // and at least one Computed output attribute is present (i.e. the response is a
 // single object, not an array — array responses are a documented follow-up).
-func DataSourceSchema(op Operation) ir.ObjectSchemaIR {
+func DataSourceSchema(op Operation, diags *diagnostics.Diagnostics) ir.ObjectSchemaIR {
 	attrs := map[string]ir.AttributeIR{}
 	upsert := func(name string, mutate func(*ir.AttributeIR)) {
 		a := attrs[name]
@@ -623,15 +625,52 @@ func DataSourceSchema(op Operation) ir.ObjectSchemaIR {
 		default:
 			continue
 		}
-		snake := ToSnakeCase(p.Name)
+		// SanitizeAttributeName (not bare ToSnakeCase) so a parameter whose
+		// name normalizes to a reserved Terraform root attribute name — e.g.
+		// GitLab's `provider` query parameter on /api/v4/users and
+		// /api/v4/ldap/:provider/groups — is suffixed with "_" and merges with a
+		// same-named response property under the same sanitized key. Bare
+		// ToSnakeCase left "provider" unsuffixed, producing an invalid reserved
+		// root attribute that fails provider schema validation at runtime, and
+		// diverged from the response-property path (which already sanitized),
+		// so a param and response prop of the same name became two attributes
+		// instead of one (L-102).
+		snake := SanitizeAttributeName(p.Name)
 		upsert(snake, func(a *ir.AttributeIR) {
-			a.Schema = paramSchemaIR(p.Type)
+			a.Schema = paramSchemaIR(p.In, p.Type, p.ItemsType, p.Style, diags, p.Name)
 			a.WireName = p.Name
 			if p.Required || strings.EqualFold(p.In, "path") {
 				a.Required = true
 				a.Optional = false
-			} else {
+			} else if !a.Required {
+				// No prior required param (e.g. a path param) of the same sanitized
+				// name: this optional query/header param is a plain Optional input.
 				a.Optional = true
+				a.Required = false
+			} else {
+				// An optional query/header param whose sanitized name collides with
+				// an already-Required attribute — typically a path param of the same
+				// name. GitLab's GET /api/v4/projects/{id}/terraform/state/{name}
+				// declares a path param `id` (required) and a query param `ID`
+				// (optional); both normalize to "id". Setting Optional alongside the
+				// existing Required yields an invalid "Required+Optional" attribute
+				// that the framework rejects at schema-load time and poisons the
+				// whole provider. Keep the attribute Required (the path param is the
+				// essential instance identifier) and surface the dropped optional
+				// param as a fail-loud warning so it is not lost silently.
+				a.Optional = false
+				if diags != nil {
+					*diags = append(*diags, diagnostics.Diagnostic{
+						Severity: diagnostics.Warning,
+						Summary:  "optional data source parameter dropped: name collides with a required parameter",
+						Detail: fmt.Sprintf(
+							"The optional %s parameter %q normalizes to the same attribute name (%q) "+
+								"as an existing required (path) parameter. To avoid an invalid "+
+								"Required+Optional attribute, it is not exposed as a separate input; "+
+								"the required parameter's attribute is kept instead.",
+							p.In, p.Name, snake),
+					})
+				}
 			}
 		})
 	}
@@ -713,7 +752,7 @@ func DataSourceSchema(op Operation) ir.ObjectSchemaIR {
 // collection path carries parameters could never resolve its path substitutions
 // against the config schema and would stay an honest scaffold even when the
 // response schema is present (PROJECT_DESIGN §23).
-func ListResourceConfigSchema(op Operation) ir.ObjectSchemaIR {
+func ListResourceConfigSchema(op Operation, diags *diagnostics.Diagnostics) ir.ObjectSchemaIR {
 	attrs := make([]ir.AttributeIR, 0, len(op.Parameters))
 	for _, p := range op.Parameters {
 		switch strings.ToLower(p.In) {
@@ -723,7 +762,7 @@ func ListResourceConfigSchema(op Operation) ir.ObjectSchemaIR {
 		}
 		attr := ir.AttributeIR{
 			Name:   SanitizeAttributeName(p.Name),
-			Schema: paramSchemaIR(p.Type),
+			Schema: paramSchemaIR(p.In, p.Type, p.ItemsType, p.Style, diags, p.Name),
 		}
 		if p.Required || strings.EqualFold(p.In, "path") {
 			attr.Required = true
@@ -736,11 +775,58 @@ func ListResourceConfigSchema(op Operation) ir.ObjectSchemaIR {
 	return ir.ObjectSchemaIR{Attributes: attrs}
 }
 
-// paramSchemaIR maps a parameter's declared scalar type to an ir primitive
-// schema. Parameters without a recognized scalar type default to string, which
-// is how path/query/header values are serialized into the request URL regardless
-// of the declared type, so the generated attribute is always usable as a filter.
-func paramSchemaIR(typeStr string) ir.SchemaIR {
+// paramSchemaIR maps a parameter's declared type to an ir schema. A scalar
+// parameter (string/integer/number/boolean) maps to the matching primitive;
+// parameters without a recognized scalar type default to string, which is how
+// path/query/header values are serialized into the request URL regardless of
+// the declared type, so the generated attribute is always usable as a filter.
+//
+// An array query parameter (OpenAPI `type: array, items: <scalar>`) is modeled
+// as a List of the element primitive. The default query serialization
+// (style: form, explode: true) emits one repeated query value per element
+// (`?name=a&name=b`), which the generator produces via url.Values.Add; only
+// query parameters are array-serialized, since header/cookie carry single scalar
+// values. Two genuinely lossy cases are surfaced with fail-loud warnings rather
+// than dropped silently (AGENTS.md "fail loud, never silently"):
+//
+//   - A non-scalar element (object/array items, or an unrecognized type) cannot
+//     be carried as repeated scalar query values; the recursive call falls
+//     through to string, so each element is serialized as a string.
+//   - A non-form serialization style (spaceDelimited, pipeDelimited, ...) is not
+//     modeled; repeated form values are emitted regardless. (explode cannot be
+//     checked reliably: the parser's bool field cannot distinguish an explicit
+//     `explode: false` from an omitted field whose default is true, so warning on
+//     it would false-positive on every array query parameter that omits explode.)
+func paramSchemaIR(in, typeStr, itemsTypeStr, style string, diags *diagnostics.Diagnostics, paramName string) ir.SchemaIR {
+	if strings.EqualFold(typeStr, "array") && strings.EqualFold(in, "query") {
+		elem := paramSchemaIR("", itemsTypeStr, "", "", nil, "")
+		if diags != nil {
+			if !isScalarItemType(itemsTypeStr) {
+				*diags = append(*diags, diagnostics.Diagnostic{
+					Severity: diagnostics.Warning,
+					Summary:  "array query parameter with non-scalar items modeled as a List of strings",
+					Detail: fmt.Sprintf(
+						"The query parameter %q is an array whose items type %q is not a scalar "+
+							"(string/integer/number/boolean); repeated query values can only carry scalars, "+
+							"so each element is serialized as a string.",
+						paramName, itemsTypeStr),
+				})
+			}
+			if style != "" && !strings.EqualFold(style, "form") {
+				*diags = append(*diags, diagnostics.Diagnostic{
+					Severity: diagnostics.Warning,
+					Summary:  "array query parameter serialized as repeated form values regardless of declared style",
+					Detail: fmt.Sprintf(
+						"The query parameter %q declares serialization style %q, but the generated "+
+							"provider always serializes an array query parameter as repeated form "+
+							"values (style: form, explode: true, i.e. `?name=a&name=b`). Values are "+
+							"sent correctly only when the API accepts the default form encoding.",
+						paramName, style),
+				})
+			}
+		}
+		return ir.SchemaIR{Collection: &ir.CollectionType{Kind: ir.List, ElementType: elem}}
+	}
 	switch strings.ToLower(strings.TrimSpace(typeStr)) {
 	case "integer":
 		return ir.SchemaIR{Type: ir.TypeInt}
@@ -751,6 +837,17 @@ func paramSchemaIR(typeStr string) ir.SchemaIR {
 	default:
 		return ir.SchemaIR{Type: ir.TypeString}
 	}
+}
+
+// isScalarItemType reports whether a parameter items type string is a scalar
+// that can be carried as a repeated query value: string, integer, number, or
+// boolean. Object/array/unrecognized item types are not scalar.
+func isScalarItemType(itemsTypeStr string) bool {
+	switch strings.ToLower(strings.TrimSpace(itemsTypeStr)) {
+	case "string", "integer", "number", "boolean":
+		return true
+	}
+	return false
 }
 
 // resourceStateSpec selects the SchemaSpec that best represents a single resource

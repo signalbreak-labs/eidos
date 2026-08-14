@@ -409,3 +409,98 @@ func TestWiredDataSource_NoPaginationParamNoWarning(t *testing.T) {
 		t.Errorf("non-paginated data source must not emit the single-page warning, but it did:\n%s", got)
 	}
 }
+
+// arrayQueryDataSourceIR returns a wired single-object data source whose Read
+// endpoint carries an `expand` array query parameter modeled as a List of
+// strings (transformer.paramSchemaIR for an OpenAPI `type: array, items: string`
+// query parameter), plus a Computed `name` output attribute. It exercises the
+// collection query-parameter emission: one repeated query.Add per element.
+func arrayQueryDataSourceIR() ir.DataSourceIR {
+	return ir.DataSourceIR{
+		Name:     "account",
+		TypeName: "mycloud_account",
+		Schema: ir.ObjectSchemaIR{
+			Attributes: []ir.AttributeIR{
+				{
+					Name:     "expand",
+					Optional: true,
+					Schema: ir.SchemaIR{
+						Collection: &ir.CollectionType{
+							Kind:        ir.List,
+							ElementType: ir.SchemaIR{Type: ir.TypeString},
+						},
+					},
+				},
+				{Name: "name", Computed: true, Schema: ir.SchemaIR{Type: ir.TypeString}},
+			},
+		},
+		ReadMapping: ir.OperationMappingIR{
+			Method:       "GET",
+			PathTemplate: "/account",
+			SuccessCodes: []int{200},
+			QueryParams: []ir.ParamIR{
+				{Name: "expand", In: "query", Schema: ir.SchemaIR{Type: ir.TypeString}},
+			},
+		},
+	}
+}
+
+// TestWiredDataSource_ArrayQueryParam_Render asserts that an array query
+// parameter (modeled as a List attribute) is serialized as one repeated
+// query.Add per element — `?expand=a&expand=b` (OpenAPI form style, explode:
+// true) — rather than a single flattened query.Set on a string.
+func TestWiredDataSource_ArrayQueryParam_Render(t *testing.T) {
+	ds := arrayQueryDataSourceIR()
+
+	file := DataSourceFile(ds, testClientImport)
+	var buf bytes.Buffer
+	if err := file.Render(&buf); err != nil {
+		t.Fatalf("Render() error = %v", err)
+	}
+	got := buf.String()
+
+	for _, want := range []string{
+		// The array query parameter is gated on a non-null List value, then each
+		// element is added as a repeated query value via query.Add.
+		`if !config.Expand.IsNull() {`,
+		`for _, elem := range config.Expand.Elements() {`,
+		`query.Add("expand", elem.(types.String).ValueString())`,
+		`httpReq.URL.RawQuery = query.Encode()`,
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("generated body missing %q\n--- body ---\n%s", want, got)
+		}
+	}
+	// A collection query parameter must never be flattened to a single Set on
+	// the List value (types.List has no ValueString accessor and would not
+	// compile / would send a single bogus value).
+	if strings.Contains(got, `query.Set("expand", config.Expand.ValueString())`) {
+		t.Errorf("array query parameter must use repeated query.Add, not a single Set:\n%s", got)
+	}
+}
+
+// TestWiredDataSource_ArrayQueryParam_Compiles generates a full provider module
+// with the array-query-parameter data source and compiles it, proving the range
+// loop, the types.String type assertion, and the query.Add call are syntactically
+// valid together.
+func TestWiredDataSource_ArrayQueryParam_Compiles(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping network-bound compile test in -short mode")
+	}
+	p := sampleProviderWithDataSourceIR(arrayQueryDataSourceIR())
+	tmp := generateWiredDataSourceModule(t, p)
+
+	ctx, cancel := contextWithTimeout(t, 5*time.Minute)
+	defer cancel()
+
+	tidyCmd := exec.CommandContext(ctx, "go", "mod", "tidy")
+	tidyCmd.Dir = tmp
+	if out, err := tidyCmd.CombinedOutput(); err != nil {
+		t.Fatalf("go mod tidy failed: %v\n%s", err, out)
+	}
+	buildCmd := exec.CommandContext(ctx, "go", "build", "./...")
+	buildCmd.Dir = tmp
+	if out, err := buildCmd.CombinedOutput(); err != nil {
+		t.Fatalf("go build ./... failed for array-query data source: %v\n%s", err, out)
+	}
+}

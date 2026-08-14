@@ -103,6 +103,31 @@ func parseHex4(s string) (uint32, bool) {
 	return n, true
 }
 
+// parseHexN parses exactly n hexadecimal digits from s and returns the code
+// point. It backs the \x (2 digits) and \U (8 digits) double-quoted escapes.
+func parseHexN(s string, n int) (uint32, bool) {
+	if len(s) != n {
+		return 0, false
+	}
+	var code uint32
+	for i := 0; i < n; i++ {
+		c := s[i]
+		var v uint32
+		switch {
+		case c >= '0' && c <= '9':
+			v = uint32(c - '0')
+		case c >= 'a' && c <= 'f':
+			v = uint32(c-'a') + 10
+		case c >= 'A' && c <= 'F':
+			v = uint32(c-'A') + 10
+		default:
+			return 0, false
+		}
+		code = code*16 + v
+	}
+	return code, true
+}
+
 // Node is the root type of the raw JSON/YAML AST produced by the lexer.
 type Node interface {
 	// GetSourceLocation returns where this node was found in the source file.
@@ -1259,6 +1284,18 @@ func (p *yamlParser) parseSingleMapping(text string, i, baseIndent int, keyLoc S
 	if !ok {
 		return nil, i, fmt.Errorf("%s:%d:%d: not a mapping entry", p.file, keyLoc.Line, keyLoc.Column)
 	}
+	// Strip surrounding quotes from the key. Without this, a quoted inline key
+	// such as `"$ref": "..."` — common in OpenAPI specs for $ref-only sequence
+	// items like `- "$ref": "#/components/parameters/gist-id"` — keeps its quote
+	// characters in the ScalarNode value, so downstream key comparisons ("$ref"
+	// vs $ref) never match and the reference is silently dropped. parseMapping
+	// and parseExplicitKey already unquote; parseSingleMapping must too, since it
+	// parses the first mapping entry of a sequence item and of an explicit-key
+	// value (L-101).
+	key, keyErr := unquoteYAMLKey(key)
+	if keyErr != nil {
+		return nil, i, p.errorAt(i, keyErr.Error())
+	}
 	key = strings.TrimSpace(key)
 	keyNode := &ScalarNode{Value: key, Raw: key, SourceLocation: keyLoc}
 	itemMap := &MapNode{SourceLocation: keyLoc, Entries: []MapEntry{{Key: keyNode}}}
@@ -1933,13 +1970,19 @@ func (p *yamlParser) foldPlainScalarContinuation(i, baseIndent int, first string
 		if strings.HasPrefix(trimmed, "#") || line.indent <= baseIndent {
 			break
 		}
-		// A nested block indicator on the continuation line ends the scalar.
-		// isMappingLine (not a bare strings.Contains ":") is used so that colons
-		// inside URLs or other text ("https://…") do not end the scalar: only a
-		// colon followed by whitespace or end-of-line is a mapping separator.
-		if strings.HasPrefix(trimmed, "-") && (len(trimmed) == 1 || trimmed[1] == ' ' || trimmed[1] == '\t') {
-			break
-		}
+		// A more-indented continuation line is part of the plain scalar, even
+		// when it begins with "- ": once an inline plain scalar value has
+		// started, the key's value is a scalar and cannot have block children, so
+		// a "-" at the start of a continuation line is literal content, not a
+		// block sequence indicator (YAML 1.2 §7.3.3; indicators are only honored
+		// at a node start, and we are mid-scalar). yaml.v3/PyYAML agree, folding
+		// such lines into the scalar. A line that itself looks like a mapping
+		// entry ("k: v") does end the scalar: that is a structural indicator and
+		// is rejected by reference parsers as "mapping values are not allowed in
+		// this context". isMappingLine (not a bare strings.Contains ":") is used
+		// so that colons inside URLs or other text ("https://…") do not end the
+		// scalar: only a colon followed by whitespace or end-of-line is a mapping
+		// separator.
 		if isMappingLine(trimmed) {
 			break
 		}
@@ -2168,16 +2211,53 @@ func unescapeYAMLDoubleQuoted(s string) (string, error) {
 		}
 		c := s[i+1]
 		switch c {
-		case 'n':
-			sb.WriteByte('\n')
+		case '0':
+			sb.WriteByte(0)
+		case 'a':
+			sb.WriteByte(0x07)
+		case 'b':
+			sb.WriteByte(0x08)
 		case 't':
 			sb.WriteByte('\t')
+		case '\t':
+			sb.WriteByte('\t')
+		case 'n':
+			sb.WriteByte('\n')
+		case 'v':
+			sb.WriteByte(0x0B)
+		case 'f':
+			sb.WriteByte(0x0C)
 		case 'r':
 			sb.WriteByte('\r')
-		case '\\':
-			sb.WriteByte('\\')
+		case 'e':
+			sb.WriteByte(0x1B)
+		case ' ':
+			sb.WriteByte(' ')
 		case '"':
 			sb.WriteByte('"')
+		case '/':
+			sb.WriteByte('/')
+		case '\\':
+			sb.WriteByte('\\')
+		case 'N':
+			sb.WriteRune('\u0085') // NEL, next line
+		case '_':
+			sb.WriteRune('\u00A0') // non-breaking space
+		case 'L':
+			sb.WriteRune('\u2028') // line separator
+		case 'P':
+			sb.WriteRune('\u2029') // paragraph separator
+		case 'x':
+			// \xXX: two hex digits (YAML 1.2 section 5.7).
+			if i+3 >= len(s) {
+				return "", fmt.Errorf("invalid \\x escape")
+			}
+			code, ok := parseHexN(s[i+2:i+4], 2)
+			if !ok {
+				return "", fmt.Errorf("invalid \\x escape")
+			}
+			sb.WriteRune(rune(code))
+			i += 2
 		case 'u':
 			if i+5 >= len(s) {
 				return "", fmt.Errorf("invalid unicode escape")
@@ -2211,6 +2291,17 @@ func unescapeYAMLDoubleQuoted(s string) (string, error) {
 				sb.WriteRune(rune(code))
 			}
 			i += extra
+		case 'U':
+			// \UXXXXXXXX: eight hex digits (YAML 1.2 \u00A75.7).
+			if i+9 >= len(s) {
+				return "", fmt.Errorf("invalid \\U escape")
+			}
+			code, ok := parseHexN(s[i+2:i+10], 8)
+			if !ok || code > 0x10FFFF {
+				return "", fmt.Errorf("invalid \\U escape")
+			}
+			sb.WriteRune(rune(code))
+			i += 8
 		default:
 			return "", fmt.Errorf("invalid escape sequence %q", "\\"+string(c))
 		}

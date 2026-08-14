@@ -46,6 +46,145 @@ func TestResourceAcceptanceTestFile_Render(t *testing.T) {
 	}
 }
 
+// TestResourceAcceptanceTestFile_DynamicAttributeScalarPlaceholder verifies that
+// the acceptance test config emits a SCALAR placeholder for a DynamicAttribute,
+// never a collection literal. A collection whose element is dynamic degrades to a
+// DynamicAttribute; configuring it with a list literal ([ null ]) parses as a
+// Tuple whose element types the response mapping (dynamicValueFromRaw) cannot
+// reliably reproduce, causing "wrong final value type: tuple required" at apply
+// (G18, seen on GitLab protected_branch.allowed_to_merge). A Required Dynamic
+// (e.g. GitLab application.scopes / Grafana alert_rule.data) needs a non-null
+// scalar ("example"); an Optional Dynamic uses null (G-22).
+func TestResourceAcceptanceTestFile_DynamicAttributeScalarPlaceholder(t *testing.T) {
+	r := sampleResourceIR()
+	r.Schema.Attributes = append(r.Schema.Attributes,
+		// Optional collection-of-dynamic: degrades to DynamicAttribute.
+		ir.AttributeIR{Name: "allowed", Optional: true, Schema: ir.SchemaIR{
+			Collection: &ir.CollectionType{Kind: ir.List, ElementType: ir.SchemaIR{Type: ir.TypeDynamic}},
+		}},
+		// Required primitive dynamic.
+		ir.AttributeIR{Name: "payload", Required: true, Schema: ir.SchemaIR{Type: ir.TypeDynamic}},
+	)
+	pir := sampleProviderWithResourceIR()
+	pir.Resources = []ir.ResourceIR{r}
+	cfg := BuildConfig{ProviderName: pir.Name, Namespace: pir.Name}
+
+	file := ResourceAcceptanceTestFile(pir, r, cfg)
+	var buf bytes.Buffer
+	if err := file.Render(&buf); err != nil {
+		t.Fatalf("Render() error = %v", err)
+	}
+	got := buf.String()
+
+	// The config is emitted inside a Go fmt.Sprintf string literal, so HCL
+	// double-quotes are escaped as \" in the rendered source.
+	if !strings.Contains(got, `payload = \"example\"`) {
+		t.Errorf("Required Dynamic should render a string scalar placeholder; got:\n%s", got)
+	}
+	if !strings.Contains(got, "allowed = null") {
+		t.Errorf("Optional collection-degraded Dynamic should render null; got:\n%s", got)
+	}
+	if strings.Contains(got, "allowed = [") {
+		t.Errorf("Optional Dynamic must NOT render a collection literal (Tuple mismatch at apply); got:\n%s", got)
+	}
+}
+
+// TestResourceAcceptanceTestFile_PractitionerSuppliedIdentity verifies that the
+// generated mock does NOT overwrite a Required, practitioner-supplied identity
+// attribute with the mock placeholder, and keys state by the identity value so
+// create and update share one slot (letting the single-entry read fallback serve
+// import). Previously the mock unconditionally set body[idAttr] = "example-id",
+// so the echoed response disagreed with the plan ("was \"example\", but now
+// \"example-id\"") on GitLab variable.key / Grafana mute_timing.name, and import
+// 404'd because create and update landed in separate state slots (G-22).
+func TestResourceAcceptanceTestFile_PractitionerSuppliedIdentity(t *testing.T) {
+	r := sampleResourceIR()
+	// "name" is a Required string attribute; making it the identity models a
+	// practitioner-supplied identity (like GitLab variable.key).
+	r.IDAttribute = "name"
+	pir := sampleProviderWithResourceIR()
+	pir.Resources = []ir.ResourceIR{r}
+	cfg := BuildConfig{ProviderName: pir.Name, Namespace: pir.Name}
+
+	file := ResourceAcceptanceTestFile(pir, r, cfg)
+	var buf bytes.Buffer
+	if err := file.Render(&buf); err != nil {
+		t.Fatalf("Render() error = %v", err)
+	}
+	got := buf.String()
+
+	// The create handler must synthesize the identity only when absent.
+	if !strings.Contains(got, `if _, ok := body["name"]; !ok`) {
+		t.Errorf("create should conditionally synthesize the identity (practitioner may supply it); got:\n%s", got)
+	}
+	// State must be keyed by the identity value, not the bare path-tail
+	// placeholder, so create and update share a slot and import's read fallback
+	// can serve the created resource.
+	if !strings.Contains(got, `id = fmt.Sprintf("%v", body["name"])`) {
+		t.Errorf("create should key state by the identity value body[idAttr]; got:\n%s", got)
+	}
+}
+
+// TestResourceAcceptanceTestFile_CompositeIdentityImport verifies the mock
+// resolves import for a composite-identity resource (e.g. GitLab
+// /groups/{group}/labels/{name}). Such a resource is created on a collection
+// path but read/updated/deleted on a nested instance path; both share the same
+// route prefix (/groups), but the path-tail id differs between create
+// ("1/labels") and read ("1/labels/foo"), so a direct state0[id] lookup misses
+// and the prior single-entry (len==1) range fallback could not bridge create
+// and update once they landed in separate slots. The fix tracks the most recent
+// create/update storage key in lastKey and the read falls back to state0[lastKey]
+// (G-22).
+func TestResourceAcceptanceTestFile_CompositeIdentityImport(t *testing.T) {
+	r := sampleResourceIR()
+	// Model the GitLab label shape: collection create, nested instance CRUD.
+	r.IDAttribute = "name"
+	r.Importable = true
+	r.ImportIDFormat = "{group}:{name}"
+	// Add the composite identity attributes so parseImportIDFormat resolves.
+	r.Schema.Attributes = append(r.Schema.Attributes,
+		ir.AttributeIR{Name: "group", Required: true, Schema: ir.SchemaIR{Type: ir.TypeString}},
+	)
+	r.CRUDMapping = ir.CRUDMappingIR{
+		Create: ir.OperationMappingIR{Method: "POST", PathTemplate: "/groups/{group}/labels"},
+		Read:   ir.OperationMappingIR{Method: "GET", PathTemplate: "/groups/{group}/labels/{name}"},
+		Update: &ir.OperationMappingIR{Method: "PUT", PathTemplate: "/groups/{group}/labels/{name}"},
+		Delete: ir.OperationMappingIR{Method: "DELETE", PathTemplate: "/groups/{group}/labels/{name}"},
+	}
+	pir := sampleProviderWithResourceIR()
+	pir.Resources = []ir.ResourceIR{r}
+	cfg := BuildConfig{ProviderName: pir.Name, Namespace: pir.Name}
+
+	file := ResourceAcceptanceTestFile(pir, r, cfg)
+	var buf bytes.Buffer
+	if err := file.Render(&buf); err != nil {
+		t.Fatalf("Render() error = %v", err)
+	}
+	got := buf.String()
+
+	// lastKey must be declared and initialized to "".
+	if !strings.Contains(got, `lastKey0 := ""`) {
+		t.Errorf("mock should declare lastKey0 := \"\"; got:\n%s", got)
+	}
+	// The read handler must fall back to state0[lastKey0] when the direct
+	// lookup misses, gated on lastKey0 != "".
+	if !strings.Contains(got, `!ok && lastKey0 != ""`) {
+		t.Errorf("read fallback should use lastKey0 != \"\"; got:\n%s", got)
+	}
+	if !strings.Contains(got, `body = state0[lastKey0]`) {
+		t.Errorf("read fallback should read state0[lastKey0]; got:\n%s", got)
+	}
+	// The obsolete single-entry range fallback must be gone.
+	if strings.Contains(got, `len(state0) == 1`) {
+		t.Errorf("read fallback must not use the obsolete len(state0)==1 range; got:\n%s", got)
+	}
+	// Both create and update must record lastKey0 = id after storing state.
+	// There should be exactly two `lastKey0 = id` assignments (create + update).
+	if n := strings.Count(got, `lastKey0 = id`); n != 2 {
+		t.Errorf("expected 2 `lastKey0 = id` assignments (create + update), got %d; got:\n%s", n, got)
+	}
+}
+
 // TestResourceAcceptanceTestFile_MockDeleteClearsState verifies that the generated
 // mock server tracks resources by ID, deletes the entry on DELETE, and returns a
 // 404 on a subsequent GET for the same ID.

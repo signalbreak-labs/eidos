@@ -144,7 +144,7 @@ func TestListResourceConfigSchema(t *testing.T) {
 		{Name: "body", In: "body", Type: "object"},
 		{Name: "X-Ignored", In: "cookie", Type: "string"},
 	}}
-	obj := ListResourceConfigSchema(op)
+	obj := ListResourceConfigSchema(op, nil)
 	if len(obj.Attributes) != 3 {
 		t.Fatalf("attributes = %+v, want 3 (body/cookie skipped)", obj.Attributes)
 	}
@@ -174,7 +174,7 @@ func TestParamSchemaIR(t *testing.T) {
 		{"INTEGER", ir.TypeInt},   // case-insensitive
 	}
 	for _, tc := range cases {
-		if got := paramSchemaIR(tc.typ); got.Type != tc.want {
+		if got := paramSchemaIR("", tc.typ, "", "", nil, ""); got.Type != tc.want {
 			t.Errorf("paramSchemaIR(%q) = %v, want %v", tc.typ, got.Type, tc.want)
 		}
 	}
@@ -357,6 +357,12 @@ func TestRequestBodyKind(t *testing.T) {
 		{"application/xml", "xml"},
 		{"text/xml", "xml"},
 		{"application/octet-stream", "unsupported"},
+		// "*/*" declares the endpoint accepts any request body media type; the
+		// client chooses, and JSON is the natural encoding (Kubernetes declares
+		// consumes: ["*/*"] on every create/update while its server accepts JSON).
+		{"*/*", "json"},
+		{"*/*; charset=utf-8", "json"},
+		{"APPLICATION/*", "unsupported"},
 	}
 	for _, tc := range cases {
 		if got := RequestBodyKind(tc.mt); got != tc.want {

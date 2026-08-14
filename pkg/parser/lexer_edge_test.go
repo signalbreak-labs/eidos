@@ -60,6 +60,26 @@ func TestUnescapeYAMLDoubleQuoted(t *testing.T) {
 		{in: `a\rb`, want: "a\rb"},
 		{in: `a\\b`, want: `a\b`},
 		{in: `a\"b`, want: `a"b`},
+		// Full YAML 1.2 section 5.7 escape set beyond the original subset.
+		{in: `a\0b`, want: "a\x00b"},
+		{in: `a\ab`, want: "a\x07b"},
+		{in: `a\bb`, want: "a\x08b"},
+		{in: `a\vb`, want: "a\x0Bb"},
+		{in: `a\fb`, want: "a\x0Cb"},
+		{in: `a\eb`, want: "a\x1Bb"},
+		{in: `a\ b`, want: "a b"},
+		{in: `a\/b`, want: "a/b"},
+		{in: `a\Nb`, want: "ab"},
+		{in: `a\_b`, want: "a b"},
+		{in: `a\Lb`, want: "a b"},
+		{in: `a\Pb`, want: "a b"},
+		{in: `\x41`, want: "A"},
+		{in: `\U00000041`, want: "A"},
+		{in: `\U0001F600`, want: "\U0001F600"},
+		// `\ ` drops the backslash and keeps the space, matching yaml.v3. Real
+		// specs (e.g. GitHub rest-api-description) embed "\ " inside
+		// double-quoted description strings.
+		{in: `a \  b`, want: "a   b"},
 		// Unicode escapes: BMP code point, combined surrogate pair, lone
 		// surrogates, and a high surrogate not followed by a low surrogate.
 		{in: "\\u00e9", want: "é"},

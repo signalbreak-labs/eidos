@@ -686,10 +686,14 @@ func TestConvertSecurityScheme_ApiKeyQuery(t *testing.T) {
 		t.Errorf("scheme = %q, want apiKey", ac.Scheme)
 	}
 	if ac.HeaderName != "" {
-		t.Errorf("header_name = %q, want empty", ac.HeaderName)
+		t.Errorf("header_name = %q, want empty for query placement", ac.HeaderName)
 	}
-	if ac.EnvVar != "" {
-		t.Errorf("env_var = %q, want empty for query scheme", ac.EnvVar)
+	// A query-param apiKey still sources its token from an env var; the
+	// generated APIKeyAuth interceptor injects it as a query parameter per the
+	// spec's `in`. EnvVar must be set so the starter config validates and the
+	// practitioner knows where to supply the key.
+	if ac.EnvVar != "MYCLOUD_API_KEY" {
+		t.Errorf("env_var = %q, want MYCLOUD_API_KEY for query scheme", ac.EnvVar)
 	}
 }
 
@@ -704,10 +708,13 @@ func TestConvertSecurityScheme_ApiKeyCookie(t *testing.T) {
 		t.Errorf("scheme = %q, want apiKey", ac.Scheme)
 	}
 	if ac.HeaderName != "" {
-		t.Errorf("header_name = %q, want empty", ac.HeaderName)
+		t.Errorf("header_name = %q, want empty for cookie placement", ac.HeaderName)
 	}
-	if ac.EnvVar != "" {
-		t.Errorf("env_var = %q, want empty for cookie scheme", ac.EnvVar)
+	// A cookie apiKey sources its token from an env var; APIKeyAuth injects it
+	// as a cookie per the spec's `in`. EnvVar must be set so the starter config
+	// validates (an apiKey with neither header_name nor env_var is rejected).
+	if ac.EnvVar != "MYCLOUD_SESSION" {
+		t.Errorf("env_var = %q, want MYCLOUD_SESSION for cookie scheme", ac.EnvVar)
 	}
 }
 

@@ -648,7 +648,7 @@ func buildIRPreview(spec *parser.Spec, version parser.Version, cfg *config.Confi
 	// classification unchanged. The transformer path-operation map is computed
 	// once and shared with the per-operation pass so data sources can build their
 	// schemas from the same resolved request/response shapes (REMAINING_GAPS §4).
-	groupedResources, consumed := buildGroupedResources(spec, name, pathOps)
+	groupedResources, consumed := buildGroupedResources(spec, name, pathOps, &previewDiags)
 	preview.Resources = append(preview.Resources, groupedResources...)
 
 	// resource_overrides with generate_resource or explicit CRUD operations
@@ -1472,7 +1472,16 @@ func addPathOperations(preview *ir.ProviderIR, spec *parser.Spec, path string, p
 		"PATCH":  pi.Patch,
 		"DELETE": pi.Delete,
 	}
-	for method, op := range ops {
+	// Iterate methods in a fixed order rather than ranging the map: Go
+	// randomizes map iteration order per process, so an unsorted range would
+	// make the relative order of same-path constructs (e.g. a PATCH action and
+	// a DELETE action on one path) nondeterministic across runs, violating
+	// byte-identical generation for an identical spec. The fixed order also
+	// keeps CRUD classification stable: GET (data source) before POST (create)
+	// before PUT/PATCH (update) before DELETE (delete) matches the natural
+	// CRUD lifecycle so a resource's operations are visited in lifecycle order.
+	for _, method := range []string{"GET", "POST", "PUT", "PATCH", "DELETE"} {
+		op := ops[method]
 		if op == nil {
 			continue
 		}
@@ -1484,7 +1493,7 @@ func addPathOperations(preview *ir.ProviderIR, spec *parser.Spec, path string, p
 		case kindResource:
 			preview.Resources = append(preview.Resources, resourceFromOperation(op, providerName, path, method, pathOps))
 		case kindDataSource:
-			preview.DataSources = append(preview.DataSources, dataSourceFromOperation(op, providerName, path, method, pathOps, preview.ClientIR.Pagination))
+			preview.DataSources = append(preview.DataSources, dataSourceFromOperation(op, providerName, path, method, pathOps, preview.ClientIR.Pagination, diags))
 			// A collection GET paired with an instance Read is also a list
 			// resource (InferListResources). The promotion is additive — the
 			// data source above is kept so existing wiring is not broken —
@@ -1492,7 +1501,7 @@ func addPathOperations(preview *ir.ProviderIR, spec *parser.Spec, path string, p
 			// hatch. x-terraform-list operations take the kindListResource
 			// branch instead and are not double-emitted.
 			if method == "GET" && listPaths[path] != nil {
-				preview.ListResources = append(preview.ListResources, listResourceFromOperation(op, providerName, path, method, pathOps, listPaths[path]))
+				preview.ListResources = append(preview.ListResources, listResourceFromOperation(op, providerName, path, method, pathOps, listPaths[path], diags))
 				warnListUniqueItems(diags, pathOps, path, method)
 			}
 		case kindAction:
@@ -1508,7 +1517,7 @@ func addPathOperations(preview *ir.ProviderIR, spec *parser.Spec, path string, p
 			// "/revoke" siblings and the consumption is visible to them.
 			consumeEphemeralLifecycleOps(consumed, path)
 		case kindListResource:
-			preview.ListResources = append(preview.ListResources, listResourceFromOperation(op, providerName, path, method, pathOps, nil))
+			preview.ListResources = append(preview.ListResources, listResourceFromOperation(op, providerName, path, method, pathOps, nil, diags))
 			warnListUniqueItems(diags, pathOps, path, method)
 		case kindFunction:
 			preview.Functions = append(preview.Functions, functionFromOperation(op, providerName, path, method, pathOps))
@@ -1537,6 +1546,46 @@ func warnListUniqueItems(diags *diagnostics.Diagnostics, pathOps map[string]map[
 	}
 }
 
+// warnUnwritableManagedResource surfaces a Warning when a managed resource's
+// schema has no practitioner-writable (Required or Optional) attributes. This
+// is degenerate — Terraform cannot create or update a resource whose every
+// attribute is Computed — and typically indicates the inferred create operation
+// declares no request body (a spec defect), so every attribute is derived from
+// the read response. Fail loud instead of silently emitting an unwritable
+// resource.
+func warnUnwritableManagedResource(diags *diagnostics.Diagnostics, res ir.ResourceIR, create *transformer.Operation) {
+	if diags == nil {
+		return
+	}
+	for _, a := range res.Schema.Attributes {
+		if a.Required || a.Optional {
+			return
+		}
+	}
+	createDesc := "no request body"
+	if create != nil {
+		if create.OperationID != "" {
+			createDesc = "operation " + create.OperationID
+		}
+		if !create.RequestBody {
+			if createDesc != "no request body" {
+				createDesc += " declares no request body"
+			}
+		}
+	}
+	*diags = append(*diags, diagnostics.Diagnostic{
+		Severity: diagnostics.Warning,
+		Summary:  "Managed resource has no writable attributes",
+		Detail: fmt.Sprintf(
+			"Resource %s has no Required or Optional attributes, so every attribute is "+
+				"Computed-only and a practitioner cannot create or update it. The inferred "+
+				"create (%s) does not contribute a writable request body; verify the spec's "+
+				"create operation declares its inputs, or supply a generator.yaml "+
+				"resource_override pinning a create operation that does.",
+			res.FullName, createDesc),
+	})
+}
+
 // buildGroupedResources runs CRUD inference over the parsed spec and returns one
 // wired managed resource per complete CRUD group (Create + Read + Delete), plus
 // the set of (path, method) pairs those resources consume so the per-operation
@@ -1544,7 +1593,7 @@ func warnListUniqueItems(diags *diagnostics.Diagnostics, pathOps map[string]map[
 // classification. This is the §3 fix: real specs with a collection POST plus an
 // instance GET/DELETE now yield a single wired resource instead of separate
 // partial resources.
-func buildGroupedResources(spec *parser.Spec, providerName string, pathOps map[string]map[transformer.HTTPMethod]transformer.Operation) ([]ir.ResourceIR, map[string]map[string]bool) {
+func buildGroupedResources(spec *parser.Spec, providerName string, pathOps map[string]map[transformer.HTTPMethod]transformer.Operation, diags *diagnostics.Diagnostics) ([]ir.ResourceIR, map[string]map[string]bool) {
 	if len(pathOps) == 0 {
 		return nil, nil
 	}
@@ -1579,25 +1628,34 @@ func buildGroupedResources(spec *parser.Spec, providerName string, pathOps map[s
 			Description:     operationDescription(crudGroupDescriptionOp(spec, g), fmt.Sprintf("Manages the %s resource.", humanizeConstructName(name))),
 			SourceOperation: groupSourceOperation(g),
 		}
-		res.CRUDMapping.Create = operationMapping("POST", g.CollectionPath, parserOp(spec, g.CollectionPath, "POST"), envelopeOf(g.Create))
+		res.CRUDMapping.Create = resourceOperationMapping(spec, "POST", g.CollectionPath, parserOp(spec, g.CollectionPath, "POST"), envelopeOf(g.Create))
 		res.CRUDMapping.Create.MediaType = mediaTypeOf(g.Create)
-		res.CRUDMapping.Read = operationMapping("GET", g.InstancePath, parserOp(spec, g.InstancePath, "GET"), envelopeOf(g.Read))
+		res.CRUDMapping.Read = resourceOperationMapping(spec, "GET", g.InstancePath, parserOp(spec, g.InstancePath, "GET"), envelopeOf(g.Read))
 		res.CRUDMapping.Read.MediaType = mediaTypeOf(g.Read)
 		if g.Update != nil {
 			updMethod := "PUT"
 			if g.FullUpdate == nil && g.PartialUpdate != nil {
 				updMethod = "PATCH"
 			}
-			upd := operationMapping(updMethod, g.InstancePath, parserOp(spec, g.InstancePath, updMethod), envelopeOf(g.Update))
+			upd := resourceOperationMapping(spec, updMethod, g.InstancePath, parserOp(spec, g.InstancePath, updMethod), envelopeOf(g.Update))
 			upd.MediaType = mediaTypeOf(g.Update)
 			res.CRUDMapping.Update = &upd
 		}
-		res.CRUDMapping.Delete = operationMapping("DELETE", g.InstancePath, parserOp(spec, g.InstancePath, "DELETE"), envelopeOf(g.Delete))
+		res.CRUDMapping.Delete = resourceOperationMapping(spec, "DELETE", g.InstancePath, parserOp(spec, g.InstancePath, "DELETE"), envelopeOf(g.Delete))
 		res.CRUDMapping.Delete.MediaType = mediaTypeOf(g.Delete)
 
 		schema, idAttr := transformer.ManagedResourceSchema(g)
 		res.Schema = schema
 		res.IDAttribute = idAttr
+		// Fail loud when a managed resource ends up with no practitioner-writable
+		// attributes. This happens when the inferred create operation declares no
+		// request body (a spec defect — e.g. an archived/incomplete spec that
+		// omits the POST body) so every attribute is derived from the read
+		// response and is Computed-only. A resource with no Required/Optional
+		// attributes cannot be created or updated by a practitioner, so surface it
+		// as a Warning naming the resource and its create operation instead of
+		// silently emitting a degenerate, unwritable resource (fail-loud).
+		warnUnwritableManagedResource(diags, res, g.Create)
 		// Import wiring for grouped resources (REMAINING_GAPS §3/#10). A grouped
 		// resource is importable when its identifier attribute(s) are real schema
 		// attributes the import can populate. InferResourceCRUD expresses import
@@ -1750,20 +1808,20 @@ func resourceFromOverrideCRUD(spec *parser.Spec, providerName string, g transfor
 		SourceOperation: groupSourceOperation(g),
 	}
 	if g.Create != nil {
-		res.CRUDMapping.Create = operationMapping(string(g.Create.Method), g.Create.Path, parserOp(spec, g.Create.Path, string(g.Create.Method)), envelopeOf(g.Create))
+		res.CRUDMapping.Create = resourceOperationMapping(spec, string(g.Create.Method), g.Create.Path, parserOp(spec, g.Create.Path, string(g.Create.Method)), envelopeOf(g.Create))
 		res.CRUDMapping.Create.MediaType = mediaTypeOf(g.Create)
 	}
 	if g.Read != nil {
-		res.CRUDMapping.Read = operationMapping(string(g.Read.Method), g.Read.Path, parserOp(spec, g.Read.Path, string(g.Read.Method)), envelopeOf(g.Read))
+		res.CRUDMapping.Read = resourceOperationMapping(spec, string(g.Read.Method), g.Read.Path, parserOp(spec, g.Read.Path, string(g.Read.Method)), envelopeOf(g.Read))
 		res.CRUDMapping.Read.MediaType = mediaTypeOf(g.Read)
 	}
 	if g.Update != nil {
-		upd := operationMapping(string(g.Update.Method), g.Update.Path, parserOp(spec, g.Update.Path, string(g.Update.Method)), envelopeOf(g.Update))
+		upd := resourceOperationMapping(spec, string(g.Update.Method), g.Update.Path, parserOp(spec, g.Update.Path, string(g.Update.Method)), envelopeOf(g.Update))
 		upd.MediaType = mediaTypeOf(g.Update)
 		res.CRUDMapping.Update = &upd
 	}
 	if g.Delete != nil {
-		res.CRUDMapping.Delete = operationMapping(string(g.Delete.Method), g.Delete.Path, parserOp(spec, g.Delete.Path, string(g.Delete.Method)), envelopeOf(g.Delete))
+		res.CRUDMapping.Delete = resourceOperationMapping(spec, string(g.Delete.Method), g.Delete.Path, parserOp(spec, g.Delete.Path, string(g.Delete.Method)), envelopeOf(g.Delete))
 		res.CRUDMapping.Delete.MediaType = mediaTypeOf(g.Delete)
 	}
 	schema, idAttr := transformer.ManagedResourceSchema(g)
@@ -1998,7 +2056,7 @@ func resourceFromOperation(op *parser.Operation, providerName, path, method stri
 	return res
 }
 
-func dataSourceFromOperation(op *parser.Operation, providerName, path, method string, pathOps map[string]map[transformer.HTTPMethod]transformer.Operation, pagination *ir.PaginationIR) ir.DataSourceIR {
+func dataSourceFromOperation(op *parser.Operation, providerName, path, method string, pathOps map[string]map[transformer.HTTPMethod]transformer.Operation, pagination *ir.PaginationIR, diags *diagnostics.Diagnostics) ir.DataSourceIR {
 	name := resourceName(op, method, path)
 	ds := ir.DataSourceIR{
 		Name:            name,
@@ -2015,7 +2073,7 @@ func dataSourceFromOperation(op *parser.Operation, providerName, path, method st
 	// present there (e.g. an unsupported method), the schema stays empty and the
 	// generator keeps the honest scaffold Read body.
 	if top := lookupTransformerOp(pathOps, path, method); top != nil {
-		ds.Schema = transformer.DataSourceSchema(*top)
+		ds.Schema = transformer.DataSourceSchema(*top, diags)
 		// A top-level array response marks a list data source: the generator
 		// wires its Read to fetch (and paginate) the pages and expose them as a
 		// Computed `items` List attribute (REMAINING_GAPS §2/§4). Carry the
@@ -2229,16 +2287,111 @@ func v2FormDataParams(op *parser.Operation) []ir.ParamIR {
 
 // paramIR converts a parser parameter to its IR form, carrying a best-effort
 // primitive schema type so downstream consumers can distinguish scalar
-// parameters from structured ones.
+// parameters from structured ones. The schema's const/default/enum are carried
+// so a path parameter that is not a resource attribute (e.g. a shared
+// {apiVersion} versioning segment with enum ["v4","v4beta"]) can be substituted
+// with a static literal by the generator's resolvePathSubstitution, wiring the
+// resource instead of leaving it an honest scaffold.
 func paramIR(p parser.Parameter) ir.ParamIR {
+	s := ir.SchemaIR{Type: paramPrimitiveType(p.Schema), Format: paramFormat(p.Schema)}
+	if p.Schema != nil {
+		if len(p.Schema.Enum) > 0 {
+			s.EnumValues = p.Schema.Enum
+		}
+		if p.Schema.Default != nil {
+			d := p.Schema.Default
+			s.Default = &d
+		}
+		if p.Schema.Const != nil {
+			c := p.Schema.Const
+			s.Const = &c
+		}
+	}
 	return ir.ParamIR{
 		Name:        p.Name,
 		In:          p.In,
 		Description: p.Description,
 		Required:    p.Required,
-		Schema:      ir.SchemaIR{Type: paramPrimitiveType(p.Schema), Format: paramFormat(p.Schema)},
+		Schema:      s,
 		Deprecated:  p.Deprecated,
 	}
+}
+
+// resolveParamRef resolves a parser parameter's $ref against the spec's
+// components/parameters, returning the dereferenced parameter. A parameter with
+// no $ref (declared inline) is returned as-is. This mirrors the transformer's
+// resolveParameter so path-level parameters referenced by $ref expose their
+// schema (and const/default/enum) to paramIR.
+func resolveParamRef(spec *parser.Spec, p parser.Parameter) *parser.Parameter {
+	if p.Ref == "" || spec == nil || spec.Components == nil {
+		return &p
+	}
+	name := p.Ref
+	if idx := strings.LastIndex(name, "/"); idx >= 0 {
+		name = name[idx+1:]
+	}
+	if resolved, ok := spec.Components.Parameters[name]; ok && resolved != nil {
+		return resolved
+	}
+	return &p
+}
+
+// pathParamIRs returns the in:path parameters declared on an operation, merging
+// path-level (path-item) parameters with operation-level parameters per OpenAPI
+// semantics: an operation-level parameter overrides a path-level parameter of
+// the same name. Each parameter's $ref is resolved so its schema is available.
+// The result is sorted by name for deterministic IR. Only managed-resource
+// CRUD mappings consume PathParams (via resolvePathSubstitution); data sources,
+// actions, ephemerals, and lists resolve their paths against their own config
+// schemas, so this is only populated for resource operations.
+func pathParamIRs(spec *parser.Spec, path string, op *parser.Operation) []ir.ParamIR {
+	var pi *parser.PathItem
+	if spec != nil && spec.Paths != nil {
+		pi = spec.Paths[path]
+	}
+	if pi == nil && op == nil {
+		return nil
+	}
+	seen := make(map[string]bool, 4)
+	var out []ir.ParamIR
+	// Operation-level parameters take precedence; add them first so a same-named
+	// path-level parameter is skipped.
+	if op != nil {
+		for _, p := range op.Parameters {
+			if !strings.EqualFold(p.In, "path") {
+				continue
+			}
+			r := resolveParamRef(spec, p)
+			out = append(out, paramIR(*r))
+			seen[r.Name] = true
+		}
+	}
+	if pi != nil {
+		for _, p := range pi.Parameters {
+			if !strings.EqualFold(p.In, "path") {
+				continue
+			}
+			r := resolveParamRef(spec, p)
+			if seen[r.Name] {
+				continue
+			}
+			out = append(out, paramIR(*r))
+			seen[r.Name] = true
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out
+}
+
+// resourceOperationMapping builds an operation mapping for a managed-resource
+// CRUD step and populates PathParams from the operation's merged path-level and
+// operation-level path parameters. This lets resolvePathSubstitution substitute
+// a static literal for a shared path segment that is not a resource attribute
+// (e.g. {apiVersion}), wiring the resource instead of leaving it scaffolded.
+func resourceOperationMapping(spec *parser.Spec, method, path string, op *parser.Operation, responseEnvelope string) ir.OperationMappingIR {
+	m := operationMapping(method, path, op, responseEnvelope)
+	m.PathParams = pathParamIRs(spec, path, op)
+	return m
 }
 
 // paramFormat carries a parameter schema's OpenAPI format onto the IR so the
@@ -2747,7 +2900,7 @@ func ephemeralFromOperation(spec *parser.Spec, op *parser.Operation, providerNam
 // set. Both come from the resolved response schema carried on pathOps: an
 // array-of-objects response populates them, anything else leaves them empty
 // (the generator keeps the list resource honestly scaffolded — F1).
-func listResourceFromOperation(op *parser.Operation, providerName, path, method string, pathOps map[string]map[transformer.HTTPMethod]transformer.Operation, identityParams []string) ir.ListResourceIR {
+func listResourceFromOperation(op *parser.Operation, providerName, path, method string, pathOps map[string]map[transformer.HTTPMethod]transformer.Operation, identityParams []string, diags *diagnostics.Diagnostics) ir.ListResourceIR {
 	name := resourceName(op, method, path)
 	lr := ir.ListResourceIR{
 		Name:            name,
@@ -2766,7 +2919,7 @@ func listResourceFromOperation(op *parser.Operation, providerName, path, method 
 	// (filter) schema, so a list resource whose collection path carries
 	// parameters can resolve its path substitutions and wire its List body
 	// (PROJECT_DESIGN §23).
-	lr.ConfigSchema = transformer.ListResourceConfigSchema(*top)
+	lr.ConfigSchema = transformer.ListResourceConfigSchema(*top, diags)
 	item := top.ResponseSchema.Items
 	if item == nil || len(item.Properties) == 0 {
 		return lr

@@ -112,12 +112,13 @@ func operationFromParser(spec *parser.Spec, path string, method HTTPMethod, op *
 			if out.ResponseSchema != nil && out.ResponseSchema.RefName == "" {
 				out.ResponseSchema.RefName = refBaseName(s.Ref)
 			}
-			// Flatten a {data: <payload>} response envelope (a common API
-			// convention, e.g. SpaceTraders) so the Terraform schema exposes the
-			// payload attributes directly instead of nesting them under a `data`
+			// Flatten a single-property response envelope (a common API
+			// convention, e.g. SpaceTraders {data: <payload>} or DigitalOcean
+			// {agent: <payload>}) so the Terraform schema exposes the payload
+			// attributes directly instead of nesting them under a wrapper
 			// attribute. The envelope key is recorded so the generator unwraps the
 			// decoded response body to match (E1).
-			out.ResponseSchema, out.ResponseEnvelope = UnwrapResponseEnvelope(out.ResponseSchema)
+			out.ResponseSchema, out.ResponseEnvelope = UnwrapResponseEnvelope(out.ResponseSchema, out.RequestSchema)
 		}
 		out.ResponseHeaders = headerNames(resp.Headers)
 	}
@@ -137,14 +138,27 @@ func parametersFromParser(spec *parser.Spec, pi *parser.PathItem, op *parser.Ope
 		}
 		seen[k] = true
 		paramType := ""
+		itemsType := ""
 		if resolved.Schema != nil {
 			paramType = schemaTypeString(resolved.Schema.Type)
+			// An array parameter's element type comes from its `items` schema.
+			// The parser resolves Schema.Items to *parser.Schema (see
+			// circular.go); surface it so an array query parameter can be modeled
+			// as a List of the element primitive instead of being flattened to a
+			// single string.
+			if strings.EqualFold(paramType, "array") {
+				if itemSchema, ok := resolved.Schema.Items.(*parser.Schema); ok && itemSchema != nil {
+					itemsType = schemaTypeString(itemSchema.Type)
+				}
+			}
 		}
 		params = append(params, Parameter{
-			Name:     resolved.Name,
-			In:       resolved.In,
-			Required: resolved.Required,
-			Type:     paramType,
+			Name:      resolved.Name,
+			In:        resolved.In,
+			Required:  resolved.Required,
+			Type:      paramType,
+			ItemsType: itemsType,
+			Style:     resolved.Style,
 		})
 	}
 	// Operation-level parameters take precedence over path-item parameters per
@@ -287,43 +301,73 @@ func firstContentSchema(content map[string]*parser.MediaType) *parser.Schema {
 	return content[name].Schema
 }
 
-// UnwrapResponseEnvelope flattens a {data: <payload>} response envelope into the
-// payload schema itself, returning the flattened schema and the envelope
-// property name ("data"). It returns the input schema unchanged with an empty
-// key when the response is not enveloped.
+// UnwrapResponseEnvelope flattens a single-property response envelope — a
+// common API convention where the response is {<wrapper>: <payload>} plus
+// optional "meta"/"links" companions — into the payload schema itself, returning
+// the flattened schema and the envelope property name. It returns the input
+// schema unchanged with an empty key when the response is not enveloped.
 //
-// A response is treated as an envelope when it is an object whose `data`
-// property is itself an object with properties (or an unresolved $ref to one)
-// or an array, and every other property is an auxiliary envelope companion
-// ("meta" or "links"). The payload-object rule excludes a `data` map
-// (additionalProperties) or scalar, which is a legitimate field rather than an
-// envelope; the companion rule prevents mis-flattening a spec that carries a
-// meaningful top-level `data` object alongside other payload fields. The
-// generator reads the returned key to unwrap the decoded response body before
-// applying it to the model, keeping the schema and the response consistent (E1).
-func UnwrapResponseEnvelope(spec *SchemaSpec) (*SchemaSpec, string) {
-	if spec == nil || !strings.EqualFold(spec.Type, "object") {
+// The canonical {data: <payload>} envelope is always unwrapped. Any other
+// single-property wrapper (e.g. {agent: {...}}, {role: {...}}) is unwrapped only
+// when there is evidence the wrapper is an envelope rather than the resource's
+// real shape: the create/update request body must NOT be the same
+// single-property object (i.e. request and response are not both wrapped with
+// the same key). When the request body is absent or a flat multi-field object,
+// the wrapper is treated as an envelope. This prevents flattening a genuinely
+// single-field resource whose request and response are both {<wrapper>: {...}},
+// where the request body must carry the wrapper key.
+//
+// The payload must be an object with properties, an unresolved $ref to one, or
+// an array; a scalar or map (additionalProperties) wrapper value is a legitimate
+// field, not an envelope. Only "meta" and "links" are permitted as companion
+// properties, so a spec that carries a meaningful top-level object alongside
+// other payload fields is not mis-flattened. The generator reads the returned
+// key to unwrap the decoded response body before applying it to the model,
+// keeping the schema and the response consistent (E1).
+func UnwrapResponseEnvelope(spec, requestSpec *SchemaSpec) (*SchemaSpec, string) {
+	if spec == nil || !strings.EqualFold(spec.Type, "object") || len(spec.Properties) == 0 {
 		return spec, ""
 	}
-	data, ok := spec.Properties["data"]
-	if !ok {
-		return spec, ""
-	}
-	payload := data.RefName != "" ||
-		(strings.EqualFold(data.Type, "object") && len(data.Properties) > 0) ||
-		strings.EqualFold(data.Type, "array")
-	if !payload {
-		return spec, ""
-	}
-	for name := range spec.Properties {
-		if name == "data" {
+	// Scan for exactly one payload property (the envelope wrapper). The
+	// conventional envelope companions "meta" and "links" are allowed regardless
+	// of their shape (pagination metadata is often an object with properties); a
+	// non-companion property that is not a payload means this is a normal
+	// multi-field object, not an envelope.
+	var candName string
+	var cand SchemaSpec
+	for name, p := range spec.Properties {
+		if strings.EqualFold(name, "meta") || strings.EqualFold(name, "links") {
 			continue
 		}
-		if name != "meta" && name != "links" {
+		isPayload := p.RefName != "" ||
+			(strings.EqualFold(p.Type, "object") && len(p.Properties) > 0) ||
+			strings.EqualFold(p.Type, "array")
+		if !isPayload {
 			return spec, ""
 		}
+		if candName != "" {
+			// More than one payload property → not a single-wrapper envelope.
+			return spec, ""
+		}
+		candName = name
+		cand = p
 	}
-	return &data, "data"
+	if candName == "" {
+		return spec, ""
+	}
+	// A non-"data" wrapper is unwrapped only when the request body is not the
+	// same single-property object. If request and response are both wrapped with
+	// the same key, the wrapper is the resource's real shape (the request body
+	// must carry it), not an envelope, so it is kept.
+	if !strings.EqualFold(candName, "data") && requestSpec != nil &&
+		strings.EqualFold(requestSpec.Type, "object") && len(requestSpec.Properties) == 1 {
+		for reqKey := range requestSpec.Properties {
+			if strings.EqualFold(reqKey, candName) {
+				return spec, ""
+			}
+		}
+	}
+	return &cand, candName
 }
 
 // selectMediaType returns the media-type name whose schema is carried into the
@@ -376,6 +420,17 @@ func RequestBodyKind(mt string) string {
 		return "json"
 	}
 	if isJSONMediaType(m) {
+		return "json"
+	}
+	// "*/*" (and the equivalent "application/octet-stream"-agnostic wildcard)
+	// declares that the endpoint accepts any request body media type. The client
+	// therefore chooses the encoding; JSON is the natural choice for a
+	// Terraform provider's structured request body, matching the OpenAPI 2.0
+	// convention that an unspecified content type defaults to application/json.
+	// Real-world specs rely on this: Kubernetes declares consumes: ["*/*"] on
+	// every create/update while its API server accepts JSON. Treating "*/*" as
+	// JSON wires those operations instead of leaving them honestly scaffolded.
+	if m == "*/*" {
 		return "json"
 	}
 	switch m {
@@ -434,7 +489,7 @@ const maxSchemaDepth = 1000
 // re-entry is treated as an opaque boundary instead of recursing forever.
 //
 // This is the resolution to the circular-schema tension documented in
-// docs/OPEN_ISSUE-circular-schema-generation.md: cutting at the ref holder
+// docs/PROJECT_DESIGN.md §12.4: cutting at the ref holder
 // (depth 0) regressed first-entry circular refs to DynamicAttribute, while
 // unbounded expansion produced an enormous IR that hung generation. Expanding a
 // fixed number of levels keeps first-entry properties and bounds output size,
@@ -627,13 +682,20 @@ func schemaSpecFromParserDepthInner(spec *parser.Spec, s *parser.Schema, depth, 
 			out.AdditionalProperties = schemaSpecFromParserDepth(spec, v, depth+1, cycleDepth, visited, memo, diags)
 		}
 	case bool:
-		// additionalProperties: false means the object has a closed property set
-		// (which Terraform objects model by default, so dropping is benign); true
-		// means arbitrary extras are allowed, which Terraform's closed object
-		// type cannot represent. Warn on the permissive (true) case where the
-		// generated schema will be stricter than the spec, and on false to make
-		// the dropped constraint observable (L-97).
-		warnBooleanSchemaDropped(diags, "additionalProperties", s.SourceLocation)
+		if v {
+			// additionalProperties: true means arbitrary extras are allowed,
+			// which Terraform's closed object type cannot represent; the
+			// generated schema is stricter than the spec, so this is a real
+			// information loss that must be surfaced (fail-loud).
+			warnBooleanSchemaDropped(diags, "additionalProperties", s.SourceLocation)
+		}
+		// additionalProperties: false (a closed property set) is benign and
+		// intentionally NOT warned: Terraform objects are closed by default, so
+		// dropping the constraint changes nothing. Warning on it would flag a
+		// no-op — real-world specs declare additionalProperties: false on
+		// thousands of objects (Linode: 3147 vs only 4 true), and warning on
+		// each drowns out genuine losses. The fail-loud principle targets
+		// constructs that change behavior when dropped; false does not.
 		_ = v
 	}
 	// allOf/oneOf/anyOf composition inside nested properties is handled by a

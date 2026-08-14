@@ -2612,3 +2612,105 @@ func TestValidate_SecuritySchemeSelection(t *testing.T) {
 		}
 	}
 }
+
+func TestWarnUnwritableManagedResource(t *testing.T) {
+	computedOnly := ir.ResourceIR{
+		FullName: "test_widget",
+		Schema: ir.ObjectSchemaIR{
+			Attributes: []ir.AttributeIR{
+				{Name: "id", Computed: true},
+				{Name: "name", Computed: true},
+			},
+		},
+	}
+	createNoBody := &transformer.Operation{OperationID: "createWidget"}
+
+	t.Run("all-Computed with bodyless create warns", func(t *testing.T) {
+		var diags diagnostics.Diagnostics
+		warnUnwritableManagedResource(&diags, computedOnly, createNoBody)
+		if len(diags) != 1 {
+			t.Fatalf("expected 1 warning, got %d: %+v", len(diags), diags)
+		}
+		if diags[0].Severity != diagnostics.Warning {
+			t.Errorf("expected Warning severity, got %v", diags[0].Severity)
+		}
+		if !strings.Contains(diags[0].Detail, "test_widget") || !strings.Contains(diags[0].Detail, "createWidget") {
+			t.Errorf("warning should name the resource and create operation, got %q", diags[0].Detail)
+		}
+	})
+
+	t.Run("writable attribute suppresses warning", func(t *testing.T) {
+		writable := ir.ResourceIR{
+			FullName: "test_widget",
+			Schema: ir.ObjectSchemaIR{
+				Attributes: []ir.AttributeIR{
+					{Name: "id", Computed: true},
+					{Name: "name", Required: true},
+				},
+			},
+		}
+		var diags diagnostics.Diagnostics
+		warnUnwritableManagedResource(&diags, writable, createNoBody)
+		if len(diags) != 0 {
+			t.Errorf("expected no warning for a writable resource, got %+v", diags)
+		}
+	})
+
+	t.Run("nil create still warns for all-Computed resource", func(t *testing.T) {
+		var diags diagnostics.Diagnostics
+		warnUnwritableManagedResource(&diags, computedOnly, nil)
+		if len(diags) != 1 {
+			t.Fatalf("expected 1 warning with nil create, got %d: %+v", len(diags), diags)
+		}
+	})
+}
+
+// TestValidate_ConstructOrderDeterministic guards the hard determinism rule
+// (identical spec + config → byte-identical output). addPathOperations iterates
+// a path's methods via a fixed ordered slice (GET, POST, PUT, PATCH, DELETE)
+// rather than ranging the method map, because Go randomizes map iteration order
+// per process — an unsorted range made the relative order of same-path
+// constructs (e.g. a POST action and a DELETE action on one path) vary across
+// runs, surfacing as flaky golden tests and nondeterministic docs/index.md,
+// provider.go, and generator.yaml. This spec puts two operations that both
+// classify as actions on a single collection path with no instance subpath.
+// Their operationIds are chosen to sort OPPOSITE to the fixed method order, so
+// a name-sorted or map-ordered build would order them differently: asserting
+// the POST-derived action precedes the DELETE-derived action proves the order
+// is the fixed method order, not map iteration or name sort.
+func TestValidate_ConstructOrderDeterministic(t *testing.T) {
+	body := []byte(`{
+		"openapi": "3.0.1",
+		"info": {"title": "Batch API", "version": "1.0.0"},
+		"paths": {
+			"/batch": {
+				"post": {
+					"operationId": "zzzRunBatch",
+					"responses": {"200": {"description": "ok"}}
+				},
+				"delete": {
+					"operationId": "aaaClearBatch",
+					"responses": {"200": {"description": "ok"}}
+				}
+			}
+		}
+	}`)
+
+	wantOrder := []string{"zzz_run_batch", "aaa_clear_batch"}
+	for iter := 0; iter < 20; iter++ {
+		resp := Validate(body)
+		if !resp.Valid {
+			t.Fatalf("iter %d: expected valid response, got diagnostics: %+v", iter, resp.Diagnostics)
+		}
+		if resp.IRPreview == nil {
+			t.Fatalf("iter %d: expected IR preview", iter)
+		}
+		if len(resp.IRPreview.Actions) != 2 {
+			t.Fatalf("iter %d: expected 2 actions, got %d: %+v", iter, len(resp.IRPreview.Actions), resp.IRPreview.Actions)
+		}
+		gotOrder := []string{resp.IRPreview.Actions[0].Name, resp.IRPreview.Actions[1].Name}
+		if gotOrder[0] != wantOrder[0] || gotOrder[1] != wantOrder[1] {
+			t.Fatalf("iter %d: action order = %v, want %v (fixed method order POST before DELETE, not name sort)", iter, gotOrder, wantOrder)
+		}
+	}
+}

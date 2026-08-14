@@ -67,14 +67,43 @@ title: Done
 	}
 }
 
-// TestPlainScalarEndsAtNestedIndicator asserts a continuation line that begins
-// a nested sequence item ends the scalar instead of being folded into it.
-func TestPlainScalarEndsAtNestedIndicator(t *testing.T) {
+// TestPlainScalarFoldsNestedDashLine asserts that a continuation line beginning
+// with "- " is folded into the plain scalar rather than treated as a block
+// sequence indicator. Once an inline plain scalar value has started, the key's
+// value is a scalar and cannot have block children, so a "-" at the start of a
+// more-indented continuation line is literal content (YAML 1.2 §7.3.3).
+// yaml.v3/PyYAML fold such lines the same way. A following sibling key is not
+// absorbed. This pattern appears in real specs (e.g. the GitHub
+// rest-api-description, where a description value continues on a line starting
+// with "- for example, ...").
+func TestPlainScalarFoldsNestedDashLine(t *testing.T) {
 	data := []byte(`name: something
   - not part of the scalar
+title: Done
 `)
-	if _, err := LoadFile("seqind.yaml", data); err == nil {
-		t.Fatal("expected wrong-indentation error for nested sequence under scalar")
+	root, err := LoadFile("seqind.yaml", data)
+	if err != nil {
+		t.Fatalf("LoadFile: %v", err)
+	}
+	want := "something - not part of the scalar"
+	if got := scalarOf(t, root, "name"); got != want {
+		t.Errorf("name = %q, want %q", got, want)
+	}
+	if got := scalarOf(t, root, "title"); got != "Done" {
+		t.Errorf("title = %q, want Done", got)
+	}
+}
+
+// TestPlainScalarEndsAtNestedMapping asserts a continuation line that itself
+// looks like a mapping entry ("k: v") ends the scalar and is rejected: that is
+// a structural indicator, and reference parsers reject it as "mapping values
+// are not allowed in this context".
+func TestPlainScalarEndsAtNestedMapping(t *testing.T) {
+	data := []byte(`key: value
+  continuation: with colon
+`)
+	if _, err := LoadFile("nestedmap.yaml", data); err == nil {
+		t.Fatal("expected error for nested mapping under inline scalar")
 	}
 }
 
@@ -340,6 +369,35 @@ func TestQuotedKeyWithColon(t *testing.T) {
 	}
 	if got := rootMap.Entries[0].Value.(*ScalarNode).Value; got != "value" {
 		t.Errorf("value = %v, want value", got)
+	}
+}
+
+// TestQuotedKeyInSequenceItem ensures a quoted key on a sequence-item inline
+// mapping (`- "$ref": "..."`, the shape OpenAPI specs use for $ref-only
+// operation parameters) is unquoted. Before the parseSingleMapping fix the
+// surrounding quotes were retained in the ScalarNode value, so key comparisons
+// against "$ref" never matched and the $ref was silently dropped — producing
+// empty-name schema attributes and unresolved path parameters (L-101).
+func TestQuotedKeyInSequenceItem(t *testing.T) {
+	data := []byte("parameters:\n- \"$ref\": \"#/components/parameters/gist-id\"\n")
+	root, err := LoadFile("seqref.yaml", data)
+	if err != nil {
+		t.Fatalf("LoadFile: %v", err)
+	}
+	rootMap := root.(*MapNode)
+	params := rootMap.Entries[0].Value.(*SequenceNode)
+	if len(params.Items) != 1 {
+		t.Fatalf("expected 1 sequence item, got %d", len(params.Items))
+	}
+	item := params.Items[0].(*MapNode)
+	if len(item.Entries) != 1 {
+		t.Fatalf("expected 1 entry, got %d", len(item.Entries))
+	}
+	if got := item.Entries[0].Key.Value; got != "$ref" {
+		t.Errorf("key = %q, want %q (quotes must be stripped)", got, "$ref")
+	}
+	if got := item.Entries[0].Value.(*ScalarNode).Value; got != "#/components/parameters/gist-id" {
+		t.Errorf("value = %q, want %q", got, "#/components/parameters/gist-id")
 	}
 }
 

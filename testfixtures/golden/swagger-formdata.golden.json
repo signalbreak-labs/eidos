@@ -96,10 +96,6 @@
     "reason": "resource form-data-api_upload"
   },
   {
-    "path": "internal/provider/resource_upload_acceptance_test.go",
-    "reason": "acceptance tests for resource upload"
-  },
-  {
     "path": "internal/provider/resource_upload_test.go",
     "reason": "unit tests for resource upload"
   },

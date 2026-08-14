@@ -155,9 +155,28 @@ func attrValueToJSON(value attr.Value, wireMap map[string]string, path string) (
 		return v.ValueFloat64(), true, nil
 	case types.Bool:
 		return v.ValueBool(), true, nil
+	case types.Number:
+		// A number inside a Dynamic attribute is parsed by the framework as a
+		// basetypes.NumberValue (arbitrary precision), not Int64/Float64, so it
+		// is not matched by the cases above. Render it as a json.Number to
+		// preserve precision and emit a raw JSON number (no quotes) in the
+		// request body.
+		return json.Number(v.ValueBigFloat().Text('f', -1)), true, nil
 	case types.List:
 		return elementsToJSON(v.Elements(), wireMap, path+".*")
 	case types.Set:
+		return elementsToJSON(v.Elements(), wireMap, path+".*")
+	case types.Tuple:
+		// A Dynamic attribute that the practitioner configures with a list
+		// literal (e.g. "allowed_to_merge = [ null ]" or a heterogeneous array)
+		// is parsed by the framework as a Tuple value, not a List: a Dynamic
+		// attribute's concrete element type is decided per value, and a list
+		// literal whose elements are null or of differing types cannot be a
+		// homogeneous List, so it becomes a Tuple. Serialize it as a JSON array
+		// of its elements so the request body carries the array the API expects
+		// (G18). Without this case the request-body builder returns "unsupported
+		// attribute value type basetypes.TupleValue" and every Create/Update on
+		// such a resource fails.
 		return elementsToJSON(v.Elements(), wireMap, path+".*")
 	case types.Map:
 		return mapToJSON(v.Elements(), wireMap, path+".*")
@@ -332,19 +351,121 @@ func jsonToAttrValue(current attr.Value, raw any, wireMap map[string]string, pat
 		}
 		return object, nil
 	case types.Dynamic:
-		// A dynamic attribute carries arbitrary JSON; round-trip it through
-		// tftypes so the value is preserved verbatim (G18).
-		b, err := json.Marshal(raw)
-		if err != nil {
-			return nil, fmt.Errorf("could not marshal dynamic value: %w", err)
-		}
-		tv, err := tftypes.ValueFromJSON(b, tftypes.DynamicPseudoType)
-		if err != nil {
-			return nil, fmt.Errorf("could not parse dynamic value: %w", err)
-		}
-		return types.DynamicType.ValueFromTerraform(context.Background(), tv)
+		// A dynamic attribute carries arbitrary JSON. tftypes' DynamicPseudoType
+		// parser (jsonUnmarshalDynamicPseudoType) does NOT accept raw JSON; it
+		// requires an envelope {"type":<type-json>,"value":<value-json>}. Feeding
+		// it a raw array, scalar, or plain object yields "invalid JSON, expected
+		// '{'" (for arrays: "expected '{', got '['"), so a Dynamic attribute whose
+		// API value is non-null — e.g. GitLab allowed_to_merge (an array) or
+		// Grafana alert_rule data — could never be read into state. Infer the
+		// concrete tftypes.Type from the decoded Go value, build the envelope, and
+		// let tftypes parse the value against that concrete type (G18).
+		return dynamicValueFromRaw(raw)
 	}
 	return nil, fmt.Errorf("unsupported attribute value type %T", current)
+}
+
+// inferTFTypes derives the concrete tftypes.Type of a decoded JSON value so a
+// Dynamic attribute can be round-tripped through tftypes' DynamicPseudoType
+// envelope (see dynamicValueFromRaw). Decoded numbers are json.Number when the
+// decoder used UseNumber (the generated CRUD always does); float64 is accepted
+// as a fallback. Arrays of a single element type become a List; arrays whose
+// elements have differing types become a Tuple (the heterogeneous case that a
+// Dynamic array legitimately represents). Empty arrays become a List of
+// DynamicPseudoType so the element type is unconstrained.
+func inferTFTypes(raw any) (tftypes.Type, error) {
+	switch v := raw.(type) {
+	case nil:
+		// A null has no type of its own. tftypes' DynamicPseudoType parser
+		// rejects raw null (it expects the {"type","value"} envelope), so a null
+		// element/property must be typed as a concrete primitive for tftypes to
+		// parse it as the null value of that type. String is the safe default:
+		// the value is null regardless, so it round-trips as null, and String is
+		// valid in both List and Tuple element positions and Object attributes.
+		return tftypes.String, nil
+	case bool:
+		return tftypes.Bool, nil
+	case json.Number:
+		return tftypes.Number, nil
+	case float64:
+		return tftypes.Number, nil
+	case string:
+		return tftypes.String, nil
+	case []any:
+		if len(v) == 0 {
+			// An empty array has no elements to infer from; use a concrete
+			// element type so tftypes parses it (List{DynamicPseudoType} would
+			// call TypeFromElements on no elements and fail).
+			return tftypes.List{ElementType: tftypes.String}, nil
+		}
+		elemTypes := make([]tftypes.Type, 0, len(v))
+		for _, e := range v {
+			et, err := inferTFTypes(e)
+			if err != nil {
+				return nil, err
+			}
+			elemTypes = append(elemTypes, et)
+		}
+		first := elemTypes[0]
+		homogeneous := true
+		for _, et := range elemTypes[1:] {
+			if !et.Is(first) {
+				homogeneous = false
+				break
+			}
+		}
+		if homogeneous {
+			return tftypes.List{ElementType: first}, nil
+		}
+		return tftypes.Tuple{ElementTypes: elemTypes}, nil
+	case map[string]any:
+		attrTypes := make(map[string]tftypes.Type, len(v))
+		for k, val := range v {
+			at, err := inferTFTypes(val)
+			if err != nil {
+				return nil, err
+			}
+			attrTypes[k] = at
+		}
+		return tftypes.Object{AttributeTypes: attrTypes}, nil
+	default:
+		return nil, fmt.Errorf("cannot infer tftypes.Type from %T", raw)
+	}
+}
+
+// dynamicValueFromRaw builds a types.Dynamic from an arbitrary decoded JSON
+// value. tftypes' DynamicPseudoType parser requires the
+// {"type":<type-json>,"value":<value-json>} envelope, so the concrete type is
+// inferred from the Go value (inferTFTypes), both halves are marshaled, and
+// tftypes parses the value against that concrete type. A nil raw value yields
+// the null Dynamic (G18).
+func dynamicValueFromRaw(raw any) (attr.Value, error) {
+	if raw == nil {
+		return types.DynamicNull(), nil
+	}
+	typ, err := inferTFTypes(raw)
+	if err != nil {
+		return nil, fmt.Errorf("could not infer dynamic type: %w", err)
+	}
+	typeJSON, err := json.Marshal(typ)
+	if err != nil {
+		return nil, fmt.Errorf("could not marshal dynamic type: %w", err)
+	}
+	valueJSON, err := json.Marshal(raw)
+	if err != nil {
+		return nil, fmt.Errorf("could not marshal dynamic value: %w", err)
+	}
+	envelope := make([]byte, 0, len(typeJSON)+len(valueJSON)+16)
+	envelope = append(envelope, "{\"type\":"...)
+	envelope = append(envelope, typeJSON...)
+	envelope = append(envelope, ",\"value\":"...)
+	envelope = append(envelope, valueJSON...)
+	envelope = append(envelope, '}')
+	tv, err := tftypes.ValueFromJSON(envelope, tftypes.DynamicPseudoType)
+	if err != nil {
+		return nil, fmt.Errorf("could not parse dynamic value: %w", err)
+	}
+	return types.DynamicType.ValueFromTerraform(context.Background(), tv)
 }
 
 // jsonToAttrValueOfType converts a decoded JSON value into a framework

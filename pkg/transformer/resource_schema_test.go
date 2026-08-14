@@ -283,7 +283,7 @@ func TestDataSourceSchema_UniqueItemsIsSet(t *testing.T) {
 		Path:           "/pets",
 		ResponseSchema: &SchemaSpec{Type: "array", UniqueItems: true, Items: &SchemaSpec{Type: "string"}},
 	}
-	schema := DataSourceSchema(op)
+	schema := DataSourceSchema(op, nil)
 
 	var items *ir.AttributeIR
 	for i := range schema.Attributes {

@@ -372,9 +372,12 @@ func TestOperationsFromSpec_RangeWildcardResponse(t *testing.T) {
 }
 
 func TestOperationsFromSpec_BooleanSchemaWarns(t *testing.T) {
-	// JSON Schema 2020-12 boolean schemas (items: false, additionalProperties:
-	// false|true) cannot be represented in SchemaSpec and must not be dropped
-	// silently (L-97).
+	// JSON Schema 2020-12 boolean schemas that cause a real information loss
+	// (items: false → array must be empty; additionalProperties: true → open
+	// map Terraform cannot model) must not be dropped silently (L-97).
+	// additionalProperties: false is deliberately NOT warned (benign: Terraform
+	// objects are closed by default), so this spec uses true to exercise the
+	// warning path.
 	spec := &parser.Spec{
 		Paths: map[string]*parser.PathItem{
 			"/pets": {
@@ -384,7 +387,7 @@ func TestOperationsFromSpec_BooleanSchemaWarns(t *testing.T) {
 						Content: map[string]*parser.MediaType{
 							"application/json": {Schema: &parser.Schema{
 								Type:                 "object",
-								AdditionalProperties: false,
+								AdditionalProperties: true,
 								Items:                false,
 							}},
 						},
@@ -419,6 +422,48 @@ func TestOperationsFromSpec_BooleanSchemaWarns(t *testing.T) {
 	}
 	if !sawAP {
 		t.Errorf("expected a warning for boolean additionalProperties schema, got %v", diags)
+	}
+}
+
+// TestOperationsFromSpec_BooleanAdditionalPropertiesFalseNoWarn asserts that
+// additionalProperties: false (a closed property set) does NOT emit a warning:
+// Terraform objects are closed by default, so dropping the constraint is a
+// no-op with no information loss. Real-world specs declare false on thousands
+// of objects (Linode: 3147); warning on each would drown out genuine losses.
+func TestOperationsFromSpec_BooleanAdditionalPropertiesFalseNoWarn(t *testing.T) {
+	spec := &parser.Spec{
+		Paths: map[string]*parser.PathItem{
+			"/pets": {
+				Post: &parser.Operation{
+					OperationID: "createPet",
+					RequestBody: &parser.RequestBody{
+						Content: map[string]*parser.MediaType{
+							"application/json": {Schema: &parser.Schema{
+								Type:                 "object",
+								AdditionalProperties: false,
+								Properties: map[string]*parser.Schema{
+									"name": {Type: "string"},
+								},
+							}},
+						},
+					},
+					Responses: map[string]*parser.Response{
+						"200": {
+							Content: map[string]*parser.MediaType{
+								"application/json": {Schema: &parser.Schema{Type: "object"}},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	_, diags := OperationsFromSpecWithDiagnostics(spec)
+	for _, d := range diags {
+		if strings.Contains(d.Summary, "additionalProperties") {
+			t.Fatalf("expected NO warning for additionalProperties: false (benign, closed set is Terraform default), got: %s: %s", d.Summary, d.Detail)
+		}
 	}
 }
 
@@ -739,7 +784,7 @@ func TestSchemaSpecFromParserCrossPropertyCycleBounded(t *testing.T) {
 }
 
 // TestSchemaSpecFromParserCyclicDepthBounded locks in the circular-schema fix
-// (docs/OPEN_ISSUE-circular-schema-generation.md): a $ref the parser marks Opaque
+// (docs/PROJECT_DESIGN.md §12.4): a $ref the parser marks Opaque
 // is expanded up to maxCyclicDepth levels — preserving first-entry properties so
 // the generated attribute stays a concrete object instead of degrading to
 // Dynamic — and then cut to an opaque boundary, so the conversion returns
@@ -1029,5 +1074,104 @@ func TestSchemaSpecFromParserOneOfAnyOfWarns(t *testing.T) {
 	}
 	if !anyOfWarn {
 		t.Errorf("expected an anyOf composition-not-modeled warning, got diags: %v", diags)
+	}
+}
+
+// objSpec builds a flat object SchemaSpec with the given property names mapped
+// to string scalars, used as a stand-in request body or envelope payload.
+func objSpec(props ...string) *SchemaSpec {
+	p := make(map[string]SchemaSpec, len(props))
+	for _, name := range props {
+		p[name] = SchemaSpec{Type: "string"}
+	}
+	return &SchemaSpec{Type: "object", Properties: p}
+}
+
+func TestUnwrapResponseEnvelope(t *testing.T) {
+	inner := SchemaSpec{
+		Type: "object",
+		Properties: map[string]SchemaSpec{
+			"uuid": {Type: "string"},
+			"name": {Type: "string"},
+		},
+	}
+	wrap := func(key string, extra map[string]SchemaSpec) *SchemaSpec {
+		props := map[string]SchemaSpec{key: inner}
+		for k, v := range extra {
+			props[k] = v
+		}
+		return &SchemaSpec{Type: "object", Properties: props}
+	}
+
+	tests := []struct {
+		name        string
+		spec        *SchemaSpec
+		requestSpec *SchemaSpec
+		wantKey     string
+		wantUnwrap  bool
+	}{
+		{
+			name:       "data envelope always unwrapped",
+			spec:       wrap("data", map[string]SchemaSpec{"meta": {Type: "object", Properties: map[string]SchemaSpec{"total": {Type: "integer"}}}}),
+			wantKey:    "data",
+			wantUnwrap: true,
+		},
+		{
+			name:        "arbitrary wrapper with flat request is unwrapped",
+			spec:        wrap("agent", nil),
+			requestSpec: objSpec("name", "description"),
+			wantKey:     "agent",
+			wantUnwrap:  true,
+		},
+		{
+			name:        "arbitrary wrapper with no request body is unwrapped (read/data source)",
+			spec:        wrap("agent", nil),
+			requestSpec: nil,
+			wantKey:     "agent",
+			wantUnwrap:  true,
+		},
+		{
+			name:        "same-key single-property request is NOT unwrapped (genuine wrapped resource)",
+			spec:        wrap("agent", nil),
+			requestSpec: &SchemaSpec{Type: "object", Properties: map[string]SchemaSpec{"agent": inner}},
+			wantKey:     "",
+			wantUnwrap:  false,
+		},
+		{
+			name:        "wrapper with a non-companion peer field is NOT unwrapped",
+			spec:        wrap("agent", map[string]SchemaSpec{"count": {Type: "integer"}}),
+			requestSpec: objSpec("name"),
+			wantKey:     "",
+			wantUnwrap:  false,
+		},
+		{
+			name:        "scalar wrapper value is NOT unwrapped",
+			spec:        &SchemaSpec{Type: "object", Properties: map[string]SchemaSpec{"agent": {Type: "string"}}},
+			requestSpec: objSpec("name"),
+			wantKey:     "",
+			wantUnwrap:  false,
+		},
+		{
+			name:        "multi-field response is NOT unwrapped",
+			spec:        objSpec("name", "description", "region"),
+			requestSpec: objSpec("name", "description"),
+			wantKey:     "",
+			wantUnwrap:  false,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got, key := UnwrapResponseEnvelope(tc.spec, tc.requestSpec)
+			if key != tc.wantKey {
+				t.Errorf("envelope key = %q, want %q", key, tc.wantKey)
+			}
+			unwrap := key != "" && got != tc.spec
+			if unwrap != tc.wantUnwrap {
+				t.Errorf("unwrapped = %v, want %v (got=%v)", unwrap, tc.wantUnwrap, got)
+			}
+			if tc.wantUnwrap && got != nil && len(got.Properties) != len(inner.Properties) {
+				t.Errorf("unwrapped schema should expose inner payload properties, got %d props", len(got.Properties))
+			}
+		})
 	}
 }

@@ -275,3 +275,32 @@ func TestContainsNestedDynamic(t *testing.T) {
 		t.Error("block with a dynamic attribute should be detected")
 	}
 }
+
+// TestIsDynamicAttribute covers the top-level DynamicAttribute detection used
+// by the example/acceptance config writer to decide between a scalar placeholder
+// and a collection literal. A primitive dynamic/null and a collection whose
+// element is dynamic or nests a dynamic all degrade to a DynamicAttribute; a
+// plain primitive, a plain object, and a typed collection of primitives do not.
+func TestIsDynamicAttribute(t *testing.T) {
+	cases := []struct {
+		name string
+		s    ir.SchemaIR
+		want bool
+	}{
+		{name: "primitive dynamic", s: ir.SchemaIR{Type: ir.TypeDynamic}, want: true},
+		{name: "primitive null", s: ir.SchemaIR{Type: ir.TypeNull}, want: true},
+		{name: "plain string", s: ir.SchemaIR{Type: ir.TypeString}, want: false},
+		{name: "plain object of primitives", s: ir.SchemaIR{Attributes: []ir.AttributeIR{{Name: "id", Schema: ir.SchemaIR{Type: ir.TypeString}}}}, want: false},
+		{name: "collection of primitives", s: ir.SchemaIR{Collection: &ir.CollectionType{Kind: ir.List, ElementType: ir.SchemaIR{Type: ir.TypeString}}}, want: false},
+		{name: "collection of dynamic element", s: ir.SchemaIR{Collection: &ir.CollectionType{Kind: ir.List, ElementType: ir.SchemaIR{Type: ir.TypeDynamic}}}, want: true},
+		{name: "collection of union element", s: ir.SchemaIR{Collection: &ir.CollectionType{Kind: ir.Set, ElementType: ir.SchemaIR{Union: &ir.UnionType{Kind: ir.OneOf, Variants: []ir.SchemaIR{{Type: ir.TypeString}}}}}}, want: true},
+		{name: "collection of object with nested dynamic", s: ir.SchemaIR{Collection: &ir.CollectionType{Kind: ir.List, ElementType: ir.SchemaIR{Attributes: []ir.AttributeIR{{Name: "blob", Schema: ir.SchemaIR{Type: ir.TypeDynamic}}}}}}, want: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := IsDynamicAttribute(tc.s); got != tc.want {
+				t.Errorf("IsDynamicAttribute(%+v) = %v, want %v", tc.s, got, tc.want)
+			}
+		})
+	}
+}

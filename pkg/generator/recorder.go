@@ -227,9 +227,12 @@ func collectResourceFiles(rec *Recorder, res ir.ResourceIR, opts CollectOptions)
 		rec.Record(fmt.Sprintf("internal/provider/resource_%s_test.go", name), fmt.Sprintf("unit tests for resource %s", res.Name))
 		// A scaffolded (unwired) resource gets no acceptance test: its CRUD
 		// bodies report "is not wired to a remote API endpoint", so a lifecycle
-		// test against a mock server could never pass. This mirrors
-		// ResourceAcceptanceTestFiles so record and write modes stay in lockstep.
-		if planResourceWiring(res).wired {
+		// test against a mock server could never pass. A resource whose wired
+		// create sends a multipart/form-data binary file upload is likewise
+		// skipped: the placeholder-driven mock lifecycle cannot round-trip a
+		// file path. This mirrors ResourceAcceptanceTestFiles so record and
+		// write modes stay in lockstep.
+		if planResourceWiring(res).wired && !resourceCreateHasBinaryUpload(res) {
 			rec.Record(fmt.Sprintf("internal/provider/resource_%s_acceptance_test.go", name), fmt.Sprintf("acceptance tests for resource %s", res.Name))
 		}
 	}

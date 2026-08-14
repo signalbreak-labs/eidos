@@ -378,10 +378,13 @@ func TestWriteHCLCollectionAttribute_MapKeyFromName(t *testing.T) {
 }
 
 // TestWriteHCLCollectionAttribute_UnionElementGraceful verifies that a
-// collection whose element type is a oneOf/anyOf union (neither primitive nor
-// object-like) degrades gracefully to an empty literal instead of panicking.
-// This is the H-5 regression: previously writeHCLCollectionAttribute panicked
-// for `array` with `items: {oneOf: ...}`, and the ExampleFiles call path had no
+// collection whose element type is a oneOf/anyOf union degrades gracefully
+// instead of panicking. A union element normalizes to a dynamic element
+// (DynamicUnionElement), so the collection degrades to a DynamicAttribute and
+// the example writer emits a scalar null placeholder (not a collection literal,
+// which would parse as a Tuple and mismatch the response at apply — G18). This
+// is the H-5 regression: previously writeHCLCollectionAttribute panicked for
+// `array` with `items: {oneOf: ...}`, and the ExampleFiles call path had no
 // recover, crashing the whole CLI run.
 func TestWriteHCLCollectionAttribute_UnionElementGraceful(t *testing.T) {
 	cases := []struct {
@@ -389,9 +392,9 @@ func TestWriteHCLCollectionAttribute_UnionElementGraceful(t *testing.T) {
 		kind ir.CollectionKind
 		want string
 	}{
-		{name: "list", kind: ir.List, want: "bad = []"},
-		{name: "set", kind: ir.Set, want: "bad = []"},
-		{name: "map", kind: ir.Map, want: "bad = {}"},
+		{name: "list", kind: ir.List, want: "bad = null"},
+		{name: "set", kind: ir.Set, want: "bad = null"},
+		{name: "map", kind: ir.Map, want: "bad = null"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

@@ -326,12 +326,18 @@ func convertSecurityScheme(providerName string, scheme ir.SecuritySchemeIR) conf
 	suffix := envSuffix(scheme.Name)
 	switch scheme.Type {
 	case ir.SecuritySchemeAPIKey:
-		ac := config.AuthConfig{Scheme: "apiKey"}
-		if scheme.In == "header" {
+		ac := config.AuthConfig{
+			Scheme: "apiKey",
+			// The apiKey value is always sourced from an env var regardless of
+			// placement; the generated provider's APIKeyAuth interceptor injects
+			// it as a header, query, or cookie per the spec's `in` (see
+			// pkg/generator/provider_auth.go). HeaderName is set only for header
+			// placement — query/cookie apiKeys carry no header, and EnvVar alone
+			// satisfies ValidateAuth ("apiKey requires header_name or env_var").
+			EnvVar: fmt.Sprintf("%s_%s", envPrefix(providerName), suffix),
+		}
+		if scheme.In == "header" || scheme.In == "" {
 			ac.HeaderName = scheme.NameField
-			// Header API keys are env-friendly; query/cookie placement is not
-			// represented in AuthConfig yet, so only set EnvVar for headers.
-			ac.EnvVar = fmt.Sprintf("%s_%s", envPrefix(providerName), suffix)
 		}
 		return ac
 	case ir.SecuritySchemeHTTP:

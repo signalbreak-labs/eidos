@@ -112,6 +112,35 @@ func ContainsNestedDynamic(s ir.SchemaIR) bool {
 	return false
 }
 
+// IsDynamicAttribute reports whether an attribute's IR schema will be emitted
+// as a schema.DynamicAttribute rather than a typed framework attribute. This is
+// true for a primitive dynamic/null type, and for a collection whose element is
+// dynamic/null or contains a nested dynamic at any depth: the plugin-framework
+// rejects a Dynamic element inside a typed collection
+// (fwtype.ContainsCollectionWithDynamic), so such a collection degrades to a
+// top-level DynamicAttribute carrying arbitrary JSON. The example/acceptance
+// config writer uses this to emit a scalar placeholder (null / "example")
+// instead of a collection literal — a list literal configured on a
+// DynamicAttribute is parsed by the framework as a Tuple, whose concrete
+// element types the response mapping (dynamicValueFromRaw -> inferTFTypes)
+// cannot reliably reproduce, causing "wrong final value type: tuple required"
+// at apply (G18, seen on GitLab protected_branch.allowed_to_merge and Grafana
+// alert_rule.data). The emission rules mirrored here live in
+// resourceCollectionAttributeExpr / resourcePrimitiveAttributeExpr; keep them in
+// sync when the degradation policy changes.
+func IsDynamicAttribute(s ir.SchemaIR) bool {
+	if s.Type == ir.TypeDynamic || s.Type == ir.TypeNull {
+		return true
+	}
+	if s.Collection != nil {
+		elem := DynamicUnionElement(s.Collection.ElementType)
+		if elem.Type == ir.TypeDynamic || elem.Type == ir.TypeNull || ContainsNestedDynamic(elem) {
+			return true
+		}
+	}
+	return false
+}
+
 // objectSchemaContainsDynamic is the ObjectSchemaIR recursion companion to
 // ContainsNestedDynamic, walking a nested block's attributes and sub-blocks.
 func objectSchemaContainsDynamic(s ir.ObjectSchemaIR) bool {

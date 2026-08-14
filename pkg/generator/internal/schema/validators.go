@@ -812,6 +812,22 @@ func generateDiscriminatorValidator(f *astgen.File) {
 				astgen.Ident("value"),
 				astgen.Call(astgen.Selector(astgen.Ident("str"), "ValueString")),
 			),
+			// When the spec declares a discriminator but provides no mapping and
+			// the variant schemas are inline (no $ref names to infer from), the
+			// allowed-key set is empty. An empty set means the constraint is
+			// unspecified, not "reject every value": skip the membership check
+			// rather than failing every config with an unverifiable error. The
+			// discriminator property's presence and string type are still enforced
+			// above. (Seen on Linode payment_method.data: oneOf of inline objects
+			// with discriminator propertyName "type" and no mapping.)
+			astgen.If(
+				astgen.Binary(
+					astgen.Call(astgen.Ident("len"), astgen.Selector(astgen.Ident("v"), "allowed")),
+					token.EQL,
+					astgen.IntLit(0),
+				),
+				astgen.Return(),
+			),
 			astgen.RangeStmt(
 				astgen.Ident("_"), astgen.Ident("allowed"), token.DEFINE,
 				astgen.Selector(astgen.Ident("v"), "allowed"),
