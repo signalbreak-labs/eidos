@@ -2,12 +2,12 @@
 page_title: "mycloud_instance Resource - mycloud"
 subcategory: ""
 description: |-
-  
+  Read an Instance
 ---
 
 # mycloud_instance Resource
 
-
+Read an Instance
 
 ## Example Usage
 
@@ -34,9 +34,9 @@ The following arguments are supported:
 * `labels` (Map(String), optional)
 * `name` (String, required)
 * `spec` (Object({containers}), optional)
-  * `containers` (List(Object({image, image_pull_policy, name})), computed)
+  * `containers` (List(Object({image, image_pull_policy, name})), optional)
 * `status` (Object({phase}), optional)
-  * `phase` (String, computed)
+  * `phase` (String, optional)
 * `workspace` (String, required)
 
 ### Attributes
@@ -48,9 +48,9 @@ In addition to all arguments above, the following computed attributes are export
 * `kind` (String, computed)
 * `labels` (Map(String), computed)
 * `spec` (Object({containers}), computed)
-  * `containers` (List(Object({image, image_pull_policy, name})), computed)
+  * `containers` (List(Object({image, image_pull_policy, name})), optional)
 * `status` (Object({phase}), computed)
-  * `phase` (String, computed)
+  * `phase` (String, optional)
 
 ## Import
 

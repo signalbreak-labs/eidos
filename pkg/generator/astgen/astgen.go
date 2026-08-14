@@ -102,11 +102,29 @@ func (f *File) AST() *ast.File {
 
 // Render formats the file source using go/format and returns the bytes.
 func (f *File) Render() ([]byte, error) {
+	return FormatGoFile(f.AST())
+}
+
+// FormatGoFile renders an ast.File to gofmt-canonical bytes. ASTs built by this
+// package carry zero token positions, so format.Node alone cannot infer the
+// blank lines gofmt requires between top-level declarations and emits adjacent
+// declarations with no separating line. Re-parsing the rendered source via
+// format.Source restores them: it re-stamps real positions and applies the
+// canonical gofmt layout. It is a no-op on imports because this package already
+// emits imports in ast.SortImports order (stdlib first, then third-party/local
+// alphabetically within each blank-line-separated group), so re-sorting changes
+// nothing. A failure at either step is returned so malformed output surfaces as
+// a render error via renderFileSafely rather than being dropped silently.
+func FormatGoFile(file *ast.File) ([]byte, error) {
 	var buf bytes.Buffer
-	if err := format.Node(&buf, token.NewFileSet(), f.AST()); err != nil {
+	if err := format.Node(&buf, token.NewFileSet(), file); err != nil {
 		return nil, fmt.Errorf("format ast: %w", err)
 	}
-	return buf.Bytes(), nil
+	out, err := format.Source(buf.Bytes())
+	if err != nil {
+		return nil, fmt.Errorf("reformat source: %w", err)
+	}
+	return out, nil
 }
 
 // RenderExpr formats a single expression by wrapping it in a synthetic var
@@ -116,12 +134,16 @@ func (f *File) Render() ([]byte, error) {
 func RenderExpr(expr ast.Expr) ([]byte, error) {
 	f := NewFile("x")
 	f.AddDecl(VarDeclGen(VarSpec("_", nil, expr)))
-	b, err := f.Render()
-	if err != nil {
-		return nil, err
+	// Render the synthetic file with format.Node directly rather than File.Render
+	// (which re-parses via format.Source for gofmt inter-decl blank lines). The
+	// wrapper is a single var declaration, so there are no inter-decl blank lines
+	// to restore, and format.Source's strict re-parse rejects some expression
+	// forms that format.Node renders validly inside the var wrapper.
+	var buf bytes.Buffer
+	if err := format.Node(&buf, token.NewFileSet(), f.AST()); err != nil {
+		return nil, fmt.Errorf("format expr: %w", err)
 	}
-	s := string(b)
-	s = strings.TrimPrefix(s, "package x\n\nvar _ = ")
+	s := strings.TrimPrefix(buf.String(), "package x\n\nvar _ = ")
 	s = strings.TrimSuffix(s, "\n")
 	return []byte(s), nil
 }
@@ -418,8 +440,21 @@ func Defer(call *ast.CallExpr) *ast.DeferStmt {
 }
 
 // If returns an if statement with the given condition and body.
+//
+// When the body is a single *ast.BlockStmt (e.g. a caller wrote
+// astgen.If(cond, astgen.Block(stmts...))), it is flattened into the if body
+// so the rendered code is `if c { stmts... }` rather than the redundant nested
+// block `if c { { stmts... } }`. The nested form compiles but reads as a stray
+// scope and obscures the intent; flattening keeps the natural
+// If(cond, Block(...)) idiom without producing cosmetic noise.
 func If(cond ast.Expr, body ...ast.Stmt) *ast.IfStmt {
-	return &ast.IfStmt{Cond: cond, Body: &ast.BlockStmt{List: body}}
+	list := body
+	if len(body) == 1 {
+		if blk, ok := body[0].(*ast.BlockStmt); ok {
+			list = blk.List
+		}
+	}
+	return &ast.IfStmt{Cond: cond, Body: &ast.BlockStmt{List: list}}
 }
 
 // IfElse returns an if statement with the given condition, then block, and

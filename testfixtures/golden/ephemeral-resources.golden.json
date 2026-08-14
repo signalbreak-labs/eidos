@@ -65,7 +65,11 @@
   },
   {
     "path": "internal/provider/ephemeral_issue_credentials.go",
-    "reason": "ephemeral resource token_api_issue_credentials"
+    "reason": "ephemeral resource token-api_issue_credentials"
+  },
+  {
+    "path": "internal/provider/json_convert.go",
+    "reason": "JSON/model conversion helpers for wired CRUD bodies"
   },
   {
     "path": "internal/provider/provider.go",

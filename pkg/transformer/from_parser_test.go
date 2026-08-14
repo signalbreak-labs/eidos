@@ -372,9 +372,12 @@ func TestOperationsFromSpec_RangeWildcardResponse(t *testing.T) {
 }
 
 func TestOperationsFromSpec_BooleanSchemaWarns(t *testing.T) {
-	// JSON Schema 2020-12 boolean schemas (items: false, additionalProperties:
-	// false|true) cannot be represented in SchemaSpec and must not be dropped
-	// silently (L-97).
+	// JSON Schema 2020-12 boolean schemas that cause a real information loss
+	// (items: false → array must be empty; additionalProperties: true → open
+	// map Terraform cannot model) must not be dropped silently (L-97).
+	// additionalProperties: false is deliberately NOT warned (benign: Terraform
+	// objects are closed by default), so this spec uses true to exercise the
+	// warning path.
 	spec := &parser.Spec{
 		Paths: map[string]*parser.PathItem{
 			"/pets": {
@@ -384,7 +387,7 @@ func TestOperationsFromSpec_BooleanSchemaWarns(t *testing.T) {
 						Content: map[string]*parser.MediaType{
 							"application/json": {Schema: &parser.Schema{
 								Type:                 "object",
-								AdditionalProperties: false,
+								AdditionalProperties: true,
 								Items:                false,
 							}},
 						},
@@ -419,6 +422,48 @@ func TestOperationsFromSpec_BooleanSchemaWarns(t *testing.T) {
 	}
 	if !sawAP {
 		t.Errorf("expected a warning for boolean additionalProperties schema, got %v", diags)
+	}
+}
+
+// TestOperationsFromSpec_BooleanAdditionalPropertiesFalseNoWarn asserts that
+// additionalProperties: false (a closed property set) does NOT emit a warning:
+// Terraform objects are closed by default, so dropping the constraint is a
+// no-op with no information loss. Real-world specs declare false on thousands
+// of objects (Linode: 3147); warning on each would drown out genuine losses.
+func TestOperationsFromSpec_BooleanAdditionalPropertiesFalseNoWarn(t *testing.T) {
+	spec := &parser.Spec{
+		Paths: map[string]*parser.PathItem{
+			"/pets": {
+				Post: &parser.Operation{
+					OperationID: "createPet",
+					RequestBody: &parser.RequestBody{
+						Content: map[string]*parser.MediaType{
+							"application/json": {Schema: &parser.Schema{
+								Type:                 "object",
+								AdditionalProperties: false,
+								Properties: map[string]*parser.Schema{
+									"name": {Type: "string"},
+								},
+							}},
+						},
+					},
+					Responses: map[string]*parser.Response{
+						"200": {
+							Content: map[string]*parser.MediaType{
+								"application/json": {Schema: &parser.Schema{Type: "object"}},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	_, diags := OperationsFromSpecWithDiagnostics(spec)
+	for _, d := range diags {
+		if strings.Contains(d.Summary, "additionalProperties") {
+			t.Fatalf("expected NO warning for additionalProperties: false (benign, closed set is Terraform default), got: %s: %s", d.Summary, d.Detail)
+		}
 	}
 }
 
@@ -738,6 +783,145 @@ func TestSchemaSpecFromParserCrossPropertyCycleBounded(t *testing.T) {
 	}
 }
 
+// TestSchemaSpecFromParserCyclicDepthBounded locks in the circular-schema fix
+// (docs/PROJECT_DESIGN.md §12.4): a $ref the parser marks Opaque
+// is expanded up to maxCyclicDepth levels — preserving first-entry properties so
+// the generated attribute stays a concrete object instead of degrading to
+// Dynamic — and then cut to an opaque boundary, so the conversion returns
+// promptly instead of re-expanding the cycle on every descent (the generator
+// hang). This mirrors TestSchemaSpecFromParserCrossPropertyCycleBounded but
+// exercises the Opaque/cycleDepth path the parser drives on real specs.
+func TestSchemaSpecFromParserCyclicDepthBounded(t *testing.T) {
+	// Department: id, subDepartments (array of Department). The items ref-holder
+	// is Opaque, exactly as the parser marks it (Department is circular).
+	department := &parser.Schema{Type: "object"}
+	department.Properties = map[string]*parser.Schema{
+		"id":             {Type: "string"},
+		"subDepartments": {Type: "array", Items: &parser.Schema{Ref: "#/components/schemas/Department", Opaque: true}},
+	}
+	spec := &parser.Spec{
+		Components: &parser.Components{
+			Schemas: map[string]*parser.Schema{"Department": department},
+		},
+	}
+
+	// Top-level ref to Department; its ref-holder is Opaque (Department is
+	// circular). Must return promptly instead of hanging on the self-cycle.
+	done := make(chan struct{})
+	var got *SchemaSpec
+	go func() {
+		got = schemaSpecFromParser(spec, &parser.Schema{Ref: "#/components/schemas/Department", Opaque: true}, nil)
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("schemaSpecFromParser hung on a self-referential Opaque cycle (cycleDepth bound regressed)")
+	}
+	if got == nil {
+		t.Fatal("expected non-nil SchemaSpec")
+	}
+	// First-entry properties are preserved: Department keeps its scalar fields,
+	// so the generated attribute is a concrete object rather than Dynamic.
+	if got.Type != "object" {
+		t.Fatalf("expected type object (first-entry properties preserved), got %q", got.Type)
+	}
+	if len(got.Properties) == 0 {
+		t.Fatal("expected first-entry properties preserved (non-empty Properties), got none")
+	}
+	sub, ok := got.Properties["subDepartments"]
+	if !ok {
+		t.Fatal("expected subDepartments property preserved at the first entry")
+	}
+	if sub.Items == nil {
+		t.Fatal("expected subDepartments items expanded one level (not a scalar boundary)")
+	}
+	// The first-level expansion descends into Department again (cycleDepth 1 -> 2);
+	// at cycleDepth == maxCyclicDepth the cycle is cut, so the next re-entry carries
+	// no nested shape. This is what keeps the IR finite and shallow.
+	if len(sub.Items.Properties) == 0 {
+		t.Fatalf("expected the expanded level to carry Department's properties, got none")
+	}
+	innerSub, ok := sub.Items.Properties["subDepartments"]
+	if !ok {
+		t.Fatal("expected inner subDepartments at the expanded level")
+	}
+	if innerSub.Items == nil || len(innerSub.Items.Properties) != 0 {
+		t.Errorf("expected the cycle to be cut at maxCyclicDepth (no nested shape past the boundary), got Properties=%v", innerSub.Items.Properties)
+	}
+}
+
+// TestSchemaSpecFromParserCyclicMemoSound locks in the memo soundness half of
+// the fix: a cyclic component reached at two different cycleDepths within one
+// conversion must produce two distinct forms (one expanded, one cut), not a
+// single conflated cached form. The pre-fix memo was keyed only on the schema
+// pointer, so whichever path converted first won and other paths got the wrong
+// (over- or under-expanded) shape; keying on (schema, cycleDepth) fixes that.
+func TestSchemaSpecFromParserCyclicMemoSound(t *testing.T) {
+	// department: id, subDepartments (array of Department), cyclic.
+	department := &parser.Schema{Type: "object"}
+	department.Properties = map[string]*parser.Schema{
+		"id":             {Type: "string"},
+		"subDepartments": {Type: "array", Items: &parser.Schema{Ref: "#/components/schemas/Department", Opaque: true}},
+	}
+	// wrapper: a second cyclic schema that also references Department, so
+	// Department is reached at cycleDepth 1 (via "direct") and cycleDepth 2 (via
+	// "through" -> Wrapper.dept) in the same top-level conversion.
+	wrapper := &parser.Schema{Type: "object"}
+	wrapper.Properties = map[string]*parser.Schema{
+		"dept": {Ref: "#/components/schemas/Department", Opaque: true},
+	}
+	spec := &parser.Spec{
+		Components: &parser.Components{
+			Schemas: map[string]*parser.Schema{"Department": department, "Wrapper": wrapper},
+		},
+	}
+	root := &parser.Schema{Type: "object", Properties: map[string]*parser.Schema{
+		"direct":  {Ref: "#/components/schemas/Department", Opaque: true},
+		"through": {Ref: "#/components/schemas/Wrapper", Opaque: true},
+	}}
+
+	got := schemaSpecFromParser(spec, root, nil)
+	if got == nil {
+		t.Fatal("expected non-nil SchemaSpec")
+	}
+	direct, ok := got.Properties["direct"]
+	if !ok {
+		t.Fatal("expected direct property")
+	}
+	through, ok := got.Properties["through"]
+	if !ok {
+		t.Fatal("expected through property")
+	}
+	// "direct" reaches Department at cycleDepth 1, so its subDepartments items
+	// expand one more level (Department at cycleDepth 2, which then cuts).
+	directSub, ok := direct.Properties["subDepartments"]
+	if !ok || directSub.Items == nil {
+		t.Fatal("expected direct.subDepartments to be expanded (cycleDepth 1 -> 2)")
+	}
+	if len(directSub.Items.Properties) == 0 {
+		t.Error("expected direct.subDepartments items to carry Department's properties (expanded form)")
+	}
+	// "through" reaches Department at cycleDepth 2 (through -> Wrapper.dept), so
+	// Department's own cyclic ref (subDepartments) is cut: its items is a scalar
+	// boundary carrying no nested shape.
+	throughDept, ok := through.Properties["dept"]
+	if !ok {
+		t.Fatal("expected through.dept (Department reached via Wrapper)")
+	}
+	throughSub, ok := throughDept.Properties["subDepartments"]
+	if !ok {
+		t.Fatal("expected through.dept.subDepartments")
+	}
+	if throughSub.Items == nil || len(throughSub.Items.Properties) != 0 {
+		t.Errorf("expected through.dept.subDepartments items cut at maxCyclicDepth (no nested shape), got Properties=%v", throughSub.Items.Properties)
+	}
+	// The two Department occurrences have distinct shapes (expanded vs cut);
+	// a sound memo must not conflate them. If the memo were keyed on the schema
+	// pointer alone, the cut form and the expanded form would collapse into one
+	// and one of these assertions would fail.
+}
+
 // names no component schema does not panic and falls back to an empty (Dynamic)
 // shape rather than dropping the property — fail-loud is the renderer's job via
 // diagnostics, but the SchemaSpec must remain structurally valid.
@@ -890,5 +1074,104 @@ func TestSchemaSpecFromParserOneOfAnyOfWarns(t *testing.T) {
 	}
 	if !anyOfWarn {
 		t.Errorf("expected an anyOf composition-not-modeled warning, got diags: %v", diags)
+	}
+}
+
+// objSpec builds a flat object SchemaSpec with the given property names mapped
+// to string scalars, used as a stand-in request body or envelope payload.
+func objSpec(props ...string) *SchemaSpec {
+	p := make(map[string]SchemaSpec, len(props))
+	for _, name := range props {
+		p[name] = SchemaSpec{Type: "string"}
+	}
+	return &SchemaSpec{Type: "object", Properties: p}
+}
+
+func TestUnwrapResponseEnvelope(t *testing.T) {
+	inner := SchemaSpec{
+		Type: "object",
+		Properties: map[string]SchemaSpec{
+			"uuid": {Type: "string"},
+			"name": {Type: "string"},
+		},
+	}
+	wrap := func(key string, extra map[string]SchemaSpec) *SchemaSpec {
+		props := map[string]SchemaSpec{key: inner}
+		for k, v := range extra {
+			props[k] = v
+		}
+		return &SchemaSpec{Type: "object", Properties: props}
+	}
+
+	tests := []struct {
+		name        string
+		spec        *SchemaSpec
+		requestSpec *SchemaSpec
+		wantKey     string
+		wantUnwrap  bool
+	}{
+		{
+			name:       "data envelope always unwrapped",
+			spec:       wrap("data", map[string]SchemaSpec{"meta": {Type: "object", Properties: map[string]SchemaSpec{"total": {Type: "integer"}}}}),
+			wantKey:    "data",
+			wantUnwrap: true,
+		},
+		{
+			name:        "arbitrary wrapper with flat request is unwrapped",
+			spec:        wrap("agent", nil),
+			requestSpec: objSpec("name", "description"),
+			wantKey:     "agent",
+			wantUnwrap:  true,
+		},
+		{
+			name:        "arbitrary wrapper with no request body is unwrapped (read/data source)",
+			spec:        wrap("agent", nil),
+			requestSpec: nil,
+			wantKey:     "agent",
+			wantUnwrap:  true,
+		},
+		{
+			name:        "same-key single-property request is NOT unwrapped (genuine wrapped resource)",
+			spec:        wrap("agent", nil),
+			requestSpec: &SchemaSpec{Type: "object", Properties: map[string]SchemaSpec{"agent": inner}},
+			wantKey:     "",
+			wantUnwrap:  false,
+		},
+		{
+			name:        "wrapper with a non-companion peer field is NOT unwrapped",
+			spec:        wrap("agent", map[string]SchemaSpec{"count": {Type: "integer"}}),
+			requestSpec: objSpec("name"),
+			wantKey:     "",
+			wantUnwrap:  false,
+		},
+		{
+			name:        "scalar wrapper value is NOT unwrapped",
+			spec:        &SchemaSpec{Type: "object", Properties: map[string]SchemaSpec{"agent": {Type: "string"}}},
+			requestSpec: objSpec("name"),
+			wantKey:     "",
+			wantUnwrap:  false,
+		},
+		{
+			name:        "multi-field response is NOT unwrapped",
+			spec:        objSpec("name", "description", "region"),
+			requestSpec: objSpec("name", "description"),
+			wantKey:     "",
+			wantUnwrap:  false,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got, key := UnwrapResponseEnvelope(tc.spec, tc.requestSpec)
+			if key != tc.wantKey {
+				t.Errorf("envelope key = %q, want %q", key, tc.wantKey)
+			}
+			unwrap := key != "" && got != tc.spec
+			if unwrap != tc.wantUnwrap {
+				t.Errorf("unwrapped = %v, want %v (got=%v)", unwrap, tc.wantUnwrap, got)
+			}
+			if tc.wantUnwrap && got != nil && len(got.Properties) != len(inner.Properties) {
+				t.Errorf("unwrapped schema should expose inner payload properties, got %d props", len(got.Properties))
+			}
+		})
 	}
 }

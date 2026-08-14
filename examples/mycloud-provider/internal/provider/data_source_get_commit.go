@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 )
 import (
@@ -14,15 +15,18 @@ import (
 	types "github.com/hashicorp/terraform-plugin-framework/types"
 	client "github.com/mycloud/terraform-provider-mycloud/internal/client"
 )
+
 // Compile-time interface assertion.
 var (
 	_ datasource.DataSource              = (*GetCommitDataSource)(nil)
 	_ datasource.DataSourceWithConfigure = (*GetCommitDataSource)(nil)
 )
+
 // GetCommitDataSource is the generated Terraform data source implementation.
 type GetCommitDataSource struct {
 	client *client.Client
 }
+
 // GetCommitDataSourceModel describes the data source state shape.
 type GetCommitDataSourceModel struct {
 	AuthorName   types.String `tfsdk:"author_name"`
@@ -33,18 +37,22 @@ type GetCommitDataSourceModel struct {
 	Ref          types.String `tfsdk:"ref"`
 	Sha          types.String `tfsdk:"sha"`
 }
+
 // NewGetCommitDataSource returns a new instance of the generated data source.
 func NewGetCommitDataSource() datasource.DataSource {
 	return &GetCommitDataSource{}
 }
+
 // Metadata returns the data source type name.
 func (d *GetCommitDataSource) Metadata(_ context.Context, _ datasource.MetadataRequest, resp *datasource.MetadataResponse) {
 	resp.TypeName = "mycloud_get_commit"
 }
+
 // Schema returns the data source schema.
 func (d *GetCommitDataSource) Schema(_ context.Context, _ datasource.SchemaRequest, resp *datasource.SchemaResponse) {
-	resp.Schema = schema.Schema{Attributes: map[string]schema.Attribute{"author_name": schema.StringAttribute{Computed: true}, "committed_at": schema.StringAttribute{Computed: true}, "message": schema.StringAttribute{Computed: true}, "organization": schema.StringAttribute{Required: true}, "project": schema.StringAttribute{Required: true}, "ref": schema.StringAttribute{Required: true}, "sha": schema.StringAttribute{Computed: true}}}
+	resp.Schema = schema.Schema{MarkdownDescription: "Get a commit", Attributes: map[string]schema.Attribute{"author_name": schema.StringAttribute{Computed: true}, "committed_at": schema.StringAttribute{Computed: true}, "message": schema.StringAttribute{Computed: true}, "organization": schema.StringAttribute{Required: true}, "project": schema.StringAttribute{Required: true}, "ref": schema.StringAttribute{Required: true}, "sha": schema.StringAttribute{Computed: true}}}
 }
+
 // Read fetches remote state into the data source model.
 func (d *GetCommitDataSource) Read(ctx context.Context, req datasource.ReadRequest, resp *datasource.ReadResponse) {
 	var config GetCommitDataSourceModel
@@ -53,15 +61,13 @@ func (d *GetCommitDataSource) Read(ctx context.Context, req datasource.ReadReque
 		return
 	}
 	if d.client == nil {
-		{
-			resp.Diagnostics.AddError("Client Not Configured", "The API client was not set on the resource. The provider Configure method must run before resource operations; this is a bug in the generated provider.")
-			return
-		}
+		resp.Diagnostics.AddError("Client Not Configured", "The API client was not set on the resource. The provider Configure method must run before resource operations; this is a bug in the generated provider.")
+		return
 	}
 	reqPath := "/organizations/{organization}/projects/{project}/commits/{ref}"
-	reqPath = strings.ReplaceAll(reqPath, "{organization}", config.Organization.ValueString())
-	reqPath = strings.ReplaceAll(reqPath, "{project}", config.Project.ValueString())
-	reqPath = strings.ReplaceAll(reqPath, "{ref}", config.Ref.ValueString())
+	reqPath = strings.ReplaceAll(reqPath, "{organization}", url.PathEscape(config.Organization.ValueString()))
+	reqPath = strings.ReplaceAll(reqPath, "{project}", url.PathEscape(config.Project.ValueString()))
+	reqPath = strings.ReplaceAll(reqPath, "{ref}", url.PathEscape(config.Ref.ValueString()))
 	httpReq, err := d.client.NewRequest(ctx, http.MethodGet, reqPath, nil)
 	if err != nil {
 		resp.Diagnostics.AddError("Error reading mycloud_get_commit", fmt.Sprintf("Could not build request: %s", err))
@@ -100,6 +106,7 @@ func (d *GetCommitDataSource) Read(ctx context.Context, req datasource.ReadReque
 	}
 	resp.Diagnostics.Append(resp.State.Set(ctx, &config)...)
 }
+
 // Configure stores the API client supplied by the provider.
 func (d *GetCommitDataSource) Configure(_ context.Context, req datasource.ConfigureRequest, resp *datasource.ConfigureResponse) {
 	if req.ProviderData == nil {
@@ -107,10 +114,8 @@ func (d *GetCommitDataSource) Configure(_ context.Context, req datasource.Config
 	}
 	c, ok := req.ProviderData.(*client.Client)
 	if !ok {
-		{
-			resp.Diagnostics.AddError("Unexpected Data Source Configure Type", fmt.Sprintf("Expected *client.Client, got: %T. Please report this issue to the provider developers.", req.ProviderData))
-			return
-		}
+		resp.Diagnostics.AddError("Unexpected Data Source Configure Type", fmt.Sprintf("Expected *client.Client, got: %T. Please report this issue to the provider developers.", req.ProviderData))
+		return
 	}
 	d.client = c
 }

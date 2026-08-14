@@ -2,12 +2,12 @@
 page_title: "mycloud_list_configs Data Source - mycloud"
 subcategory: ""
 description: |-
-  
+  List Configs
 ---
 
 # mycloud_list_configs Data Source
 
-
+List Configs
 
 ## Example Usage
 

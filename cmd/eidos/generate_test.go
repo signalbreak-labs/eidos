@@ -475,7 +475,7 @@ func TestGenerateCommand_ConfigExcludesResource(t *testing.T) {
 generation:
   resources:
     exclude:
-      - create_pets
+      - pet
 `
 	if err := os.WriteFile(configPath, []byte(configContent), 0o600); err != nil {
 		t.Fatalf("write config: %v", err)
@@ -486,11 +486,11 @@ generation:
 		t.Fatalf("generate with --config failed: %v\noutput:\n%s", err, out.String())
 	}
 	output := out.String()
-	if strings.Contains(output, "resource_create_pets.go") {
-		t.Errorf("excluded resource create_pets should not appear in dry-run output:\n%s", output)
+	if strings.Contains(output, "resource_pet.go") {
+		t.Errorf("excluded resource pet should not appear in dry-run output:\n%s", output)
 	}
-	if !strings.Contains(output, "resource_delete_pet.go") {
-		t.Errorf("non-excluded resource delete_pet should appear in dry-run output:\n%s", output)
+	if !strings.Contains(output, "resource_owner.go") {
+		t.Errorf("non-excluded resource owner should appear in dry-run output:\n%s", output)
 	}
 }
 
@@ -535,11 +535,11 @@ func TestGenerateCommand_GenerateTerraformTests(t *testing.T) {
 		t.Fatalf("generate with --generate-terraform-tests failed: %v\noutput:\n%s", err, out.String())
 	}
 	output := out.String()
-	if !strings.Contains(output, "tests/create_pets.tftest.hcl") {
-		t.Errorf("expected .tftest.hcl file for create_pets in dry-run output:\n%s", output)
+	if !strings.Contains(output, "tests/pet.tftest.hcl") {
+		t.Errorf("expected .tftest.hcl file for pet in dry-run output:\n%s", output)
 	}
-	if !strings.Contains(output, "tests/modules/create_pets/main.tf") {
-		t.Errorf("expected test module for create_pets in dry-run output:\n%s", output)
+	if !strings.Contains(output, "tests/modules/pet/main.tf") {
+		t.Errorf("expected test module for pet in dry-run output:\n%s", output)
 	}
 }
 
@@ -574,8 +574,82 @@ paths:
                   id:
                     type: string
   /pets/{id}:
+    get:
+      operationId: getPet
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id:
+                    type: string
+                  name:
+                    type: string
     delete:
       operationId: deletePet
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '204':
+          description: deleted
+  /owners:
+    post:
+      operationId: createOwner
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name:
+                  type: string
+      responses:
+        '201':
+          description: created
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id:
+                    type: string
+  /owners/{id}:
+    get:
+      operationId: getOwner
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id:
+                    type: string
+                  name:
+                    type: string
+    delete:
+      operationId: deleteOwner
       parameters:
         - name: id
           in: path

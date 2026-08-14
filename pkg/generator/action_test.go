@@ -16,8 +16,10 @@ import (
 )
 
 // TestActionFile_Render verifies that ActionFile emits the expected action
-// struct, model, Metadata, Schema, Invoke, and optional ModifyPlan and
-// ValidateConfig methods.
+// struct, model, Metadata, Schema, Invoke, and the optional ModifyPlan method
+// (wired from the declared modify_plan_operation). ValidateConfig must not be
+// emitted: the action declares no validate_config_operation, and the optional
+// interface is only implemented when a server-side validation endpoint resolves.
 func TestActionFile_Render(t *testing.T) {
 	a := sampleActionIR()
 
@@ -32,7 +34,6 @@ func TestActionFile_Render(t *testing.T) {
 		"package provider",
 		"var _ action.Action = (*RebootServerAction)(nil)",
 		"var _ action.ActionWithModifyPlan = (*RebootServerAction)(nil)",
-		"var _ action.ActionWithValidateConfig = (*RebootServerAction)(nil)",
 		"type RebootServerAction struct",
 		"type RebootServerActionModel struct",
 		"ServerId types.String `tfsdk:\"server_id\"`",
@@ -42,7 +43,6 @@ func TestActionFile_Render(t *testing.T) {
 		"func (r *RebootServerAction) Schema",
 		"func (r *RebootServerAction) Invoke",
 		"func (r *RebootServerAction) ModifyPlan",
-		"func (r *RebootServerAction) ValidateConfig",
 		"resp.TypeName = \"mycloud_reboot_server\"",
 		"schema.Schema",
 		"schema.StringAttribute",
@@ -56,6 +56,15 @@ func TestActionFile_Render(t *testing.T) {
 	for _, want := range wantSubstrings {
 		if !strings.Contains(got, want) {
 			t.Errorf("generated action file missing %q\ncontent:\n%s", want, got)
+		}
+	}
+	for _, absent := range []string{
+		"ActionWithValidateConfig",
+		"func (r *RebootServerAction) ValidateConfig",
+		"ValidateConfig is not wired to a remote API endpoint",
+	} {
+		if strings.Contains(got, absent) {
+			t.Errorf("generated action file unexpectedly contains %q\ncontent:\n%s", absent, got)
 		}
 	}
 }
@@ -413,6 +422,15 @@ func sampleActionIR() ir.ActionIR {
 		TypeName:    "mycloud_reboot_server",
 		Description: "Reboots a server.",
 		ModifyPlan:  true,
+		// A resolvable modify_plan_operation so the sample covers the wired
+		// ModifyPlan path. No validate_config_operation is declared: the sample
+		// must not emit a ValidateConfig method (the optional interface is only
+		// implemented when a server-side validation endpoint resolves).
+		ModifyPlanMapping: &ir.OperationMappingIR{
+			Method:       "POST",
+			PathTemplate: "/servers/{server_id}/reboot/preview",
+			SuccessCodes: []int{200},
+		},
 		ConfigSchema: ir.ObjectSchemaIR{
 			Attributes: []ir.AttributeIR{
 				{
@@ -466,12 +484,14 @@ func generateActionModule(t *testing.T, p ir.ProviderIR) string {
 	}
 
 	h := Harness{OutputDir: tmp}
-	pf, err := ProviderFile(p)
+	clientImport := cfg.modulePath() + "/internal/client"
+	pf, err := ProviderFileWithClient(p, clientImport)
 	if err != nil {
-		t.Fatalf("ProviderFile() error = %v", err)
+		t.Fatalf("ProviderFileWithClient() error = %v", err)
 	}
 	files := append(BuildFiles(cfg), pf)
-	files = append(files, ActionFiles(p.Actions, testClientImport)...)
+	files = append(files, ActionFiles(p.Actions, clientImport)...)
+	files = append(files, ClientFiles(p)...)
 	if err := h.Generate(files); err != nil {
 		t.Fatalf("Generate() error = %v", err)
 	}

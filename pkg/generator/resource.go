@@ -320,7 +320,7 @@ func registerResourceImports(f *astgen.File, r ir.ResourceIR, wiring resourceWir
 		if wiring.needsJSONBody || wiring.needsXMLBody || wiring.needsMultipartBody {
 			f.AddImport("bytes", "")
 		}
-		if wiring.needsFormBody {
+		if wiring.needsFormBody || wiring.needsURL {
 			f.AddImport("net/url", "")
 		}
 		// multipart/form-data bodies are built with mime/multipart.NewWriter;
@@ -353,6 +353,11 @@ func registerResourceImports(f *astgen.File, r ir.ResourceIR, wiring resourceWir
 		}
 		if !parsed.simple {
 			f.AddImports("fmt", "strings")
+		}
+		// Non-string import attributes parse the string ID segment with strconv;
+		// the parse-failure diagnostic is formatted with fmt.Sprintf.
+		if importNeedsParsing(r, parsed.attrs) {
+			f.AddImports("strconv", "fmt")
 		}
 	}
 	needsList, needsSet := blockValidatorPackageImports(r.Schema)
@@ -667,13 +672,27 @@ func frameworkResourceAttributeExpr(attr ir.AttributeIR, attrPath string) ast.Ex
 // primitive/union/unrepresentable handling below (G12).
 func resourceCollectionAttributeExpr(attr ir.AttributeIR, attrPath string) ast.Expr {
 	elem := schema.DynamicUnionElement(attr.Schema.Collection.ElementType)
-	// A collection whose element is dynamic/null cannot be represented as a
-	// framework collection (List{ElementType: DynamicType} is rejected by the
-	// framework); treat it as an unrepresentable shape (G12).
+	// A collection whose element is directly dynamic/null cannot be represented
+	// as a typed framework collection (List{ElementType: DynamicType} is
+	// rejected). At the top level it degrades to DynamicAttribute; nested, it is
+	// dropped (nil) so the enclosing collection's ContainsNestedDynamic check
+	// can promote the ancestor (G12).
 	if elem.Type == ir.TypeDynamic || elem.Type == ir.TypeNull {
 		if strings.Contains(attrPath, ".") {
 			return nil
 		}
+		return astgen.CompositeLit(astgen.QualExpr("schema", "DynamicAttribute"), resourceAttributeValues(attr, nil)...)
+	}
+	// A collection whose element is an object (or nested collection) that
+	// contains a dynamic at any depth cannot be rendered as a typed framework
+	// collection either: the terraform-plugin-framework rejects any collection
+	// whose element type contains a dynamic (fwtype.ContainsCollectionWithDynamic).
+	// Emit the whole collection as a DynamicAttribute, per the framework's own
+	// guidance. This is valid in an object-or-top-level context; when this
+	// collection is itself nested inside another collection's element, the
+	// enclosing collection's ContainsNestedDynamic check has already promoted that
+	// ancestor, so this emission is never reached inside a collection.
+	if schema.ContainsNestedDynamic(elem) {
 		return astgen.CompositeLit(astgen.QualExpr("schema", "DynamicAttribute"), resourceAttributeValues(attr, nil)...)
 	}
 	switch attr.Schema.Collection.Kind {

@@ -773,13 +773,16 @@ func TestEphemeralMergedBlocks(t *testing.T) {
 }
 
 // TestEphemeralMergedAttributes_TypeConflict verifies that merging config and
-// result attributes with incompatible types panics.
+// result attributes with incompatible types degrades the merged attribute to a
+// dynamic type instead of panicking (G2): the plugin-framework ephemeral schema
+// has no first-class union attribute, so a conflicting config/result value can
+// only be represented as dynamic. Generation stays honest rather than crashing.
 func TestEphemeralMergedAttributes_TypeConflict(t *testing.T) {
 	er := ir.EphemeralResourceIR{
 		Name: "temporary_credential",
 		ConfigSchema: ir.ObjectSchemaIR{
 			Attributes: []ir.AttributeIR{
-				{Name: "duration", Schema: ir.SchemaIR{Type: ir.TypeInt}},
+				{Name: "duration", Optional: true, Schema: ir.SchemaIR{Type: ir.TypeInt}},
 			},
 		},
 		ResultSchema: ir.ObjectSchemaIR{
@@ -789,12 +792,29 @@ func TestEphemeralMergedAttributes_TypeConflict(t *testing.T) {
 		},
 	}
 
-	defer func() {
-		if r := recover(); r == nil {
-			t.Errorf("ephemeralMergedAttributes() did not panic for incompatible types")
+	// Should not panic.
+	merged := ephemeralMergedAttributes(er)
+
+	var found bool
+	for _, attr := range merged {
+		if attr.Name != "duration" {
+			continue
 		}
-	}()
-	_ = ephemeralMergedAttributes(er)
+		found = true
+		if attr.Schema.Type != ir.TypeDynamic {
+			t.Errorf("duration.Schema.Type = %q, want %q (dynamic degradation)", attr.Schema.Type, ir.TypeDynamic)
+		}
+		if attr.Schema.Collection != nil || attr.Schema.Union != nil || attr.Schema.Attributes != nil {
+			t.Errorf("duration schema shape fields must be cleared for dynamic degradation, got collection=%v union=%v attrs=%v",
+				attr.Schema.Collection, attr.Schema.Union, attr.Schema.Attributes)
+		}
+		if !attr.Optional || !attr.Computed {
+			t.Errorf("duration must be Optional+Computed after merge, got Optional=%v Computed=%v", attr.Optional, attr.Computed)
+		}
+	}
+	if !found {
+		t.Fatalf("duration attribute missing from merged attributes: %+v", merged)
+	}
 }
 
 // TestEphemeralAttributeExpr_Panic verifies that an unsupported attribute schema

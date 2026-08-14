@@ -5,6 +5,7 @@ import (
 	"testing"
 )
 import tfframeworkresource "github.com/hashicorp/terraform-plugin-framework/resource"
+
 // TestNetworkResourceSchemaValidation verifies that the generated resource schema is valid.
 func TestNetworkResourceSchemaValidation(t *testing.T) {
 	r := &NetworkResource{}
@@ -15,6 +16,7 @@ func TestNetworkResourceSchemaValidation(t *testing.T) {
 		t.Fatalf("schema validation failed: %s", diags)
 	}
 }
+
 // TestNetworkResourceMetadata verifies that the generated resource reports the expected type name.
 func TestNetworkResourceMetadata(t *testing.T) {
 	r := &NetworkResource{}

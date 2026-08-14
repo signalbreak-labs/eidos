@@ -2,12 +2,12 @@
 page_title: "mycloud_list_branches List Resource - mycloud"
 subcategory: ""
 description: |-
-  
+  List branches
 ---
 
 # mycloud_list_branches List Resource
 
-
+List branches
 
 ## Example Usage
 

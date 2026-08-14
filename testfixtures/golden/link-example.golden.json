@@ -73,7 +73,7 @@
   },
   {
     "path": "internal/provider/data_source_get_user.go",
-    "reason": "data source link_example_api_get_user"
+    "reason": "data source link-example-api_get_user"
   },
   {
     "path": "internal/provider/data_source_get_user_test.go",
@@ -81,7 +81,7 @@
   },
   {
     "path": "internal/provider/data_source_list_users.go",
-    "reason": "data source link_example_api_list_users"
+    "reason": "data source link-example-api_list_users"
   },
   {
     "path": "internal/provider/data_source_list_users_test.go",
@@ -89,7 +89,7 @@
   },
   {
     "path": "internal/provider/list_list_users.go",
-    "reason": "list resource link_example_api_list_users"
+    "reason": "list resource link-example-api_list_users"
   },
   {
     "path": "internal/provider/provider.go",

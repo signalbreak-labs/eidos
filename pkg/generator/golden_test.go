@@ -221,10 +221,9 @@ func renderSourceFiles(t *testing.T, provider *ir.ProviderIR) []sourceFile {
 	t.Helper()
 
 	cfg := buildConfigFor(provider)
-	providerImport := cfg.ModulePath + "/internal/provider"
 	clientImport := cfg.ModulePath + "/internal/client"
 
-	files := sourceFilesFor(provider, cfg, providerImport, clientImport)
+	files := sourceFilesFor(provider, clientImport)
 	out := make([]sourceFile, 0, len(files))
 	for _, f := range files {
 		var buf bytes.Buffer
@@ -257,7 +256,7 @@ func buildConfigFor(provider *ir.ProviderIR) generator.BuildConfig {
 // sourceFilesFor assembles the implementation files that may contain CRUD,
 // action, ephemeral, list, data-source, or function method bodies. It mirrors
 // the body-bearing portion of the generator's planned file list.
-func sourceFilesFor(provider *ir.ProviderIR, _ generator.BuildConfig, providerImport, clientImport string) []generator.File {
+func sourceFilesFor(provider *ir.ProviderIR, clientImport string) []generator.File {
 	if provider == nil {
 		return nil
 	}
@@ -279,7 +278,7 @@ func sourceFilesFor(provider *ir.ProviderIR, _ generator.BuildConfig, providerIm
 	files = append(files, generator.ListResourceFiles(pir.ListResources, clientImport)...)
 	files = append(files, generator.FunctionFiles(pir.Functions)...)
 	files = append(files, generator.ClientFiles(pir)...)
-	files = append(files, generator.ValueMappersFile(pir.Resources, providerImport), generator.ValidatorsFile(pir))
+	files = append(files, generator.ValidatorsFile(pir))
 	return files
 }
 

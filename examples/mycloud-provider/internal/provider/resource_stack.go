@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 )
 import (
@@ -16,16 +17,19 @@ import (
 	types "github.com/hashicorp/terraform-plugin-framework/types"
 	client "github.com/mycloud/terraform-provider-mycloud/internal/client"
 )
+
 // Compile-time interface assertions.
 var (
 	_ resource.Resource                = (*StackResource)(nil)
 	_ resource.ResourceWithImportState = (*StackResource)(nil)
 	_ resource.ResourceWithConfigure   = (*StackResource)(nil)
 )
+
 // StackResource is the generated Terraform managed resource implementation.
 type StackResource struct {
 	client *client.Client
 }
+
 // StackResourceModel describes the Terraform state and plan shape for StackResource.
 type StackResourceModel struct {
 	ApiVersion types.String `tfsdk:"api_version" json:"apiVersion"`
@@ -36,14 +40,17 @@ type StackResourceModel struct {
 	Status     types.Object `tfsdk:"status"`
 	Workspace  types.String `tfsdk:"workspace"`
 }
+
 // Metadata returns the resource type name.
 func (r *StackResource) Metadata(_ context.Context, _ resource.MetadataRequest, resp *resource.MetadataResponse) {
 	resp.TypeName = "mycloud_stack"
 }
+
 // Schema returns the Terraform schema for this resource.
 func (r *StackResource) Schema(_ context.Context, _ resource.SchemaRequest, resp *resource.SchemaResponse) {
-	resp.Schema = schema.Schema{Attributes: map[string]schema.Attribute{"api_version": schema.StringAttribute{Optional: true, Computed: true}, "id": schema.StringAttribute{Computed: true}, "kind": schema.StringAttribute{Optional: true, Computed: true}, "name": schema.StringAttribute{Required: true}, "spec": schema.SingleNestedAttribute{Optional: true, Computed: true, Attributes: map[string]schema.Attribute{"replicas": schema.Int64Attribute{Computed: true}, "selector": schema.MapAttribute{Computed: true, ElementType: types.StringType}}}, "status": schema.SingleNestedAttribute{Optional: true, Computed: true, Attributes: map[string]schema.Attribute{"ready_replicas": schema.Int64Attribute{Computed: true}}}, "workspace": schema.StringAttribute{Required: true}}}
+	resp.Schema = schema.Schema{MarkdownDescription: "Read a Stack", Attributes: map[string]schema.Attribute{"api_version": schema.StringAttribute{Optional: true, Computed: true}, "id": schema.StringAttribute{Computed: true}, "kind": schema.StringAttribute{Optional: true, Computed: true}, "name": schema.StringAttribute{Required: true}, "spec": schema.SingleNestedAttribute{Optional: true, Computed: true, Attributes: map[string]schema.Attribute{"replicas": schema.Int64Attribute{Optional: true, Computed: true}, "selector": schema.MapAttribute{Optional: true, Computed: true, ElementType: types.StringType}}}, "status": schema.SingleNestedAttribute{Optional: true, Computed: true, Attributes: map[string]schema.Attribute{"ready_replicas": schema.Int64Attribute{Optional: true, Computed: true}}}, "workspace": schema.StringAttribute{Required: true}}}
 }
+
 // Create provisions the remote resource and stores the resulting state.
 func (r *StackResource) Create(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) {
 	var plan StackResourceModel
@@ -52,10 +59,8 @@ func (r *StackResource) Create(ctx context.Context, req resource.CreateRequest, 
 		return
 	}
 	if r.client == nil {
-		{
-			resp.Diagnostics.AddError("Client Not Configured", "The API client was not set on the resource. The provider Configure method must run before resource operations; this is a bug in the generated provider.")
-			return
-		}
+		resp.Diagnostics.AddError("Client Not Configured", "The API client was not set on the resource. The provider Configure method must run before resource operations; this is a bug in the generated provider.")
+		return
 	}
 	body, err := modelToJSONMap(&plan)
 	if err != nil {
@@ -68,7 +73,7 @@ func (r *StackResource) Create(ctx context.Context, req resource.CreateRequest, 
 		return
 	}
 	reqPath := "/workspaces/{workspace}/stacks"
-	reqPath = strings.ReplaceAll(reqPath, "{workspace}", plan.Workspace.ValueString())
+	reqPath = strings.ReplaceAll(reqPath, "{workspace}", url.PathEscape(plan.Workspace.ValueString()))
 	httpReq, err := r.client.NewRequest(ctx, http.MethodPost, reqPath, bytes.NewReader(payload))
 	if err != nil {
 		resp.Diagnostics.AddError("Error creating mycloud_stack", fmt.Sprintf("Could not build request: %s", err))
@@ -113,6 +118,7 @@ func (r *StackResource) Create(ctx context.Context, req resource.CreateRequest, 
 	}
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 }
+
 // Read refreshes the Terraform state with the latest remote values.
 func (r *StackResource) Read(ctx context.Context, req resource.ReadRequest, resp *resource.ReadResponse) {
 	var state StackResourceModel
@@ -121,14 +127,12 @@ func (r *StackResource) Read(ctx context.Context, req resource.ReadRequest, resp
 		return
 	}
 	if r.client == nil {
-		{
-			resp.Diagnostics.AddError("Client Not Configured", "The API client was not set on the resource. The provider Configure method must run before resource operations; this is a bug in the generated provider.")
-			return
-		}
+		resp.Diagnostics.AddError("Client Not Configured", "The API client was not set on the resource. The provider Configure method must run before resource operations; this is a bug in the generated provider.")
+		return
 	}
 	reqPath := "/workspaces/{workspace}/stacks/{name}"
-	reqPath = strings.ReplaceAll(reqPath, "{workspace}", state.Workspace.ValueString())
-	reqPath = strings.ReplaceAll(reqPath, "{name}", state.Name.ValueString())
+	reqPath = strings.ReplaceAll(reqPath, "{workspace}", url.PathEscape(state.Workspace.ValueString()))
+	reqPath = strings.ReplaceAll(reqPath, "{name}", url.PathEscape(state.Name.ValueString()))
 	httpReq, err := r.client.NewRequest(ctx, http.MethodGet, reqPath, nil)
 	if err != nil {
 		resp.Diagnostics.AddError("Error reading mycloud_stack", fmt.Sprintf("Could not build request: %s", err))
@@ -167,6 +171,7 @@ func (r *StackResource) Read(ctx context.Context, req resource.ReadRequest, resp
 	}
 	resp.Diagnostics.Append(resp.State.Set(ctx, &state)...)
 }
+
 // Update modifies the remote resource to match the desired plan.
 func (r *StackResource) Update(ctx context.Context, req resource.UpdateRequest, resp *resource.UpdateResponse) {
 	var plan StackResourceModel
@@ -183,10 +188,8 @@ func (r *StackResource) Update(ctx context.Context, req resource.UpdateRequest, 
 	}
 	preserveStateIntoPlan(&plan, &state)
 	if r.client == nil {
-		{
-			resp.Diagnostics.AddError("Client Not Configured", "The API client was not set on the resource. The provider Configure method must run before resource operations; this is a bug in the generated provider.")
-			return
-		}
+		resp.Diagnostics.AddError("Client Not Configured", "The API client was not set on the resource. The provider Configure method must run before resource operations; this is a bug in the generated provider.")
+		return
 	}
 	body, err := modelToJSONMap(&plan)
 	if err != nil {
@@ -199,8 +202,8 @@ func (r *StackResource) Update(ctx context.Context, req resource.UpdateRequest, 
 		return
 	}
 	reqPath := "/workspaces/{workspace}/stacks/{name}"
-	reqPath = strings.ReplaceAll(reqPath, "{workspace}", plan.Workspace.ValueString())
-	reqPath = strings.ReplaceAll(reqPath, "{name}", plan.Name.ValueString())
+	reqPath = strings.ReplaceAll(reqPath, "{workspace}", url.PathEscape(plan.Workspace.ValueString()))
+	reqPath = strings.ReplaceAll(reqPath, "{name}", url.PathEscape(plan.Name.ValueString()))
 	httpReq, err := r.client.NewRequest(ctx, http.MethodPut, reqPath, bytes.NewReader(payload))
 	if err != nil {
 		resp.Diagnostics.AddError("Error updating mycloud_stack", fmt.Sprintf("Could not build request: %s", err))
@@ -236,6 +239,7 @@ func (r *StackResource) Update(ctx context.Context, req resource.UpdateRequest, 
 	}
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 }
+
 // Delete destroys the remote resource.
 func (r *StackResource) Delete(ctx context.Context, req resource.DeleteRequest, resp *resource.DeleteResponse) {
 	var state StackResourceModel
@@ -244,14 +248,12 @@ func (r *StackResource) Delete(ctx context.Context, req resource.DeleteRequest, 
 		return
 	}
 	if r.client == nil {
-		{
-			resp.Diagnostics.AddError("Client Not Configured", "The API client was not set on the resource. The provider Configure method must run before resource operations; this is a bug in the generated provider.")
-			return
-		}
+		resp.Diagnostics.AddError("Client Not Configured", "The API client was not set on the resource. The provider Configure method must run before resource operations; this is a bug in the generated provider.")
+		return
 	}
 	reqPath := "/workspaces/{workspace}/stacks/{name}"
-	reqPath = strings.ReplaceAll(reqPath, "{workspace}", state.Workspace.ValueString())
-	reqPath = strings.ReplaceAll(reqPath, "{name}", state.Name.ValueString())
+	reqPath = strings.ReplaceAll(reqPath, "{workspace}", url.PathEscape(state.Workspace.ValueString()))
+	reqPath = strings.ReplaceAll(reqPath, "{name}", url.PathEscape(state.Name.ValueString()))
 	httpReq, err := r.client.NewRequest(ctx, http.MethodDelete, reqPath, nil)
 	if err != nil {
 		resp.Diagnostics.AddError("Error deleting mycloud_stack", fmt.Sprintf("Could not build request: %s", err))
@@ -276,6 +278,7 @@ func (r *StackResource) Delete(ctx context.Context, req resource.DeleteRequest, 
 		return
 	}
 }
+
 // Configure stores the API client supplied by the provider.
 func (r *StackResource) Configure(_ context.Context, req resource.ConfigureRequest, resp *resource.ConfigureResponse) {
 	if req.ProviderData == nil {
@@ -283,21 +286,18 @@ func (r *StackResource) Configure(_ context.Context, req resource.ConfigureReque
 	}
 	c, ok := req.ProviderData.(*client.Client)
 	if !ok {
-		{
-			resp.Diagnostics.AddError("Unexpected Resource Configure Type", fmt.Sprintf("Expected *client.Client, got: %T. Please report this issue to the provider developers.", req.ProviderData))
-			return
-		}
+		resp.Diagnostics.AddError("Unexpected Resource Configure Type", fmt.Sprintf("Expected *client.Client, got: %T. Please report this issue to the provider developers.", req.ProviderData))
+		return
 	}
 	r.client = c
 }
+
 // ImportState imports an existing remote resource into Terraform state.
 func (r *StackResource) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {
 	stackImportIDParts := strings.Split(req.ID, ":")
 	if len(stackImportIDParts) != 2 {
-		{
-			resp.Diagnostics.AddError("Unexpected Import Identifier", fmt.Sprintf("Expected import identifier with format \"{workspace}:{name}\". Got %q.", req.ID))
-			return
-		}
+		resp.Diagnostics.AddError("Unexpected Import Identifier", fmt.Sprintf("Expected import identifier with format \"{workspace}:{name}\". Got %q.", req.ID))
+		return
 	}
 	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("workspace"), stackImportIDParts[0])...)
 	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("name"), stackImportIDParts[1])...)

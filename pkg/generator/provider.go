@@ -852,6 +852,18 @@ func frameworkAttributeExpr(attr ir.AttributeIR, attrPath string) ast.Expr {
 	// Collection types.
 	if s.Collection != nil {
 		elem := schema.DynamicUnionElement(s.Collection.ElementType)
+		// A collection whose element is, or contains at any depth, a dynamic
+		// type cannot be rendered as a typed framework collection: the
+		// terraform-plugin-framework rejects any collection whose element type
+		// contains a dynamic type (fwtype.ContainsCollectionWithDynamic). Emit
+		// the whole collection as a DynamicAttribute instead, per the
+		// framework's own guidance. An enclosing collection's
+		// ContainsNestedDynamic check promotes any collection ancestor, so this
+		// DynamicAttribute is only reached in an object-or-top-level context
+		// where it is valid.
+		if schema.ContainsNestedDynamic(elem) {
+			return astgen.CompositeLit(astgen.QualExpr("schema", "DynamicAttribute"), attributeValues(attr, nil)...)
+		}
 		switch s.Collection.Kind {
 		case ir.List:
 			if schema.IsPrimitiveSchema(elem) {
@@ -1262,11 +1274,20 @@ func modelFieldType(attr ir.AttributeIR) ast.Expr {
 	}
 
 	if s.Collection != nil {
-		// A collection whose element is itself a collection (nested collection,
-		// G2) or is dynamic/null (G12) is rendered as a DynamicAttribute in the
-		// schema, so the model field must be types.Dynamic to stay consistent.
-		elem := s.Collection.ElementType
-		if elem.Collection != nil || elem.Type == ir.TypeDynamic || elem.Type == ir.TypeNull {
+		// The schema generator degrades a collection to a DynamicAttribute when
+		// its element cannot be rendered as a typed framework collection: when
+		// the element is a union (collapsed to dynamic via DynamicUnionElement),
+		// is dynamic/null, is a nested collection (the list-element builder
+		// cannot render list-of-list, so the schema falls back to
+		// DynamicAttribute via G2), or contains a dynamic at any depth
+		// (fwtype.ContainsCollectionWithDynamic rejects it). The model field
+		// type must track that predicate exactly so the tfsdk Go field type
+		// matches the schema attribute type — a types.List field under a
+		// DynamicAttribute fails state decoding at runtime. Mirrors
+		// dataSourceCollectionAttributeExpr and its resource/ephemeral/action
+		// peers, which use DynamicUnionElement + ContainsNestedDynamic.
+		elem := schema.DynamicUnionElement(s.Collection.ElementType)
+		if elem.Collection != nil || schema.ContainsNestedDynamic(elem) {
 			return astgen.QualExpr("types", "Dynamic")
 		}
 		switch s.Collection.Kind {

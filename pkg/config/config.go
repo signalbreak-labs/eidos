@@ -129,6 +129,10 @@ type ServerVariableConfig struct {
 // resource name, type name, and full name (case-insensitive, ignoring
 // underscores and surrounding whitespace).
 //
+// Operation may be an OpenAPI operationId or a "METHOD /path" form (e.g.
+// "PUT /snmp/throttle") matched against the resource's create method and path.
+// The method+path form disambiguates operations that share an operationId.
+//
 // Providing ResourceName overwrites the resource's Name, TypeName, and
 // FullName with toHumanName(ResourceName).
 type ResourceOverride struct {
@@ -203,6 +207,10 @@ type WriteOnlyAttribute struct {
 // source name, type name, and full name (case-insensitive, ignoring underscores
 // and surrounding whitespace).
 //
+// Operation may be an OpenAPI operationId or a "METHOD /path" form (e.g.
+// "GET /snmp/throttle") matched against the data source's read method and path.
+// The method+path form disambiguates operations that share an operationId.
+//
 // Providing DatasourceName overwrites the data source's Name, TypeName, and
 // FullName with toHumanName(DatasourceName).
 type DatasourceOverride struct {
@@ -215,8 +223,10 @@ type DatasourceOverride struct {
 //
 // Operation is required for matching. It is compared against the action's
 // source operation (case-insensitive, ignoring underscores and surrounding
-// whitespace). If the action has no source operation, the override Operation is
-// matched against the action's name and type name instead.
+// whitespace) or its "METHOD /path" invoke mapping (e.g. "PUT /snmp/throttle").
+// The method+path form disambiguates operations that share an operationId. If
+// the action has no source operation, the override Operation is matched against
+// the action's name and type name instead.
 //
 // Providing Name overwrites the action's Name, TypeName, and FullName with
 // toHumanName(Name).

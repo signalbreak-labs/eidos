@@ -154,8 +154,6 @@ func TestCollectFromProviderIR_FullProvider(t *testing.T) {
 		"internal/provider/list_pet.go",
 		"internal/provider/function_iplookup.go",
 		"internal/provider/validators.go",
-		"internal/protocol/value_mappers.go",
-		"internal/protocol/value_mappers_test.go",
 		"docs/resources/pet.md",
 		"docs/data-sources/pet.md",
 		"docs/actions/rebootserver.md",

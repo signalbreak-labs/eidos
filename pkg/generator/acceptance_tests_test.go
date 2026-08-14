@@ -46,6 +46,145 @@ func TestResourceAcceptanceTestFile_Render(t *testing.T) {
 	}
 }
 
+// TestResourceAcceptanceTestFile_DynamicAttributeScalarPlaceholder verifies that
+// the acceptance test config emits a SCALAR placeholder for a DynamicAttribute,
+// never a collection literal. A collection whose element is dynamic degrades to a
+// DynamicAttribute; configuring it with a list literal ([ null ]) parses as a
+// Tuple whose element types the response mapping (dynamicValueFromRaw) cannot
+// reliably reproduce, causing "wrong final value type: tuple required" at apply
+// (G18, seen on GitLab protected_branch.allowed_to_merge). A Required Dynamic
+// (e.g. GitLab application.scopes / Grafana alert_rule.data) needs a non-null
+// scalar ("example"); an Optional Dynamic uses null (G-22).
+func TestResourceAcceptanceTestFile_DynamicAttributeScalarPlaceholder(t *testing.T) {
+	r := sampleResourceIR()
+	r.Schema.Attributes = append(r.Schema.Attributes,
+		// Optional collection-of-dynamic: degrades to DynamicAttribute.
+		ir.AttributeIR{Name: "allowed", Optional: true, Schema: ir.SchemaIR{
+			Collection: &ir.CollectionType{Kind: ir.List, ElementType: ir.SchemaIR{Type: ir.TypeDynamic}},
+		}},
+		// Required primitive dynamic.
+		ir.AttributeIR{Name: "payload", Required: true, Schema: ir.SchemaIR{Type: ir.TypeDynamic}},
+	)
+	pir := sampleProviderWithResourceIR()
+	pir.Resources = []ir.ResourceIR{r}
+	cfg := BuildConfig{ProviderName: pir.Name, Namespace: pir.Name}
+
+	file := ResourceAcceptanceTestFile(pir, r, cfg)
+	var buf bytes.Buffer
+	if err := file.Render(&buf); err != nil {
+		t.Fatalf("Render() error = %v", err)
+	}
+	got := buf.String()
+
+	// The config is emitted inside a Go fmt.Sprintf string literal, so HCL
+	// double-quotes are escaped as \" in the rendered source.
+	if !strings.Contains(got, `payload = \"example\"`) {
+		t.Errorf("Required Dynamic should render a string scalar placeholder; got:\n%s", got)
+	}
+	if !strings.Contains(got, "allowed = null") {
+		t.Errorf("Optional collection-degraded Dynamic should render null; got:\n%s", got)
+	}
+	if strings.Contains(got, "allowed = [") {
+		t.Errorf("Optional Dynamic must NOT render a collection literal (Tuple mismatch at apply); got:\n%s", got)
+	}
+}
+
+// TestResourceAcceptanceTestFile_PractitionerSuppliedIdentity verifies that the
+// generated mock does NOT overwrite a Required, practitioner-supplied identity
+// attribute with the mock placeholder, and keys state by the identity value so
+// create and update share one slot (letting the single-entry read fallback serve
+// import). Previously the mock unconditionally set body[idAttr] = "example-id",
+// so the echoed response disagreed with the plan ("was \"example\", but now
+// \"example-id\"") on GitLab variable.key / Grafana mute_timing.name, and import
+// 404'd because create and update landed in separate state slots (G-22).
+func TestResourceAcceptanceTestFile_PractitionerSuppliedIdentity(t *testing.T) {
+	r := sampleResourceIR()
+	// "name" is a Required string attribute; making it the identity models a
+	// practitioner-supplied identity (like GitLab variable.key).
+	r.IDAttribute = "name"
+	pir := sampleProviderWithResourceIR()
+	pir.Resources = []ir.ResourceIR{r}
+	cfg := BuildConfig{ProviderName: pir.Name, Namespace: pir.Name}
+
+	file := ResourceAcceptanceTestFile(pir, r, cfg)
+	var buf bytes.Buffer
+	if err := file.Render(&buf); err != nil {
+		t.Fatalf("Render() error = %v", err)
+	}
+	got := buf.String()
+
+	// The create handler must synthesize the identity only when absent.
+	if !strings.Contains(got, `if _, ok := body["name"]; !ok`) {
+		t.Errorf("create should conditionally synthesize the identity (practitioner may supply it); got:\n%s", got)
+	}
+	// State must be keyed by the identity value, not the bare path-tail
+	// placeholder, so create and update share a slot and import's read fallback
+	// can serve the created resource.
+	if !strings.Contains(got, `id = fmt.Sprintf("%v", body["name"])`) {
+		t.Errorf("create should key state by the identity value body[idAttr]; got:\n%s", got)
+	}
+}
+
+// TestResourceAcceptanceTestFile_CompositeIdentityImport verifies the mock
+// resolves import for a composite-identity resource (e.g. GitLab
+// /groups/{group}/labels/{name}). Such a resource is created on a collection
+// path but read/updated/deleted on a nested instance path; both share the same
+// route prefix (/groups), but the path-tail id differs between create
+// ("1/labels") and read ("1/labels/foo"), so a direct state0[id] lookup misses
+// and the prior single-entry (len==1) range fallback could not bridge create
+// and update once they landed in separate slots. The fix tracks the most recent
+// create/update storage key in lastKey and the read falls back to state0[lastKey]
+// (G-22).
+func TestResourceAcceptanceTestFile_CompositeIdentityImport(t *testing.T) {
+	r := sampleResourceIR()
+	// Model the GitLab label shape: collection create, nested instance CRUD.
+	r.IDAttribute = "name"
+	r.Importable = true
+	r.ImportIDFormat = "{group}:{name}"
+	// Add the composite identity attributes so parseImportIDFormat resolves.
+	r.Schema.Attributes = append(r.Schema.Attributes,
+		ir.AttributeIR{Name: "group", Required: true, Schema: ir.SchemaIR{Type: ir.TypeString}},
+	)
+	r.CRUDMapping = ir.CRUDMappingIR{
+		Create: ir.OperationMappingIR{Method: "POST", PathTemplate: "/groups/{group}/labels"},
+		Read:   ir.OperationMappingIR{Method: "GET", PathTemplate: "/groups/{group}/labels/{name}"},
+		Update: &ir.OperationMappingIR{Method: "PUT", PathTemplate: "/groups/{group}/labels/{name}"},
+		Delete: ir.OperationMappingIR{Method: "DELETE", PathTemplate: "/groups/{group}/labels/{name}"},
+	}
+	pir := sampleProviderWithResourceIR()
+	pir.Resources = []ir.ResourceIR{r}
+	cfg := BuildConfig{ProviderName: pir.Name, Namespace: pir.Name}
+
+	file := ResourceAcceptanceTestFile(pir, r, cfg)
+	var buf bytes.Buffer
+	if err := file.Render(&buf); err != nil {
+		t.Fatalf("Render() error = %v", err)
+	}
+	got := buf.String()
+
+	// lastKey must be declared and initialized to "".
+	if !strings.Contains(got, `lastKey0 := ""`) {
+		t.Errorf("mock should declare lastKey0 := \"\"; got:\n%s", got)
+	}
+	// The read handler must fall back to state0[lastKey0] when the direct
+	// lookup misses, gated on lastKey0 != "".
+	if !strings.Contains(got, `!ok && lastKey0 != ""`) {
+		t.Errorf("read fallback should use lastKey0 != \"\"; got:\n%s", got)
+	}
+	if !strings.Contains(got, `body = state0[lastKey0]`) {
+		t.Errorf("read fallback should read state0[lastKey0]; got:\n%s", got)
+	}
+	// The obsolete single-entry range fallback must be gone.
+	if strings.Contains(got, `len(state0) == 1`) {
+		t.Errorf("read fallback must not use the obsolete len(state0)==1 range; got:\n%s", got)
+	}
+	// Both create and update must record lastKey0 = id after storing state.
+	// There should be exactly two `lastKey0 = id` assignments (create + update).
+	if n := strings.Count(got, `lastKey0 = id`); n != 2 {
+		t.Errorf("expected 2 `lastKey0 = id` assignments (create + update), got %d; got:\n%s", n, got)
+	}
+}
+
 // TestResourceAcceptanceTestFile_MockDeleteClearsState verifies that the generated
 // mock server tracks resources by ID, deletes the entry on DELETE, and returns a
 // 404 on a subsequent GET for the same ID.
@@ -71,6 +210,60 @@ func TestResourceAcceptanceTestFile_MockDeleteClearsState(t *testing.T) {
 	for _, want := range wantSubstrings {
 		if !strings.Contains(got, want) {
 			t.Errorf("generated mock handler missing %q\ncontent:\n%s", want, got)
+		}
+	}
+}
+
+// TestResourceAcceptanceTestFile_MockTypedIDAndStatusCodes verifies the mock
+// server adapts to the resource ID attribute's primitive type and to the
+// spec's declared success codes (G18/G20 hardening). A resource with an
+// int64 ID and create success code 200 must yield a mock whose create handler
+// writes body["id"] = 1 (an integer literal, decodable by jsonToAttrValue into
+// types.Int64) and returns the spec's 200 — not the string "example-id" nor
+// the conventional 201, both of which would make the generated client's
+// success check or response decode fail.
+func TestResourceAcceptanceTestFile_MockTypedIDAndStatusCodes(t *testing.T) {
+	pir := sampleProviderWithResourceIR()
+	r := pir.Resources[0]
+	// Switch the ID to an integer and declare non-conventional success codes so
+	// the mock must emit the spec's codes rather than its defaults.
+	for i := range r.Schema.Attributes {
+		if r.Schema.Attributes[i].Name == "id" {
+			r.Schema.Attributes[i].Schema.Type = ir.TypeInt
+		}
+	}
+	r.CRUDMapping.Create.SuccessCodes = []int{200}
+	r.CRUDMapping.Read.SuccessCodes = []int{200}
+	r.CRUDMapping.Update.SuccessCodes = []int{200}
+	r.CRUDMapping.Delete.SuccessCodes = []int{200}
+	pir.Resources[0] = r
+	cfg := BuildConfig{ProviderName: pir.Name, Namespace: pir.Name}
+
+	file := ResourceAcceptanceTestFile(pir, r, cfg)
+	var buf bytes.Buffer
+	if err := file.Render(&buf); err != nil {
+		t.Fatalf("Render() error = %v", err)
+	}
+	got := buf.String()
+
+	wantSubstrings := []string{
+		`body["id"] = 1`,
+		`id = "1"`,           // state-key default matching the integer ID's string form
+		`w.WriteHeader(200)`, // spec-declared create code, not the 201 default
+		`ImportStateId: "1"`, // import ID an int64 id attribute can parse back
+	}
+	for _, want := range wantSubstrings {
+		if !strings.Contains(got, want) {
+			t.Errorf("generated mock missing %q\ncontent:\n%s", want, got)
+		}
+	}
+	for _, absent := range []string{
+		`body["id"] = "example-id"`,
+		`w.WriteHeader(201)`,
+		`w.WriteHeader(204)`,
+	} {
+		if strings.Contains(got, absent) {
+			t.Errorf("generated mock must not contain %q\ncontent:\n%s", absent, got)
 		}
 	}
 }
@@ -174,7 +367,7 @@ func TestResourceAcceptanceTestFile_MalformedImportFormatFailsLoud(t *testing.T)
 }
 
 // TestResourceAcceptanceTestFiles_Multiple verifies that ResourceAcceptanceTestFiles
-// emits one acceptance test file per resource with deterministic paths.
+// emits one acceptance test file per wired resource with deterministic paths.
 func TestResourceAcceptanceTestFiles_Multiple(t *testing.T) {
 	pir := ir.ProviderIR{
 		Name:     "mycloud",
@@ -186,8 +379,13 @@ func TestResourceAcceptanceTestFiles_Multiple(t *testing.T) {
 			},
 		},
 		Resources: []ir.ResourceIR{
-			{Name: "pet", TypeName: "mycloud_pet"},
-			{Name: "owner", TypeName: "mycloud_owner"},
+			sampleResourceIR(),
+			func() ir.ResourceIR {
+				r := sampleResourceIR()
+				r.Name = "owner"
+				r.TypeName = "mycloud_owner"
+				return r
+			}(),
 		},
 	}
 	cfg := BuildConfig{ProviderName: pir.Name, Namespace: pir.Name}
@@ -202,6 +400,35 @@ func TestResourceAcceptanceTestFiles_Multiple(t *testing.T) {
 	}
 	if files[1].Path != "internal/provider/resource_owner_acceptance_test.go" {
 		t.Errorf("file[1].Path = %q, want %q", files[1].Path, "internal/provider/resource_owner_acceptance_test.go")
+	}
+}
+
+// TestResourceAcceptanceTestFiles_SkipsScaffolded verifies that a scaffolded
+// (unwired) resource — whose CRUD bodies report "is not wired to a remote API
+// endpoint" — gets no acceptance test, so the generated provider's own
+// `go test ./...` does not fail on a lifecycle test that could never pass.
+func TestResourceAcceptanceTestFiles_SkipsScaffolded(t *testing.T) {
+	pir := ir.ProviderIR{
+		Name:     "mycloud",
+		TypeName: "mycloud",
+		ConfigSchema: ir.ObjectSchemaIR{
+			Attributes: []ir.AttributeIR{
+				{Name: "api_key", Required: true, Schema: ir.SchemaIR{Type: ir.TypeString}},
+			},
+		},
+		Resources: []ir.ResourceIR{
+			sampleResourceIR(),
+			{Name: "scaffolded", TypeName: "mycloud_scaffolded"},
+		},
+	}
+	cfg := BuildConfig{ProviderName: pir.Name, Namespace: pir.Name}
+
+	files := ResourceAcceptanceTestFiles(pir, cfg)
+	if len(files) != 1 {
+		t.Fatalf("ResourceAcceptanceTestFiles() returned %d files, want 1 (scaffolded resource skipped)", len(files))
+	}
+	if files[0].Path != "internal/provider/resource_pet_acceptance_test.go" {
+		t.Errorf("file[0].Path = %q, want %q", files[0].Path, "internal/provider/resource_pet_acceptance_test.go")
 	}
 }
 
@@ -744,5 +971,68 @@ func TestResourceAcceptanceTestFile_OAuth2Lifecycle(t *testing.T) {
 	}
 	if !strings.Contains(string(out), "PASS") {
 		t.Fatalf("expected OAuth2 acceptance test to pass, got:\n%s", out)
+	}
+}
+
+// TestResourceAcceptanceTestFile_NonIDAttrAndPOSTDelete verifies the mock server
+// adapts to a resource whose ID attribute is not named "id" and whose delete is
+// a non-DELETE method on a nested path (G-21). The mock must echo the ID back
+// under the actual ID attribute name (body["symbol"], not body["id"]) so the
+// create response decodes into the resource's ID attribute; the create status
+// must stay the spec's 201 rather than being overwritten by the nested-path
+// delete's 200; and the POST handler must dispatch nested-path requests (id
+// containing '/') to the delete branch. A resource with no update mapping must
+// also skip the update step, since its scaffold Update reports a diagnostic and
+// the step could never pass.
+func TestResourceAcceptanceTestFile_NonIDAttrAndPOSTDelete(t *testing.T) {
+	r := ir.ResourceIR{
+		Name:        "ship",
+		TypeName:    "mycloud_ship",
+		Description: "A ship resource.",
+		IDAttribute: "symbol",
+		Schema: ir.ObjectSchemaIR{
+			Attributes: []ir.AttributeIR{
+				{Name: "symbol", Computed: true, Schema: ir.SchemaIR{Type: ir.TypeString}},
+				{Name: "name", Required: true, Schema: ir.SchemaIR{Type: ir.TypeString}},
+			},
+		},
+		CRUDMapping: ir.CRUDMappingIR{
+			Create: ir.OperationMappingIR{Method: "POST", PathTemplate: "/ships", SuccessCodes: []int{201}},
+			Read:   ir.OperationMappingIR{Method: "GET", PathTemplate: "/ships/{id}", SuccessCodes: []int{200}},
+			// No Update mapping: the Update method stays a scaffold, so the
+			// lifecycle test must not emit an update step.
+			Delete: ir.OperationMappingIR{Method: "POST", PathTemplate: "/ships/{id}/scrap", SuccessCodes: []int{200}},
+		},
+		Importable: true,
+	}
+	pir := sampleProviderWithResourceIR()
+	pir.Resources[0] = r
+	cfg := BuildConfig{ProviderName: pir.Name, Namespace: pir.Name}
+
+	file := ResourceAcceptanceTestFile(pir, r, cfg)
+	var buf bytes.Buffer
+	if err := file.Render(&buf); err != nil {
+		t.Fatalf("Render() error = %v", err)
+	}
+	got := buf.String()
+
+	wantSubstrings := []string{
+		`body["symbol"] = "example-id"`, // ID echoed under the ID attribute name
+		`w.WriteHeader(201)`,            // create status not overwritten by the delete
+		`strings.Contains(id, "/")`,     // nested-path POST dispatched to delete
+		`w.WriteHeader(200)`,            // delete status
+	}
+	for _, want := range wantSubstrings {
+		if !strings.Contains(got, want) {
+			t.Errorf("generated mock missing %q\ncontent:\n%s", want, got)
+		}
+	}
+	for _, absent := range []string{
+		`body["id"] = "example-id"`,                                // must not hardcode the "id" key
+		`Config: testAccShipResourceConfig(server.URL, "updated")`, // no update step for a scaffold Update
+	} {
+		if strings.Contains(got, absent) {
+			t.Errorf("generated acceptance test must not contain %q\ncontent:\n%s", absent, got)
+		}
 	}
 }

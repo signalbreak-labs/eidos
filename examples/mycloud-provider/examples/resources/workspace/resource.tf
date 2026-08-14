@@ -6,5 +6,6 @@ resource "mycloud_workspace" "example" {
   }
   name = "example"
   status = {
+    phase = "example"
   }
 }

@@ -18,10 +18,6 @@ Trimmed MyCloud API reference spec for golden file regression tests. The schemas
 - [mycloud_secret](resources/secret.md)
 - [mycloud_stack](resources/stack.md)
 - [mycloud_workspace](resources/workspace.md)
-- [mycloud_create_pull_request](resources/create_pull_request.md)
-- [mycloud_update_pull_request](resources/update_pull_request.md)
-- [mycloud_create_task](resources/create_task.md)
-- [mycloud_update_task](resources/update_task.md)
 
 ## Data Sources
 
@@ -42,6 +38,13 @@ Trimmed MyCloud API reference spec for golden file regression tests. The schemas
 - [mycloud_list_networks](data-sources/list_networks.md)
 - [mycloud_list_secrets](data-sources/list_secrets.md)
 - [mycloud_list_stacks](data-sources/list_stacks.md)
+
+## Actions
+
+- [mycloud_create_pull_request](actions/create_pull_request.md)
+- [mycloud_update_pull_request](actions/update_pull_request.md)
+- [mycloud_create_task](actions/create_task.md)
+- [mycloud_update_task](actions/update_task.md)
 
 ## List Resources
 

@@ -182,6 +182,96 @@ func TestResourceCollectionAttributeExpr(t *testing.T) {
 	}
 }
 
+// TestResourceCollectionObjectElementWithDynamic locks in the Gigamon fix: a
+// collection whose element is an object carrying a non-discriminated union
+// property (endPointProperties oneOf) must degrade to DynamicAttribute rather
+// than emit a SetNestedAttribute with a nested DynamicAttribute, which the
+// framework rejects. This must hold even when the collection is nested under
+// object attributes (a dotted path), because a DynamicAttribute is valid inside
+// a SingleNestedAttribute; an enclosing collection's ContainsNestedDynamic
+// check promotes any collection ancestor.
+func TestResourceCollectionObjectElementWithDynamic(t *testing.T) {
+	endPoint := ir.SchemaIR{Attributes: []ir.AttributeIR{
+		{Name: "id", Schema: schemaType(ir.TypeString)},
+		{Name: "end_point_properties", Schema: ir.SchemaIR{Union: &ir.UnionType{Kind: ir.OneOf, Variants: []ir.SchemaIR{{Type: ir.TypeString}}}}},
+	}}
+	for _, tc := range []struct {
+		name     string
+		attrPath string
+	}{
+		{"top-level", "sources"},
+		{"nested-under-objects", "traffic_policy_graph.end_points.sources"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			expr := resourceCollectionAttributeExpr(
+				ir.AttributeIR{Schema: ir.SchemaIR{Collection: &ir.CollectionType{Kind: ir.Set, ElementType: endPoint}}},
+				tc.attrPath)
+			if expr == nil {
+				t.Fatalf("expected DynamicAttribute, got nil")
+			}
+			rendered := renderExpr(t, expr)
+			if !strings.Contains(rendered, "DynamicAttribute") {
+				t.Errorf("expected DynamicAttribute, got %v", rendered)
+			}
+			if strings.Contains(rendered, "SetNestedAttribute") {
+				t.Errorf("must not emit SetNestedAttribute (forbidden nested dynamic), got %v", rendered)
+			}
+		})
+	}
+	// A collection of a plain object (no dynamic property) stays a typed
+	// SetNestedAttribute.
+	expr := resourceCollectionAttributeExpr(
+		ir.AttributeIR{Schema: ir.SchemaIR{Collection: &ir.CollectionType{Kind: ir.Set, ElementType: ir.SchemaIR{Attributes: []ir.AttributeIR{{Name: "id", Schema: schemaType(ir.TypeString)}}}}}},
+		"plain")
+	if expr == nil || !strings.Contains(renderExpr(t, expr), "SetNestedAttribute") {
+		t.Errorf("plain set-of-object should stay SetNestedAttribute, got %v", renderExpr(t, expr))
+	}
+}
+
+// TestDataSourceCollectionObjectElementWithDynamic mirrors the resource fix for
+// the data source collection emitter: a collection whose element is an object
+// carrying a non-discriminated union property must degrade to DynamicAttribute
+// rather than emit a *NestedAttribute with a nested DynamicAttribute, which the
+// framework rejects (fwtype.ContainsCollectionWithDynamic). Must hold at the top
+// level and when nested under object attributes (a dotted path).
+func TestDataSourceCollectionObjectElementWithDynamic(t *testing.T) {
+	endPoint := ir.SchemaIR{Attributes: []ir.AttributeIR{
+		{Name: "id", Schema: schemaType(ir.TypeString)},
+		{Name: "end_point_properties", Schema: ir.SchemaIR{Union: &ir.UnionType{Kind: ir.OneOf, Variants: []ir.SchemaIR{{Type: ir.TypeString}}}}},
+	}}
+	for _, tc := range []struct {
+		name     string
+		attrPath string
+	}{
+		{"top-level", "sources"},
+		{"nested-under-objects", "traffic_policy_graphs.end_points.sources"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			expr := dataSourceCollectionAttributeExpr(
+				ir.AttributeIR{Schema: ir.SchemaIR{Collection: &ir.CollectionType{Kind: ir.Set, ElementType: endPoint}}},
+				tc.attrPath)
+			if expr == nil {
+				t.Fatalf("expected DynamicAttribute, got nil")
+			}
+			rendered := renderExpr(t, expr)
+			if !strings.Contains(rendered, "DynamicAttribute") {
+				t.Errorf("expected DynamicAttribute, got %v", rendered)
+			}
+			if strings.Contains(rendered, "SetNestedAttribute") {
+				t.Errorf("must not emit SetNestedAttribute (forbidden nested dynamic), got %v", rendered)
+			}
+		})
+	}
+	// A collection of a plain object (no dynamic property) stays a typed
+	// SetNestedAttribute.
+	expr := dataSourceCollectionAttributeExpr(
+		ir.AttributeIR{Schema: ir.SchemaIR{Collection: &ir.CollectionType{Kind: ir.Set, ElementType: ir.SchemaIR{Attributes: []ir.AttributeIR{{Name: "id", Schema: schemaType(ir.TypeString)}}}}}},
+		"plain")
+	if expr == nil || !strings.Contains(renderExpr(t, expr), "SetNestedAttribute") {
+		t.Errorf("plain data-source set-of-object should stay SetNestedAttribute, got %v", renderExpr(t, expr))
+	}
+}
+
 // TestActionMapElementAttributeExpr covers the primitive and object element
 // branches plus the nil fallthrough.
 func TestActionMapElementAttributeExpr(t *testing.T) {

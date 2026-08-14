@@ -2,12 +2,12 @@
 page_title: "mycloud_list_stacks List Resource - mycloud"
 subcategory: ""
 description: |-
-  
+  List Stacks
 ---
 
 # mycloud_list_stacks List Resource
 
-
+List Stacks
 
 ## Example Usage
 

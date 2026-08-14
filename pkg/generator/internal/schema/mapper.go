@@ -220,6 +220,11 @@ func generateMapperFromValueFunc(f *astgen.File, node *mapperNode) {
 			continue
 		}
 		fieldStmts = append(fieldStmts, fieldDecodeStmts(node, attr)...)
+		// A nested-collection field emits an unconditional error return; any
+		// statement after it is unreachable, so stop emitting further fields.
+		if endsWithReturn(fieldStmts) {
+			break
+		}
 	}
 
 	body := make([]ast.Stmt, 0, 5+len(fieldStmts)+1)
@@ -237,25 +242,34 @@ func generateMapperFromValueFunc(f *astgen.File, node *mapperNode) {
 				astgen.Lit(node.TypeName),
 			)),
 		),
-		astgen.DeclStmt(astgen.VarDeclGen(astgen.VarSpec(
-			"vals",
-			astgen.MapType(astgen.Ident("string"), astgen.QualExpr("tftypes", "Value")),
-			nil,
-		))),
-		&ast.IfStmt{
-			Init: astgen.Assign(
-				[]ast.Expr{astgen.Ident("err")},
-				[]ast.Expr{astgen.Call(
-					astgen.Selector(astgen.Ident("v"), "As"),
-					astgen.UnaryPtr(astgen.Ident("vals")),
-				)},
-			),
-			Cond: astgen.NotEqual(astgen.Ident("err"), astgen.Nil()),
-			Body: astgen.Block(astgen.Return(astgen.Ident("m"), astgen.Ident("err"))),
-		},
 	)
+	// When a nested-collection field is the only field, its terminal error
+	// return means `vals` is never read; declaring it would be an
+	// unused-variable compile error.
+	if needsVals(fieldStmts) {
+		body = append(body,
+			astgen.DeclStmt(astgen.VarDeclGen(astgen.VarSpec(
+				"vals",
+				astgen.MapType(astgen.Ident("string"), astgen.QualExpr("tftypes", "Value")),
+				nil,
+			))),
+			&ast.IfStmt{
+				Init: astgen.Assign(
+					[]ast.Expr{astgen.Ident("err")},
+					[]ast.Expr{astgen.Call(
+						astgen.Selector(astgen.Ident("v"), "As"),
+						astgen.UnaryPtr(astgen.Ident("vals")),
+					)},
+				),
+				Cond: astgen.NotEqual(astgen.Ident("err"), astgen.Nil()),
+				Body: astgen.Block(astgen.Return(astgen.Ident("m"), astgen.Ident("err"))),
+			},
+		)
+	}
 	body = append(body, fieldStmts...)
-	body = append(body, astgen.Return(astgen.Ident("m"), astgen.Nil()))
+	if !endsWithReturn(fieldStmts) {
+		body = append(body, astgen.Return(astgen.Ident("m"), astgen.Nil()))
+	}
 
 	f.AddDecl(astgen.FuncDeclFull(
 		funcName,
@@ -266,6 +280,27 @@ func generateMapperFromValueFunc(f *astgen.File, node *mapperNode) {
 		),
 		astgen.Block(body...),
 	))
+}
+
+// endsWithReturn reports whether the last statement is an unconditional return
+// (e.g. the nested-collection unsupported error). Used to stop emitting field
+// statements after a terminal return so the generated function has no
+// unreachable code.
+func endsWithReturn(stmts []ast.Stmt) bool {
+	if len(stmts) == 0 {
+		return false
+	}
+	_, ok := stmts[len(stmts)-1].(*ast.ReturnStmt)
+	return ok
+}
+
+// needsVals reports whether the generated function references the `vals` map.
+// The trailing return always reads `vals`, so it is needed whenever that return
+// is emitted (!endsWithReturn). When the terminal nested-collection error return
+// is the last statement, `vals` is still needed if a normal field before it
+// reads the map (len > 1). Only a lone terminal return leaves `vals` unused.
+func needsVals(fieldStmts []ast.Stmt) bool {
+	return !endsWithReturn(fieldStmts) || len(fieldStmts) > 1
 }
 
 // fieldDecodeStmts generates the statements that decode a single attribute from
@@ -865,27 +900,54 @@ func generateMapperToValueFunc(f *astgen.File, node *mapperNode) {
 	funcName := node.TypeName + "ToValue"
 
 	var fieldStmts []ast.Stmt
+	hasObjectLike := false
 	for _, attr := range node.Schema.Attributes {
 		if SkipAttrForModel(attr) {
 			continue
 		}
+		if attr.Schema.Collection == nil && IsObjectLike(attr.Schema) {
+			hasObjectLike = true
+		}
 		fieldStmts = append(fieldStmts, fieldEncodeStmts(node, attr)...)
+		// A nested-collection field emits an unconditional error return; any
+		// statement after it is unreachable, so stop emitting further fields.
+		if endsWithReturn(fieldStmts) {
+			break
+		}
 	}
 
-	body := append([]ast.Stmt{
-		astgen.AssignSingle(
-			astgen.Ident("vals"),
-			astgen.CompositeLit(astgen.MapType(astgen.Ident("string"), astgen.QualExpr("tftypes", "Value"))),
-		),
-	}, fieldStmts...)
-	body = append(body, astgen.Return(
-		astgen.Call(
-			astgen.QualExpr("tftypes", "NewValue"),
-			astgen.Call(astgen.Ident(node.TypeName+"Type")),
-			astgen.Ident("vals"),
-		),
-		astgen.Nil(),
-	))
+	body := []ast.Stmt{}
+	// When a nested-collection field is the only field, its terminal error
+	// return means `vals` is never read; declaring it would be an
+	// unused-variable compile error.
+	if needsVals(fieldStmts) {
+		body = append(body,
+			astgen.AssignSingle(
+				astgen.Ident("vals"),
+				astgen.CompositeLit(astgen.MapType(astgen.Ident("string"), astgen.QualExpr("tftypes", "Value"))),
+			),
+		)
+	}
+	// Object-like fields encode via `nested, err = ...`. Declare both once at
+	// function-body scope so multiple object fields, and optional ones whose
+	// assignment sits inside an if-block, all share the same variables.
+	if hasObjectLike {
+		body = append(body,
+			astgen.VarDecl("nested", "tftypes.Value", nil),
+			astgen.VarDecl("err", "error", nil),
+		)
+	}
+	body = append(body, fieldStmts...)
+	if !endsWithReturn(fieldStmts) {
+		body = append(body, astgen.Return(
+			astgen.Call(
+				astgen.QualExpr("tftypes", "NewValue"),
+				astgen.Call(astgen.Ident(node.TypeName+"Type")),
+				astgen.Ident("vals"),
+			),
+			astgen.Nil(),
+		))
+	}
 
 	f.AddDecl(astgen.FuncDeclFull(
 		funcName,
@@ -899,7 +961,8 @@ func generateMapperToValueFunc(f *astgen.File, node *mapperNode) {
 }
 
 // fieldEncodeStmts generates the statements that encode a single model field
-// into the tftypes.Value map.
+// into the tftypes.Value map. Object-like fields assign to `nested`/`err`,
+// which generateMapperToValueFunc declares once at function-body scope.
 func fieldEncodeStmts(node *mapperNode, attr ir.AttributeIR) []ast.Stmt {
 	s := attr.Schema
 	field := resolvedFieldName(node.FieldNames, attr)
@@ -912,9 +975,10 @@ func fieldEncodeStmts(node *mapperNode, attr ir.AttributeIR) []ast.Stmt {
 		childName := nestedTypeName(node.TypeName, field)
 		if attr.Required {
 			return []ast.Stmt{
-				astgen.Assign(
+				astgen.AssignStmt(
 					[]ast.Expr{astgen.Ident("nested"), astgen.Ident("err")},
 					[]ast.Expr{astgen.Call(astgen.Ident(childName+"ToValue"), astgen.Selector(astgen.Ident("m"), field))},
+					token.ASSIGN,
 				),
 				astgen.If(
 					astgen.NotEqual(astgen.Ident("err"), astgen.Nil()),
@@ -934,9 +998,10 @@ func fieldEncodeStmts(node *mapperNode, attr ir.AttributeIR) []ast.Stmt {
 			astgen.IfElse(
 				astgen.NotEqual(astgen.Selector(astgen.Ident("m"), field), astgen.Nil()),
 				astgen.Block(
-					astgen.Assign(
+					astgen.AssignStmt(
 						[]ast.Expr{astgen.Ident("nested"), astgen.Ident("err")},
 						[]ast.Expr{astgen.Call(astgen.Ident(childName+"ToValue"), astgen.StarExpr(astgen.Selector(astgen.Ident("m"), field)))},
+						token.ASSIGN,
 					),
 					astgen.If(
 						astgen.NotEqual(astgen.Ident("err"), astgen.Nil()),

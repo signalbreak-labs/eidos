@@ -2,12 +2,12 @@
 page_title: "mycloud_project Resource - mycloud"
 subcategory: ""
 description: |-
-  
+  Get a project
 ---
 
 # mycloud_project Resource
 
-
+Get a project
 
 ## Example Usage
 

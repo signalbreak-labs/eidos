@@ -1,9 +1,11 @@
 package transformer
 
 import (
+	"fmt"
 	"sort"
 	"strings"
 
+	"github.com/signalbreak-labs/eidos/pkg/diagnostics"
 	"github.com/signalbreak-labs/eidos/pkg/ir"
 )
 
@@ -77,10 +79,12 @@ func schemaIRFromSpecRecursive(spec SchemaSpec) ir.SchemaIR {
 }
 
 // nestedAttributesFromSpec builds the nested attribute list for an object-typed
-// SchemaSpec. Nested attributes are read-only (Computed) because the resource
-// schema's writable surface is the top-level attribute set reconciled against the
-// request body; deeper nesting is rendered as SingleNestedAttribute /
-// ListNestedAttribute state whose values come from the API response.
+// SchemaSpec. Nested attributes are read-only (Computed) by default; a managed
+// resource's writable nested surface is reconciled against the request body
+// after the fact by reconcileNestedRequestFlags, which promotes request-required
+// nested fields to Required/Optional so the practitioner can supply them on
+// create. Deeper nesting that the request does not carry stays Computed
+// (server-managed).
 func nestedAttributesFromSpec(spec SchemaSpec) []ir.AttributeIR {
 	names := make([]string, 0, len(spec.Properties))
 	for name := range spec.Properties {
@@ -98,6 +102,147 @@ func nestedAttributesFromSpec(spec SchemaSpec) []ir.AttributeIR {
 		})
 	}
 	return attrs
+}
+
+// reconcileNestedRequestFlags walks the nested attributes within a managed
+// resource attribute's schema and re-derives their Required/Optional/Computed
+// flags from the matching request-body property, mirroring the top-level
+// reconciliation in ManagedResourceSchema (G18). nestedAttributesFromSpec marks
+// every nested attribute Computed, which is correct for response-only shapes but
+// wrong for objects the practitioner must supply on create: a request-required
+// nested field becomes Required, a request-optional field becomes Optional, and
+// only request-absent fields stay Computed. The type structure is unchanged; only
+// the flags are corrected.
+//
+// responseEchoes reports whether the response also returns this attribute (and
+// thus its nested children). When true (the attribute is in the state shape), an
+// optional request field is Optional+Computed: the practitioner may set it and the
+// provider may repopulate it after apply (G18). When false (a request-only
+// attribute the response does not echo), an optional request field is Optional
+// only — the server never returns it, so Computed would leave the framework
+// expecting a value the provider cannot supply, causing inconsistency after
+// apply. Required fields are Required either way; request-absent fields are
+// Computed only when the response echoes the parent (otherwise they cannot
+// occur, since a request-only attribute's children all come from the request).
+//
+// requestProp is the request body's version of the attribute; a requestProp with
+// no Properties/Items means the request does not carry nested shape for this
+// attribute, so its nested children keep their existing flags.
+func reconcileNestedRequestFlags(s *ir.SchemaIR, requestProp SchemaSpec, responseEchoes bool) {
+	if s == nil {
+		return
+	}
+	// Descend through collections to the element schema, matching the request
+	// property's items (array) or additionalProperties (map). A collection
+	// element inherits the parent's response-echo status: the response returns
+	// the element only if it returns the enclosing collection.
+	if s.Collection != nil {
+		if s.Collection.Kind == ir.Map {
+			if requestProp.AdditionalProperties != nil {
+				reconcileNestedRequestFlags(&s.Collection.ElementType, *requestProp.AdditionalProperties, responseEchoes)
+			}
+			return
+		}
+		if requestProp.Items != nil {
+			reconcileNestedRequestFlags(&s.Collection.ElementType, *requestProp.Items, responseEchoes)
+		}
+		return
+	}
+	if len(s.Attributes) == 0 || len(requestProp.Properties) == 0 {
+		return
+	}
+	reqProps := make(map[string]struct{}, len(requestProp.Properties))
+	for n := range requestProp.Properties {
+		reqProps[n] = struct{}{}
+	}
+	reqRequired := make(map[string]bool, len(requestProp.Required))
+	for _, n := range requestProp.Required {
+		reqRequired[n] = true
+	}
+	for i := range s.Attributes {
+		a := &s.Attributes[i]
+		_, inReq := reqProps[a.WireName]
+		switch {
+		case reqRequired[a.WireName]:
+			a.Required = true
+			a.Optional = false
+			a.Computed = false
+		case inReq:
+			a.Optional = true
+			a.Required = false
+			// When the response also returns this field, the provider may
+			// repopulate it after apply (G18). A request-only attribute's child
+			// is never server-populated, so it stays Optional only.
+			a.Computed = responseEchoes
+		default:
+			// A request-absent nested field is server-managed only when the
+			// response returns the parent; a request-only attribute has no such
+			// children (they all come from the request), so this arm is unreachable
+			// there but kept defensive.
+			a.Computed = responseEchoes
+			a.Optional = false
+			a.Required = false
+		}
+		// Recurse into the child's nested schema against the request's child,
+		// propagating the response-echo status.
+		if child, ok := requestProp.Properties[a.WireName]; ok {
+			reconcileNestedRequestFlags(&a.Schema, child, responseEchoes)
+		}
+	}
+}
+
+// applyManagedAttributeFlags sets the Required/Optional/Computed flags on a
+// managed-resource attribute derived from a response property, reconciling it
+// against the create request body so writable inputs stay writable and
+// server-assigned identifiers stay Computed. inRequest reports whether the
+// property appears in the create request body; requestRequired is the request
+// body's required-property set; requestSpec is the create request body schema
+// (nil when there is no request body), used to reconcile nested children. It
+// returns true when the attribute is the resource identifier ("id"), so the
+// caller can track whether the state shape already carries an id.
+func applyManagedAttributeFlags(
+	attr *ir.AttributeIR,
+	name, snake string,
+	inRequest bool,
+	requestRequired map[string]bool,
+	requestSpec *SchemaSpec,
+) bool {
+	// State-shape attributes are always echoed by the response, so an optional
+	// input the response also returns is Optional+Computed: the practitioner may
+	// set it, and the provider may populate it from the server (a create/read
+	// response that carries the field must not be "inconsistent after apply" just
+	// because the practitioner left it unset) (G18).
+	switch {
+	case requestRequired[name]:
+		attr.Required = true
+	case inRequest:
+		attr.Optional = true
+		attr.Computed = true
+	default:
+		attr.Computed = true
+	}
+	// A server-assigned identifier is Computed even when the request body
+	// happens to list it; the provider must not require the practitioner to
+	// supply the id on create. A practitioner-set identifier — one the create
+	// request body declares — keeps its Required/Optional semantics so
+	// resources whose name is set on create are distinguished from
+	// server-assigned ids (REMAINING_GAPS §3/#11).
+	if (snake == "id" || name == "id") && !inRequest && !requestRequired[name] {
+		attr.Required = false
+		attr.Optional = false
+		attr.Computed = true
+	}
+	// Reconcile nested children against the request body so writable nested
+	// fields (required/optional in the request body) are Required/Optional
+	// rather than unconditionally Computed. Only attributes the request body
+	// carries can expose writable nested fields; response-only attributes keep
+	// their Computed nested children (server-managed).
+	if requestSpec != nil {
+		if reqProp, ok := requestSpec.Properties[name]; ok {
+			reconcileNestedRequestFlags(&attr.Schema, reqProp, true)
+		}
+	}
+	return snake == "id" || name == "id"
 }
 
 // ManagedResourceSchema builds the object schema for a managed resource inferred
@@ -160,42 +305,14 @@ func ManagedResourceSchema(c ResourceCRUD) (ir.ObjectSchemaIR, string) {
 	for _, name := range names {
 		prop := stateSpec.Properties[name]
 		snake := SanitizeAttributeName(name)
-		if snake == "id" || name == "id" {
-			hasID = true
-		}
 		attr := ir.AttributeIR{
 			Name:     snake,
 			WireName: name,
 			Schema:   schemaIRFromSpecRecursive(prop),
 		}
 		_, inRequest := requestProps[name]
-		_, inState := stateSpec.Properties[name]
-		switch {
-		case requestRequired[name]:
-			attr.Required = true
-		case inRequest:
-			attr.Optional = true
-			// An optional input the response also returns is Optional+Computed:
-			// the practitioner may set it, and the provider may populate it from
-			// the server (a create/read response that carries the field must not
-			// be "inconsistent after apply" just because the practitioner left it
-			// unset) (G18).
-			if inState {
-				attr.Computed = true
-			}
-		default:
-			attr.Computed = true
-		}
-		// A server-assigned identifier is Computed even when the request body
-		// happens to list it; the provider must not require the practitioner to
-		// supply the id on create. A practitioner-set identifier — one the create
-		// request body declares — keeps its Required/Optional semantics so
-		// resources whose name is set on create are distinguished from
-		// server-assigned ids (REMAINING_GAPS §3/#11).
-		if (snake == "id" || name == "id") && !inRequest && !requestRequired[name] {
-			attr.Required = false
-			attr.Optional = false
-			attr.Computed = true
+		if applyManagedAttributeFlags(&attr, name, snake, inRequest, requestRequired, requestSpec) {
+			hasID = true
 		}
 		attrs = append(attrs, attr)
 	}
@@ -319,7 +436,7 @@ func appendFormDataOnlyAttributes(attrs []ir.AttributeIR, formData []Parameter, 
 		presentNames[a.Name] = true
 	}
 	for _, p := range formData {
-		snake := ToSnakeCase(p.Name)
+		snake := SanitizeAttributeName(p.Name)
 		if presentNames[snake] {
 			continue
 		}
@@ -373,6 +490,12 @@ func appendRequestOnlyAttributes(attrs []ir.AttributeIR, requestSpec *SchemaSpec
 		} else {
 			attr.Optional = true
 		}
+		// Reconcile nested children against the request body. A request-only
+		// attribute is not echoed by the response, so its optional nested inputs
+		// are Optional only (not Computed): the server never returns them, so
+		// marking them Computed would leave the framework expecting a value the
+		// provider cannot supply. Required nested inputs become Required.
+		reconcileNestedRequestFlags(&attr.Schema, requestSpec.Properties[name], false)
 		attrs = append(attrs, attr)
 		presentNames[snake] = true
 	}
@@ -485,7 +608,7 @@ func ObjectSchemaFromSpec(spec *SchemaSpec) ir.ObjectSchemaIR {
 // placeholder and required query/header parameter maps to a primitive attribute
 // and at least one Computed output attribute is present (i.e. the response is a
 // single object, not an array — array responses are a documented follow-up).
-func DataSourceSchema(op Operation) ir.ObjectSchemaIR {
+func DataSourceSchema(op Operation, diags *diagnostics.Diagnostics) ir.ObjectSchemaIR {
 	attrs := map[string]ir.AttributeIR{}
 	upsert := func(name string, mutate func(*ir.AttributeIR)) {
 		a := attrs[name]
@@ -502,15 +625,53 @@ func DataSourceSchema(op Operation) ir.ObjectSchemaIR {
 		default:
 			continue
 		}
-		snake := ToSnakeCase(p.Name)
+		// SanitizeAttributeName (not bare ToSnakeCase) so a parameter whose
+		// name normalizes to a reserved Terraform root attribute name — e.g.
+		// GitLab's `provider` query parameter on /api/v4/users and
+		// /api/v4/ldap/:provider/groups — is suffixed with "_" and merges with a
+		// same-named response property under the same sanitized key. Bare
+		// ToSnakeCase left "provider" unsuffixed, producing an invalid reserved
+		// root attribute that fails provider schema validation at runtime, and
+		// diverged from the response-property path (which already sanitized),
+		// so a param and response prop of the same name became two attributes
+		// instead of one (L-102).
+		snake := SanitizeAttributeName(p.Name)
 		upsert(snake, func(a *ir.AttributeIR) {
-			a.Schema = paramSchemaIR(p.Type)
+			a.Schema = paramSchemaIR(p.In, p.Type, p.ItemsType, p.Style, diags, p.Name)
 			a.WireName = p.Name
-			if p.Required || strings.EqualFold(p.In, "path") {
+			switch {
+			case p.Required || strings.EqualFold(p.In, "path"):
 				a.Required = true
 				a.Optional = false
-			} else {
+			case !a.Required:
+				// No prior required param (e.g. a path param) of the same sanitized
+				// name: this optional query/header param is a plain Optional input.
 				a.Optional = true
+				a.Required = false
+			default:
+				// An optional query/header param whose sanitized name collides with
+				// an already-Required attribute — typically a path param of the same
+				// name. GitLab's GET /api/v4/projects/{id}/terraform/state/{name}
+				// declares a path param `id` (required) and a query param `ID`
+				// (optional); both normalize to "id". Setting Optional alongside the
+				// existing Required yields an invalid "Required+Optional" attribute
+				// that the framework rejects at schema-load time and poisons the
+				// whole provider. Keep the attribute Required (the path param is the
+				// essential instance identifier) and surface the dropped optional
+				// param as a fail-loud warning so it is not lost silently.
+				a.Optional = false
+				if diags != nil {
+					*diags = append(*diags, diagnostics.Diagnostic{
+						Severity: diagnostics.Warning,
+						Summary:  "optional data source parameter dropped: name collides with a required parameter",
+						Detail: fmt.Sprintf(
+							"The optional %s parameter %q normalizes to the same attribute name (%q) "+
+								"as an existing required (path) parameter. To avoid an invalid "+
+								"Required+Optional attribute, it is not exposed as a separate input; "+
+								"the required parameter's attribute is kept instead.",
+							p.In, p.Name, snake),
+					})
+				}
 			}
 		})
 	}
@@ -592,7 +753,7 @@ func DataSourceSchema(op Operation) ir.ObjectSchemaIR {
 // collection path carries parameters could never resolve its path substitutions
 // against the config schema and would stay an honest scaffold even when the
 // response schema is present (PROJECT_DESIGN §23).
-func ListResourceConfigSchema(op Operation) ir.ObjectSchemaIR {
+func ListResourceConfigSchema(op Operation, diags *diagnostics.Diagnostics) ir.ObjectSchemaIR {
 	attrs := make([]ir.AttributeIR, 0, len(op.Parameters))
 	for _, p := range op.Parameters {
 		switch strings.ToLower(p.In) {
@@ -602,7 +763,7 @@ func ListResourceConfigSchema(op Operation) ir.ObjectSchemaIR {
 		}
 		attr := ir.AttributeIR{
 			Name:   SanitizeAttributeName(p.Name),
-			Schema: paramSchemaIR(p.Type),
+			Schema: paramSchemaIR(p.In, p.Type, p.ItemsType, p.Style, diags, p.Name),
 		}
 		if p.Required || strings.EqualFold(p.In, "path") {
 			attr.Required = true
@@ -615,11 +776,58 @@ func ListResourceConfigSchema(op Operation) ir.ObjectSchemaIR {
 	return ir.ObjectSchemaIR{Attributes: attrs}
 }
 
-// paramSchemaIR maps a parameter's declared scalar type to an ir primitive
-// schema. Parameters without a recognized scalar type default to string, which
-// is how path/query/header values are serialized into the request URL regardless
-// of the declared type, so the generated attribute is always usable as a filter.
-func paramSchemaIR(typeStr string) ir.SchemaIR {
+// paramSchemaIR maps a parameter's declared type to an ir schema. A scalar
+// parameter (string/integer/number/boolean) maps to the matching primitive;
+// parameters without a recognized scalar type default to string, which is how
+// path/query/header values are serialized into the request URL regardless of
+// the declared type, so the generated attribute is always usable as a filter.
+//
+// An array query parameter (OpenAPI `type: array, items: <scalar>`) is modeled
+// as a List of the element primitive. The default query serialization
+// (style: form, explode: true) emits one repeated query value per element
+// (`?name=a&name=b`), which the generator produces via url.Values.Add; only
+// query parameters are array-serialized, since header/cookie carry single scalar
+// values. Two genuinely lossy cases are surfaced with fail-loud warnings rather
+// than dropped silently (AGENTS.md "fail loud, never silently"):
+//
+//   - A non-scalar element (object/array items, or an unrecognized type) cannot
+//     be carried as repeated scalar query values; the recursive call falls
+//     through to string, so each element is serialized as a string.
+//   - A non-form serialization style (spaceDelimited, pipeDelimited, ...) is not
+//     modeled; repeated form values are emitted regardless. (explode cannot be
+//     checked reliably: the parser's bool field cannot distinguish an explicit
+//     `explode: false` from an omitted field whose default is true, so warning on
+//     it would false-positive on every array query parameter that omits explode.)
+func paramSchemaIR(in, typeStr, itemsTypeStr, style string, diags *diagnostics.Diagnostics, paramName string) ir.SchemaIR {
+	if strings.EqualFold(typeStr, "array") && strings.EqualFold(in, "query") {
+		elem := paramSchemaIR("", itemsTypeStr, "", "", nil, "")
+		if diags != nil {
+			if !isScalarItemType(itemsTypeStr) {
+				*diags = append(*diags, diagnostics.Diagnostic{
+					Severity: diagnostics.Warning,
+					Summary:  "array query parameter with non-scalar items modeled as a List of strings",
+					Detail: fmt.Sprintf(
+						"The query parameter %q is an array whose items type %q is not a scalar "+
+							"(string/integer/number/boolean); repeated query values can only carry scalars, "+
+							"so each element is serialized as a string.",
+						paramName, itemsTypeStr),
+				})
+			}
+			if style != "" && !strings.EqualFold(style, "form") {
+				*diags = append(*diags, diagnostics.Diagnostic{
+					Severity: diagnostics.Warning,
+					Summary:  "array query parameter serialized as repeated form values regardless of declared style",
+					Detail: fmt.Sprintf(
+						"The query parameter %q declares serialization style %q, but the generated "+
+							"provider always serializes an array query parameter as repeated form "+
+							"values (style: form, explode: true, i.e. `?name=a&name=b`). Values are "+
+							"sent correctly only when the API accepts the default form encoding.",
+						paramName, style),
+				})
+			}
+		}
+		return ir.SchemaIR{Collection: &ir.CollectionType{Kind: ir.List, ElementType: elem}}
+	}
 	switch strings.ToLower(strings.TrimSpace(typeStr)) {
 	case "integer":
 		return ir.SchemaIR{Type: ir.TypeInt}
@@ -630,6 +838,17 @@ func paramSchemaIR(typeStr string) ir.SchemaIR {
 	default:
 		return ir.SchemaIR{Type: ir.TypeString}
 	}
+}
+
+// isScalarItemType reports whether a parameter items type string is a scalar
+// that can be carried as a repeated query value: string, integer, number, or
+// boolean. Object/array/unrecognized item types are not scalar.
+func isScalarItemType(itemsTypeStr string) bool {
+	switch strings.ToLower(strings.TrimSpace(itemsTypeStr)) {
+	case "string", "integer", "number", "boolean":
+		return true
+	}
+	return false
 }
 
 // resourceStateSpec selects the SchemaSpec that best represents a single resource

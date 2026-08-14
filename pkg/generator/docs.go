@@ -500,7 +500,11 @@ func schemaTypeName(s ir.SchemaIR) string {
 		return objectSchemaTypeName(s)
 	}
 
-	return "Unknown"
+	// An empty or otherwise unrepresentable primitive type renders as a
+	// DynamicAttribute in the generated schema (resource.go falls back to
+	// DynamicAttribute for shapes with no recognizable primitive/union/object
+	// form), so the docs label matches that rather than the opaque "Unknown".
+	return "Dynamic"
 }
 
 // objectSchemaTypeName returns a concise type label for an object-like schema,

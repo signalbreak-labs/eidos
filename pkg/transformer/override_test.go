@@ -39,7 +39,7 @@ func TestApplyOverrides_NilInputs(t *testing.T) {
 func TestApplyOverrides_ResourceName(t *testing.T) {
 	provider := &ir.ProviderIR{
 		Resources: []ir.ResourceIR{{
-			Name:            "Pet",
+			Name:            "pet",
 			TypeName:        "pet",
 			FullName:        "Pet",
 			SourceOperation: "createPet",
@@ -48,7 +48,7 @@ func TestApplyOverrides_ResourceName(t *testing.T) {
 	cfg := &config.Config{
 		Provider: config.ProviderConfig{Name: "test", Version: "0.0.1"},
 		ResourceOverrides: []config.ResourceOverride{{
-			Schema:       "Pet",
+			Schema:       "pet",
 			ResourceName: "custom_pet",
 		}},
 	}
@@ -60,11 +60,84 @@ func TestApplyOverrides_ResourceName(t *testing.T) {
 	if got := provider.Resources[0].Name; got != "custom_pet" {
 		t.Errorf("resource Name = %q, want %q", got, "custom_pet")
 	}
+	// The inferred TypeName carries no provider prefix in this standalone IR, so
+	// the rename preserves the empty prefix. In a real pipeline the TypeName is
+	// "<provider>_<name>" and the prefix is preserved across the rename (see
+	// TestApplyOverrides_ResourceName_PreservesProviderPrefix).
 	if got := provider.Resources[0].TypeName; got != "custom_pet" {
 		t.Errorf("resource TypeName = %q, want %q", got, "custom_pet")
 	}
 	if got := provider.Resources[0].FullName; got != "Custom Pet" {
 		t.Errorf("resource FullName = %q, want %q", got, "Custom Pet")
+	}
+}
+
+// TestApplyOverrides_ResourceName_PreservesProviderPrefix verifies that a
+// resource_name override keeps the provider prefix on the Terraform type name
+// (the shape produced by the real pipeline: TypeName is always
+// "<provider>_<name>"). Terraform resolves a resource type as
+// "<provider>_<resource>", so stripping the prefix — e.g. "space-traders-api_"
+// from "space-traders-api_purchase_ship" — would leave an unresolvable
+// "purchase_ship" type (previously emitted, breaking terraform plan).
+func TestApplyOverrides_ResourceName_PreservesProviderPrefix(t *testing.T) {
+	provider := &ir.ProviderIR{
+		Resources: []ir.ResourceIR{{
+			Name:            "purchase_ship",
+			TypeName:        "space-traders-api_purchase_ship",
+			FullName:        "Purchase Ship",
+			SourceOperation: "purchase-ship",
+		}},
+	}
+	cfg := &config.Config{
+		Provider: config.ProviderConfig{Name: "space-traders-api", Version: "0.0.1"},
+		ResourceOverrides: []config.ResourceOverride{{
+			Operation:    "purchase-ship",
+			ResourceName: "buy_ship",
+		}},
+	}
+
+	if err := ApplyOverrides(provider, cfg); err != nil {
+		t.Fatalf("ApplyOverrides() = %v, want nil", err)
+	}
+
+	if got := provider.Resources[0].Name; got != "buy_ship" {
+		t.Errorf("resource Name = %q, want %q", got, "buy_ship")
+	}
+	if got := provider.Resources[0].TypeName; got != "space-traders-api_buy_ship" {
+		t.Errorf("resource TypeName = %q, want %q", got, "space-traders-api_buy_ship")
+	}
+	if got := provider.Resources[0].FullName; got != "Buy Ship" {
+		t.Errorf("resource FullName = %q, want %q", got, "Buy Ship")
+	}
+}
+
+// TestApplyOverrides_ActionName_PreservesProviderPrefix is the action
+// counterpart of TestApplyOverrides_ResourceName_PreservesProviderPrefix: the
+// action name override must keep the provider prefix on the Terraform action
+// type name so the generated action is resolvable.
+func TestApplyOverrides_ActionName_PreservesProviderPrefix(t *testing.T) {
+	provider := &ir.ProviderIR{
+		Actions: []ir.ActionIR{{
+			Name:            "navigate_ship",
+			TypeName:        "space-traders-api_navigate_ship",
+			FullName:        "Navigate Ship",
+			SourceOperation: "navigate-ship",
+		}},
+	}
+	cfg := &config.Config{
+		Provider: config.ProviderConfig{Name: "space-traders-api", Version: "0.0.1"},
+		ActionOverrides: []config.ActionOverride{{
+			Operation: "navigate-ship",
+			Name:      "set_ship_flight_mode",
+		}},
+	}
+
+	if err := ApplyOverrides(provider, cfg); err != nil {
+		t.Fatalf("ApplyOverrides() = %v, want nil", err)
+	}
+
+	if got := provider.Actions[0].TypeName; got != "space-traders-api_set_ship_flight_mode" {
+		t.Errorf("action TypeName = %q, want %q", got, "space-traders-api_set_ship_flight_mode")
 	}
 }
 
@@ -619,6 +692,54 @@ func TestApplyOverrides_MultipleOverridesOnSameResource(t *testing.T) {
 	}
 }
 
+// TestApplyOverrides_ComputedAttributesClearsRequired locks in the fix for the
+// Required+Computed invalid combination: a computed_attributes override that
+// claims a previously-Required attribute forces it Computed and clears Required
+// (the plugin framework forbids Computed together with Required). Optional is
+// preserved so an Optional attribute forced Computed becomes Optional+Computed,
+// which is valid.
+func TestApplyOverrides_ComputedAttributesClearsRequired(t *testing.T) {
+	provider := &ir.ProviderIR{
+		Resources: []ir.ResourceIR{{
+			Name:     "profile",
+			TypeName: "profile",
+			Schema: ir.ObjectSchemaIR{
+				Attributes: []ir.AttributeIR{
+					{Name: "alias", Required: true, Schema: ir.SchemaIR{Type: ir.TypeString}},
+					{Name: "labels", Optional: true, Schema: ir.SchemaIR{Type: ir.TypeString}},
+				},
+			},
+		}},
+	}
+	cfg := &config.Config{
+		Provider: config.ProviderConfig{Name: "test", Version: "0.0.1"},
+		ResourceOverrides: []config.ResourceOverride{{
+			Schema:             "profile",
+			ComputedAttributes: []string{"alias", "labels"},
+		}},
+	}
+
+	if err := ApplyOverrides(provider, cfg); err != nil {
+		t.Fatalf("ApplyOverrides() = %v, want nil", err)
+	}
+
+	attrs := provider.Resources[0].Schema.Attributes
+	alias := attrs[0]
+	if !alias.Computed {
+		t.Errorf("alias Computed = false, want true (forced by computed_attributes)")
+	}
+	if alias.Required {
+		t.Errorf("alias Required = true, want false (Computed+Required is invalid; computed_attributes clears Required)")
+	}
+	labels := attrs[1]
+	if !labels.Computed {
+		t.Errorf("labels Computed = false, want true (forced by computed_attributes)")
+	}
+	if !labels.Optional {
+		t.Errorf("labels Optional = false, want true (Optional preserved for Optional+Computed)")
+	}
+}
+
 func TestApplyOverrides_DatasourceName(t *testing.T) {
 	provider := &ir.ProviderIR{
 		DataSources: []ir.DataSourceIR{{
@@ -762,6 +883,76 @@ func TestApplyOverrides_ActionOverrideNameFallback(t *testing.T) {
 
 	if provider.Actions[0].Name != "reboot_server" {
 		t.Errorf("action Name = %q, want %q", provider.Actions[0].Name, "reboot_server")
+	}
+}
+
+// TestApplyOverrides_ActionOverrideByMethodPath verifies that an override
+// operation in "METHOD /path" form matches only the action whose invoke mapping
+// has that method and path, disambiguating two operations that share an
+// operationId (a duplicate operationId in the spec).
+func TestApplyOverrides_ActionOverrideByMethodPath(t *testing.T) {
+	provider := &ir.ProviderIR{
+		Actions: []ir.ActionIR{
+			{
+				Name:            "redefine_snmp_throttle_config",
+				TypeName:        "redefine_snmp_throttle_config",
+				SourceOperation: "redefineSnmpThrottleConfig",
+				InvokeMapping:   ir.OperationMappingIR{Method: "PUT", PathTemplate: "/snmp/throttle"},
+			},
+			{
+				Name:            "redefine_snmp_throttle_config",
+				TypeName:        "redefine_snmp_throttle_config",
+				SourceOperation: "redefineSnmpThrottleConfig",
+				InvokeMapping:   ir.OperationMappingIR{Method: "PUT", PathTemplate: "/snmp/throttle/{id}"},
+			},
+		},
+	}
+	cfg := &config.Config{
+		Provider: config.ProviderConfig{Name: "test", Version: "0.0.1"},
+		ActionOverrides: []config.ActionOverride{{
+			Operation: "PUT /snmp/throttle",
+			Name:      "redefine_snmp_throttle",
+		}},
+	}
+
+	if err := ApplyOverrides(provider, cfg); err != nil {
+		t.Fatalf("ApplyOverrides() = %v, want nil", err)
+	}
+
+	if got := provider.Actions[0].Name; got != "redefine_snmp_throttle" {
+		t.Errorf("action[0] Name = %q, want %q (matched by method+path)", got, "redefine_snmp_throttle")
+	}
+	if got := provider.Actions[1].Name; got != "redefine_snmp_throttle_config" {
+		t.Errorf("action[1] Name = %q, want %q (must not match a different path)", got, "redefine_snmp_throttle_config")
+	}
+}
+
+// TestApplyOverrides_ActionOverrideMethodPathCaseInsensitive verifies the
+// method+path form tolerates case and whitespace differences, matching the
+// existing operationId matching semantics.
+func TestApplyOverrides_ActionOverrideMethodPathCaseInsensitive(t *testing.T) {
+	provider := &ir.ProviderIR{
+		Actions: []ir.ActionIR{{
+			Name:            "upload_certificate",
+			TypeName:        "upload_certificate",
+			SourceOperation: "uploadCertificate",
+			InvokeMapping:   ir.OperationMappingIR{Method: "POST", PathTemplate: "/certificates/upload"},
+		}},
+	}
+	cfg := &config.Config{
+		Provider: config.ProviderConfig{Name: "test", Version: "0.0.1"},
+		ActionOverrides: []config.ActionOverride{{
+			Operation: "  post /certificates/upload  ",
+			Name:      "upload_cert",
+		}},
+	}
+
+	if err := ApplyOverrides(provider, cfg); err != nil {
+		t.Fatalf("ApplyOverrides() = %v, want nil", err)
+	}
+
+	if got := provider.Actions[0].Name; got != "upload_cert" {
+		t.Errorf("action Name = %q, want %q", got, "upload_cert")
 	}
 }
 

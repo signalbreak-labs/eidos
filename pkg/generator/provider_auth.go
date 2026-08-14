@@ -51,7 +51,7 @@ import (
 func authConfigureStmts(schemes []ir.SecuritySchemeIR) ([]ast.Stmt, error) {
 	var stmts []ast.Stmt
 	for _, scheme := range schemes {
-		schemeStmts, err := authSchemeStmts(scheme)
+		schemeStmts, err := authSchemeStmts(scheme, schemes)
 		if err != nil {
 			return nil, err
 		}
@@ -89,11 +89,14 @@ func unsupportedAuthSchemeWarning(scheme ir.SecuritySchemeIR) ast.Stmt {
 }
 
 // authSchemeStmts returns the Configure statements for a single security
-// scheme. It returns nil (no error) when the scheme has no generated
-// interceptor or lacks the config attributes needed to build one, so such
-// schemes are silently skipped rather than producing partial wiring.
-func authSchemeStmts(scheme ir.SecuritySchemeIR) ([]ast.Stmt, error) {
-	attrs, err := transformer.MapSecuritySchemeToProviderConfig(scheme)
+// scheme. allSchemes is the full scheme list the provider exposes, so a bearer
+// scheme can resolve its (possibly scheme-qualified) config attribute name via
+// transformer.BearerTokenAttributeName. It returns nil (no error) when the
+// scheme has no generated interceptor or lacks the config attributes needed to
+// build one, so such schemes are silently skipped rather than producing partial
+// wiring.
+func authSchemeStmts(scheme ir.SecuritySchemeIR, allSchemes []ir.SecuritySchemeIR) ([]ast.Stmt, error) {
+	attrs, err := transformer.MapSecuritySchemeToProviderConfig(scheme, allSchemes)
 	if err != nil {
 		return nil, err
 	}
@@ -106,7 +109,7 @@ func authSchemeStmts(scheme ir.SecuritySchemeIR) ([]ast.Stmt, error) {
 	case ir.SecuritySchemeAPIKey:
 		return apiKeyStmts(scheme, byName), nil
 	case ir.SecuritySchemeHTTP:
-		return httpAuthStmts(scheme, byName), nil
+		return httpAuthStmts(scheme, byName, allSchemes), nil
 	case ir.SecuritySchemeOAuth2:
 		return oauth2Stmts(scheme, byName), nil
 	case ir.SecuritySchemeOpenIDConnect:
@@ -142,8 +145,11 @@ func apiKeyStmts(scheme ir.SecuritySchemeIR, byName map[string]ir.AttributeIR) [
 }
 
 // httpAuthStmts emits the guarded append of a BasicAuth or BearerAuth
-// interceptor based on the HTTP scheme.
-func httpAuthStmts(scheme ir.SecuritySchemeIR, byName map[string]ir.AttributeIR) []ast.Stmt {
+// interceptor based on the HTTP scheme. The bearer attribute name is resolved
+// through transformer.BearerTokenAttributeName so a multi-bearer spec reads
+// each scheme's qualified attribute (e.g. account_token) instead of assuming a
+// single "bearer_token".
+func httpAuthStmts(scheme ir.SecuritySchemeIR, byName map[string]ir.AttributeIR, allSchemes []ir.SecuritySchemeIR) []ast.Stmt {
 	switch scheme.Scheme {
 	case "basic":
 		userField, okU := authFieldName(byName, "username")
@@ -158,7 +164,7 @@ func httpAuthStmts(scheme ir.SecuritySchemeIR, byName map[string]ir.AttributeIR)
 		)
 		return []ast.Stmt{astgen.If(configFieldNonNull(userField), appendInterceptorOpt(scheme.Name, interceptor))}
 	case "bearer":
-		field, ok := authFieldName(byName, "bearer_token")
+		field, ok := authFieldName(byName, transformer.BearerTokenAttributeName(scheme, allSchemes))
 		if !ok {
 			return nil
 		}

@@ -16,6 +16,22 @@
     "reason": "provider overview and usage guide"
   },
   {
+    "path": "docs/actions/create_pull_request.md",
+    "reason": "documentation for action create_pull_request"
+  },
+  {
+    "path": "docs/actions/create_task.md",
+    "reason": "documentation for action create_task"
+  },
+  {
+    "path": "docs/actions/update_pull_request.md",
+    "reason": "documentation for action update_pull_request"
+  },
+  {
+    "path": "docs/actions/update_task.md",
+    "reason": "documentation for action update_task"
+  },
+  {
     "path": "docs/data-sources/get_branch.md",
     "reason": "documentation for data source get_branch"
   },
@@ -140,14 +156,6 @@
     "reason": "documentation for resource config"
   },
   {
-    "path": "docs/resources/create_pull_request.md",
-    "reason": "documentation for resource create_pull_request"
-  },
-  {
-    "path": "docs/resources/create_task.md",
-    "reason": "documentation for resource create_task"
-  },
-  {
     "path": "docs/resources/instance.md",
     "reason": "documentation for resource instance"
   },
@@ -168,16 +176,24 @@
     "reason": "documentation for resource stack"
   },
   {
-    "path": "docs/resources/update_pull_request.md",
-    "reason": "documentation for resource update_pull_request"
-  },
-  {
-    "path": "docs/resources/update_task.md",
-    "reason": "documentation for resource update_task"
-  },
-  {
     "path": "docs/resources/workspace.md",
     "reason": "documentation for resource workspace"
+  },
+  {
+    "path": "examples/actions/create_pull_request/action.tf",
+    "reason": "example for action create_pull_request"
+  },
+  {
+    "path": "examples/actions/create_task/action.tf",
+    "reason": "example for action create_task"
+  },
+  {
+    "path": "examples/actions/update_pull_request/action.tf",
+    "reason": "example for action update_pull_request"
+  },
+  {
+    "path": "examples/actions/update_task/action.tf",
+    "reason": "example for action update_task"
   },
   {
     "path": "examples/data-sources/get_branch/data-source.tf",
@@ -252,14 +268,6 @@
     "reason": "example for resource config"
   },
   {
-    "path": "examples/resources/create_pull_request/resource.tf",
-    "reason": "example for resource create_pull_request"
-  },
-  {
-    "path": "examples/resources/create_task/resource.tf",
-    "reason": "example for resource create_task"
-  },
-  {
     "path": "examples/resources/instance/resource.tf",
     "reason": "example for resource instance"
   },
@@ -278,14 +286,6 @@
   {
     "path": "examples/resources/stack/resource.tf",
     "reason": "example for resource stack"
-  },
-  {
-    "path": "examples/resources/update_pull_request/resource.tf",
-    "reason": "example for resource update_pull_request"
-  },
-  {
-    "path": "examples/resources/update_task/resource.tf",
-    "reason": "example for resource update_task"
   },
   {
     "path": "examples/resources/workspace/resource.tf",
@@ -328,12 +328,20 @@
     "reason": "retry logic with exponential backoff"
   },
   {
-    "path": "internal/protocol/value_mappers.go",
-    "reason": "tftypes.Value to Go struct converters"
+    "path": "internal/provider/action_create_pull_request.go",
+    "reason": "action mycloud_create_pull_request"
   },
   {
-    "path": "internal/protocol/value_mappers_test.go",
-    "reason": "value mapper round-trip tests"
+    "path": "internal/provider/action_create_task.go",
+    "reason": "action mycloud_create_task"
+  },
+  {
+    "path": "internal/provider/action_update_pull_request.go",
+    "reason": "action mycloud_update_pull_request"
+  },
+  {
+    "path": "internal/provider/action_update_task.go",
+    "reason": "action mycloud_update_task"
   },
   {
     "path": "internal/provider/data_source_get_branch.go",
@@ -524,50 +532,6 @@
     "reason": "list resource mycloud_list_workspaces"
   },
   {
-    "path": "internal/provider/model_config.go",
-    "reason": "API model for resource config"
-  },
-  {
-    "path": "internal/provider/model_create_pull_request.go",
-    "reason": "API model for resource create_pull_request"
-  },
-  {
-    "path": "internal/provider/model_create_task.go",
-    "reason": "API model for resource create_task"
-  },
-  {
-    "path": "internal/provider/model_instance.go",
-    "reason": "API model for resource instance"
-  },
-  {
-    "path": "internal/provider/model_network.go",
-    "reason": "API model for resource network"
-  },
-  {
-    "path": "internal/provider/model_project.go",
-    "reason": "API model for resource project"
-  },
-  {
-    "path": "internal/provider/model_secret.go",
-    "reason": "API model for resource secret"
-  },
-  {
-    "path": "internal/provider/model_stack.go",
-    "reason": "API model for resource stack"
-  },
-  {
-    "path": "internal/provider/model_update_pull_request.go",
-    "reason": "API model for resource update_pull_request"
-  },
-  {
-    "path": "internal/provider/model_update_task.go",
-    "reason": "API model for resource update_task"
-  },
-  {
-    "path": "internal/provider/model_workspace.go",
-    "reason": "API model for resource workspace"
-  },
-  {
     "path": "internal/provider/provider.go",
     "reason": "provider schema and registration"
   },
@@ -586,30 +550,6 @@
   {
     "path": "internal/provider/resource_config_test.go",
     "reason": "unit tests for resource config"
-  },
-  {
-    "path": "internal/provider/resource_create_pull_request.go",
-    "reason": "resource mycloud_create_pull_request"
-  },
-  {
-    "path": "internal/provider/resource_create_pull_request_acceptance_test.go",
-    "reason": "acceptance tests for resource create_pull_request"
-  },
-  {
-    "path": "internal/provider/resource_create_pull_request_test.go",
-    "reason": "unit tests for resource create_pull_request"
-  },
-  {
-    "path": "internal/provider/resource_create_task.go",
-    "reason": "resource mycloud_create_task"
-  },
-  {
-    "path": "internal/provider/resource_create_task_acceptance_test.go",
-    "reason": "acceptance tests for resource create_task"
-  },
-  {
-    "path": "internal/provider/resource_create_task_test.go",
-    "reason": "unit tests for resource create_task"
   },
   {
     "path": "internal/provider/resource_instance.go",
@@ -670,30 +610,6 @@
   {
     "path": "internal/provider/resource_stack_test.go",
     "reason": "unit tests for resource stack"
-  },
-  {
-    "path": "internal/provider/resource_update_pull_request.go",
-    "reason": "resource mycloud_update_pull_request"
-  },
-  {
-    "path": "internal/provider/resource_update_pull_request_acceptance_test.go",
-    "reason": "acceptance tests for resource update_pull_request"
-  },
-  {
-    "path": "internal/provider/resource_update_pull_request_test.go",
-    "reason": "unit tests for resource update_pull_request"
-  },
-  {
-    "path": "internal/provider/resource_update_task.go",
-    "reason": "resource mycloud_update_task"
-  },
-  {
-    "path": "internal/provider/resource_update_task_acceptance_test.go",
-    "reason": "acceptance tests for resource update_task"
-  },
-  {
-    "path": "internal/provider/resource_update_task_test.go",
-    "reason": "unit tests for resource update_task"
   },
   {
     "path": "internal/provider/resource_workspace.go",

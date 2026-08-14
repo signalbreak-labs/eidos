@@ -73,11 +73,11 @@
   },
   {
     "path": "internal/provider/action_create_protected.go",
-    "reason": "action o_auth2_security_api_create_protected"
+    "reason": "action o-auth2-security-api_create_protected"
   },
   {
     "path": "internal/provider/data_source_get_protected.go",
-    "reason": "data source o_auth2_security_api_get_protected"
+    "reason": "data source o-auth2-security-api_get_protected"
   },
   {
     "path": "internal/provider/data_source_get_protected_test.go",

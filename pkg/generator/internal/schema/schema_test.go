@@ -2,6 +2,7 @@ package schema
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/signalbreak-labs/eidos/pkg/ir"
@@ -101,5 +102,27 @@ func TestResolvedFieldName(t *testing.T) {
 	// Fallback for names absent from the scope.
 	if got := resolvedFieldName(scope, ir.AttributeIR{Name: "plain_name"}); got != "PlainName" {
 		t.Errorf("resolvedFieldName(plain_name) = %q, want PlainName", got)
+	}
+}
+
+// TestJSONConvertTemplateHandlesTuple guards the request-body serialization path
+// in the emitted json_convert.go template against regression. A Dynamic
+// attribute configured with a list literal (e.g. `attr = [ null ]` or a
+// heterogeneous array) is parsed by the framework as a basetypes.TupleValue,
+// not a List; modelToJSONMap -> attrValueToJSON must serialize it as a JSON
+// array or every Create/Update on such a resource fails with "unsupported
+// attribute value type basetypes.TupleValue" (seen on GitLab protected_branch
+// allowed_to_merge and Grafana alert_rule data). The template is a string
+// constant, so its runtime logic is not compiled here; this asserts the case is
+// present and reachable from the request path.
+func TestJSONConvertTemplateHandlesTuple(t *testing.T) {
+	if !strings.Contains(JSONConvertTemplate, "case types.Tuple:") {
+		t.Error("JSONConvertTemplate lost its case types.Tuple branch; Dynamic array literals would fail to serialize")
+	}
+	if !strings.Contains(JSONConvertTemplate, "case types.Number:") {
+		t.Error("JSONConvertTemplate lost its case types.Number branch; numbers inside Dynamic attributes would fail to serialize")
+	}
+	if !strings.Contains(JSONConvertTemplate, "func dynamicValueFromRaw(") || !strings.Contains(JSONConvertTemplate, "func inferTFTypes(") {
+		t.Error("JSONConvertTemplate lost its dynamicValueFromRaw/inferTFTypes helpers; non-null Dynamic response values (arrays/objects/scalars) could not be read into state")
 	}
 }

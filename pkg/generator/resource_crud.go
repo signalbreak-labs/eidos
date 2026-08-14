@@ -27,6 +27,15 @@ type pathSubstitution struct {
 	placeholder string
 	field       string
 	primitive   ir.PrimitiveType
+	// literal, when non-empty, is a static value substituted into the path
+	// instead of a model field. It is derived from a path parameter's schema
+	// (const → default → first enum value) for placeholders that have no
+	// matching schema attribute and no usable ID fallback — typically a shared
+	// path-versioning segment such as Linode's {apiVersion} (enum
+	// ["v4","v4beta"]) that is not a resource attribute. The value is spec-
+	// derived and deterministic, so wiring the operation with it is strictly
+	// better than leaving it an honest scaffold.
+	literal string
 }
 
 // bodyKind identifies the request body encoding a wired operation emits.
@@ -71,6 +80,12 @@ type crudOperationPlan struct {
 	// send a form body and stays scaffolded (REMAINING_GAPS §2).
 	formDataParams []paramSubstitution
 	contentType    string
+	// hasBody is true when the operation declares a request body that the wired
+	// body encodes. It is distinct from bodyEncoding because bodyJSON is the zero
+	// value of bodyKind, so a bodiless operation would otherwise be
+	// indistinguishable from a JSON-body operation (the action wiring relies on
+	// this distinction; resources always build a body on body-bearing methods).
+	hasBody bool
 	// bodyEncoding is the request body encoding derived from
 	// OperationMappingIR.MediaType via transformer.RequestBodyKind. JSON is the
 	// default (bodiless methods and empty media types). Unsupported media types
@@ -98,6 +113,11 @@ type crudOperationPlan struct {
 	// generation time so the emitted call is deterministic.
 	securitySchemes    []string
 	securitySchemesSet bool
+	// responseEnvelope is the {data: ...} response envelope key the transformer
+	// flattened out of the response schema. When non-empty, the wired body
+	// unwraps the decoded response by this key before applying it to the model,
+	// keeping the schema and the response consistent (E1).
+	responseEnvelope string
 }
 
 // paramSubstitution describes one query, header, or cookie parameter and the
@@ -107,10 +127,22 @@ type paramSubstitution struct {
 	in        string // "query", "header", or "cookie"
 	field     string
 	primitive ir.PrimitiveType
+	// required is true for an OpenAPI parameter marked required. Non-required
+	// parameters are gated on their model field being non-null when emitted, so
+	// an unset optional parameter is omitted from the request rather than sent as
+	// the zero-value empty string (which the API may reject or misinterpret).
+	required bool
 	// binary is true for a formData parameter whose OpenAPI format is "binary"
 	// (a file upload): the multipart body builder writes it as a file part via
 	// CreateFormFile instead of a text field via WriteField (A2).
 	binary bool
+	// collection is true for a query parameter modeled as a List attribute (an
+	// OpenAPI array query parameter, items: <scalar>). The request builder emits
+	// one url.Values.Add per element (repeated query values, form + explode: true)
+	// rather than a single Set. Only query parameters can be collections:
+	// matchParamAttribute scopes the collection match to query, so header/cookie/
+	// formData substitutions always have collection == false.
+	collection bool
 }
 
 // resourceWiringPlan describes how a resource's CRUD methods are wired to the
@@ -129,6 +161,9 @@ type resourceWiringPlan struct {
 
 	needsStrings bool
 	needsStrconv bool
+	// needsURL is true when at least one wired operation has a path placeholder,
+	// gating the net/url import for url.PathEscape on path substitution.
+	needsURL bool
 	// needsJSONBody is true when at least one wired create/update body is a JSON
 	// body (modelToJSONMap + json.Marshal + bytes.NewReader), gating the bytes
 	// and encoding/json imports. needsFormBody is true when at least one wired
@@ -277,6 +312,7 @@ func methodHasBody(method string) bool {
 func (plan *resourceWiringPlan) noteOpImportNeeds(op crudOperationPlan) {
 	for _, sub := range op.subs {
 		plan.needsStrings = true
+		plan.needsURL = true
 		if sub.primitive != ir.TypeString {
 			plan.needsStrconv = true
 		}
@@ -309,14 +345,26 @@ func planOperation(r ir.ResourceIR, op ir.OperationMappingIR) (crudOperationPlan
 	placeholders := pathPlaceholders(planned.template)
 	// The resource-id fallback (using the single identifier attribute for a
 	// placeholder whose name does not match a schema attribute) is only valid for
-	// a simple-id path with one placeholder. A composite path (multiple
-	// placeholders) describes distinct path parameters; falling back to the same
-	// id attribute for each would substitute the same value into every slot and
-	// produce a wrong URL, so each placeholder must match a same-named attribute
-	// or the operation is not wired (honest scaffold, REMAINING_GAPS §3/#12).
-	multiPlaceholder := len(placeholders) > 1
+	// a simple-id path with one dynamic placeholder. A composite path (multiple
+	// dynamic placeholders) describes distinct path parameters; falling back to
+	// the same id attribute for each would substitute the same value into every
+	// slot and produce a wrong URL, so each placeholder must match a same-named
+	// attribute or the operation is not wired (honest scaffold, REMAINING_GAPS
+	// §3/#12). A static path segment — a placeholder resolved to a literal from
+	// its parameter schema (e.g. a shared {apiVersion} with enum ["v4","v4beta"])
+	// — is NOT dynamic: it does not count toward the composite decision, so a
+	// path like /{apiVersion}/things/{thingId} has one dynamic placeholder and
+	// the resource-id fallback remains valid for {thingId}.
+	dynamicPlaceholders := 0
 	for _, placeholder := range placeholders {
-		sub, ok := resolvePathSubstitution(r, placeholder, multiPlaceholder)
+		if _, ok := staticPathValue(op.PathParams, placeholder); ok {
+			continue
+		}
+		dynamicPlaceholders++
+	}
+	multiPlaceholder := dynamicPlaceholders > 1
+	for _, placeholder := range placeholders {
+		sub, ok := resolvePathSubstitution(r, placeholder, multiPlaceholder, op.PathParams)
 		if !ok {
 			return crudOperationPlan{}, false
 		}
@@ -395,6 +443,7 @@ func planOperation(r ir.ResourceIR, op ir.OperationMappingIR) (crudOperationPlan
 	planned.queryParams = queryParams
 	planned.headerParams = headerParams
 	planned.cookieParams = cookieParams
+	planned.responseEnvelope = op.ResponseEnvelope
 
 	// Per-operation security (REMAINING_GAPS §1). See applySecurityRequirements.
 	applySecurityRequirements(&planned, op.SecurityRequirements)
@@ -456,14 +505,14 @@ func errorMappingDescriptions(m map[int]ir.ErrorMappingIR) map[int]string {
 func resolveParamSubstitutions(attrs []ir.AttributeIR, params []ir.ParamIR) ([]paramSubstitution, bool) {
 	var subs []paramSubstitution
 	for _, p := range params {
-		field, prim, ok := matchParamAttribute(attrs, p)
+		field, prim, coll, ok := matchParamAttribute(attrs, p)
 		if !ok {
 			if p.Required {
 				return nil, false
 			}
 			continue
 		}
-		subs = append(subs, paramSubstitution{name: p.Name, in: p.In, field: field, primitive: prim})
+		subs = append(subs, paramSubstitution{name: p.Name, in: p.In, field: field, primitive: prim, required: p.Required, collection: coll})
 	}
 	return subs, true
 }
@@ -481,8 +530,12 @@ func resolveParamSubstitutions(attrs []ir.AttributeIR, params []ir.ParamIR) ([]p
 func resolveFormDataSubstitutions(attrs []ir.AttributeIR, params []ir.ParamIR) ([]paramSubstitution, bool) {
 	subs := make([]paramSubstitution, 0, len(params))
 	for _, p := range params {
-		field, prim, ok := matchParamAttribute(attrs, p)
-		if !ok || !isFormEncodablePrimitive(prim) {
+		field, prim, coll, ok := matchParamAttribute(attrs, p)
+		// formData carries single scalar values: a collection (array query
+		// parameter) cannot be form-encoded as one field, and a non-primitive
+		// or Dynamic attribute has no ValueString accessor, so the operation
+		// stays honestly scaffolded rather than wiring a partial form body.
+		if !ok || coll || !isFormEncodablePrimitive(prim) {
 			return nil, false
 		}
 		subs = append(subs, paramSubstitution{
@@ -490,6 +543,7 @@ func resolveFormDataSubstitutions(attrs []ir.AttributeIR, params []ir.ParamIR) (
 			in:        p.In,
 			field:     field,
 			primitive: prim,
+			required:  p.Required,
 			// format: binary marks a file upload: the multipart body builder
 			// writes it as a file part (A2).
 			binary: strings.EqualFold(p.Schema.Format, "binary"),
@@ -505,12 +559,24 @@ func isFormEncodablePrimitive(t ir.PrimitiveType) bool {
 	return t == ir.TypeString || t == ir.TypeInt || t == ir.TypeFloat || t == ir.TypeBool
 }
 
-// matchParamAttribute finds a primitive schema attribute supplying the
-// parameter's value. The match is on the normalized (PascalCase) field name so a
-// hyphenated HTTP header such as "X-Trace-Id" maps to a snake_case Terraform
-// attribute such as "x_trace_id", which is the only valid attribute shape. It
-// returns the Go field name and primitive type.
-func matchParamAttribute(attrs []ir.AttributeIR, p ir.ParamIR) (string, ir.PrimitiveType, bool) {
+// matchParamAttribute finds a schema attribute supplying the parameter's value.
+// The match is on the normalized (PascalCase) field name so a hyphenated HTTP
+// header such as "X-Trace-Id" maps to a snake_case Terraform attribute such as
+// "x_trace_id", which is the only valid attribute shape. It returns the Go field
+// name, the primitive type, whether the attribute is a collection (an array
+// query parameter modeled as a List of a scalar element), and whether a match
+// was found.
+//
+// A query parameter declared as an array (OpenAPI `type: array, items: <scalar>`)
+// is modeled as a List attribute of the element primitive by
+// transformer.paramSchemaIR (data sources and list resources). Match it as a
+// collection when the element is a strict scalar (Dynamic excluded: a Dynamic
+// element has no ValueString accessor and cannot be serialized into repeated
+// query values). Only query parameters are array-serialized — header/cookie/
+// formData carry single scalar values — so the collection match is scoped to
+// query. A collection attribute matched against a non-query parameter does not
+// satisfy it (a header cannot carry a list), so the match fails.
+func matchParamAttribute(attrs []ir.AttributeIR, p ir.ParamIR) (string, ir.PrimitiveType, bool, bool) {
 	want := naming.GoFieldName(p.Name)
 	for _, attr := range attrs {
 		// Match by the sanitized attribute name or its original wire name
@@ -518,12 +584,29 @@ func matchParamAttribute(attrs []ir.AttributeIR, p ir.ParamIR) (string, ir.Primi
 		if naming.GoFieldName(attr.Name) != want && (attr.WireName == "" || naming.GoFieldName(attr.WireName) != want) {
 			continue
 		}
-		if !schema.IsPrimitiveSchema(attr.Schema) {
-			return "", "", false
+		if strings.EqualFold(p.In, "query") && attr.Schema.Collection != nil {
+			elem := attr.Schema.Collection.ElementType
+			if isFormEncodablePrimitive(elem.Type) {
+				return naming.GoFieldName(attr.Name), elem.Type, true, true
+			}
+			return "", "", false, false
 		}
-		return naming.GoFieldName(attr.Name), attr.Schema.Type, true
+		// Dynamic is rejected even though IsPrimitiveSchema admits it: a
+		// types.Dynamic model field has no ValueString/ValueBool/ValueInt64/
+		// ValueFloat64 accessor, so it cannot be serialized into a query, header,
+		// cookie, or form value. Treating it as unmappable makes an optional param
+		// skip wiring (rather than emitting a body that will not compile) and a
+		// required param disable wiring for the whole operation. This arises when
+		// a scalar query parameter shares a name with a free-form object response
+		// property (e.g. GitLab's "trailers": a boolean query param and an object
+		// response property on the same operation) and the merged attribute
+		// resolves to Dynamic.
+		if !isFormEncodablePrimitive(attr.Schema.Type) {
+			return "", "", false, false
+		}
+		return naming.GoFieldName(attr.Name), attr.Schema.Type, false, true
 	}
-	return "", "", false
+	return "", "", false, false
 }
 
 // pathPlaceholders returns the {name} placeholders in a path template in
@@ -556,7 +639,14 @@ func pathPlaceholders(template string) []string {
 // id-attribute fallback is suppressed: each placeholder must match a same-named
 // attribute, since substituting the single id into every slot would build a
 // wrong URL (REMAINING_GAPS §3/#12).
-func resolvePathSubstitution(r ir.ResourceIR, placeholder string, noIDFallback bool) (pathSubstitution, bool) {
+//
+// Before giving up on an unresolvable placeholder, a static value derived from
+// the matching path parameter's schema is attempted (const → default → first
+// enum value). This wires shared path segments that are not resource attributes
+// — chiefly path-versioning parameters such as Linode's {apiVersion} (enum
+// ["v4","v4beta"], no default) — instead of leaving the whole resource an
+// honest scaffold. The value is spec-derived and deterministic.
+func resolvePathSubstitution(r ir.ResourceIR, placeholder string, noIDFallback bool, pathParams []ir.ParamIR) (pathSubstitution, bool) {
 	for _, attr := range r.Schema.Attributes {
 		if attr.Name != placeholder {
 			continue
@@ -576,6 +666,15 @@ func resolvePathSubstitution(r ir.ResourceIR, placeholder string, noIDFallback b
 			return pathSubstitution{placeholder: placeholder, field: naming.GoFieldName(attr.Name), primitive: attr.Schema.Type}, true
 		}
 	}
+	// No matching attribute and no UID fallback: try a static value from the
+	// path parameter's schema. This runs before the noIDFallback guard so a
+	// shared versioning segment in a composite path (e.g. {apiVersion}) is
+	// resolved rather than disabling wiring for the whole resource, and before
+	// the id-attribute fallback so a versioning segment is never filled with the
+	// resource id.
+	if v, ok := staticPathValue(pathParams, placeholder); ok {
+		return pathSubstitution{placeholder: placeholder, literal: v, primitive: ir.TypeString}, true
+	}
 	if noIDFallback {
 		return pathSubstitution{}, false
 	}
@@ -588,6 +687,54 @@ func resolvePathSubstitution(r ir.ResourceIR, placeholder string, noIDFallback b
 		return pathSubstitution{placeholder: placeholder, field: info.field, primitive: info.primitive}, true
 	}
 	return pathSubstitution{}, false
+}
+
+// staticPathValue derives a deterministic static value for a path placeholder
+// from its declared parameter schema, in priority order: const, then default,
+// then the first enum value. It returns ok=false when the parameter is absent
+// or declares none of these. The value is used to wire shared path segments
+// that are not resource attributes — e.g. Linode's {apiVersion} (enum
+// ["v4","v4beta"]) — choosing the stable, conventionally-first enum value.
+func staticPathValue(pathParams []ir.ParamIR, placeholder string) (string, bool) {
+	for _, p := range pathParams {
+		if p.Name != placeholder {
+			continue
+		}
+		s := p.Schema
+		if s.Const != nil {
+			if v := anyStringValue(*s.Const); v != "" {
+				return v, true
+			}
+		}
+		if s.Default != nil {
+			if v := anyStringValue(*s.Default); v != "" {
+				return v, true
+			}
+		}
+		if len(s.EnumValues) > 0 {
+			if v := anyStringValue(s.EnumValues[0]); v != "" {
+				return v, true
+			}
+		}
+		return "", false
+	}
+	return "", false
+}
+
+// anyStringValue renders a schema const/default/enum value of any primitive
+// type as a string suitable for path substitution. Non-string scalars are
+// formatted with %v; empty strings are ignored (return "") so a default of ""
+// does not produce a degenerate path segment.
+func anyStringValue(v any) string {
+	switch t := v.(type) {
+	case string:
+		return t
+	default:
+		if t == nil {
+			return ""
+		}
+		return fmt.Sprintf("%v", t)
+	}
 }
 
 // uidPlaceholder reports whether a path placeholder names a UID-shaped
@@ -686,7 +833,10 @@ func clientGuardStmt(receiver string) ast.Stmt {
 }
 
 // requestPathStmts emits the statements building reqPath from a path template,
-// substituting each {placeholder} with the value of the planned model field.
+// substituting each {placeholder} with the URL-path-escaped value of the planned
+// model field. PathEscape ensures a value containing reserved characters
+// (e.g. a name with a space or "/") is encoded as a single path segment rather
+// than producing a malformed URL or spurious extra segments.
 func requestPathStmts(op crudOperationPlan, modelVar string) []ast.Stmt {
 	stmts := make([]ast.Stmt, 0, 1+len(op.subs))
 	stmts = append(stmts, astgen.AssignSingle(astgen.Ident("reqPath"), astgen.Lit(op.template)))
@@ -697,7 +847,7 @@ func requestPathStmts(op crudOperationPlan, modelVar string) []ast.Stmt {
 				astgen.QualExpr("strings", "ReplaceAll"),
 				astgen.Ident("reqPath"),
 				astgen.Lit("{"+sub.placeholder+"}"),
-				pathValueExpr(modelVar, sub),
+				astgen.Call(astgen.QualExpr("url", "PathEscape"), pathValueExpr(modelVar, sub)),
 			)},
 			token.ASSIGN,
 		))
@@ -719,11 +869,7 @@ func requestQueryStmts(op crudOperationPlan, modelVar string) []ast.Stmt {
 		astgen.Call(astgen.Selector(astgen.Selector(astgen.Ident("httpReq"), "URL"), "Query")),
 	))
 	for _, p := range op.queryParams {
-		stmts = append(stmts, astgen.ExprStmt(astgen.Call(
-			astgen.Selector(astgen.Ident("query"), "Set"),
-			astgen.Lit(p.name),
-			paramValueExpr(modelVar, p),
-		)))
+		stmts = append(stmts, paramSetStmts(p, modelVar, astgen.Ident("query"))...)
 	}
 	stmts = append(stmts, astgen.AssignStmt(
 		[]ast.Expr{astgen.Selector(astgen.Selector(astgen.Ident("httpReq"), "URL"), "RawQuery")},
@@ -742,11 +888,12 @@ func requestHeaderStmts(op crudOperationPlan, modelVar string) []ast.Stmt {
 	}
 	stmts := make([]ast.Stmt, 0, len(op.headerParams))
 	for _, p := range op.headerParams {
-		stmts = append(stmts, astgen.ExprStmt(astgen.Call(
+		setCall := astgen.Call(
 			astgen.Selector(astgen.Selector(astgen.Ident("httpReq"), "Header"), "Set"),
 			astgen.Lit(p.name),
 			paramValueExpr(modelVar, p),
-		)))
+		)
+		stmts = append(stmts, gateParamStmts(p, modelVar, astgen.ExprStmt(setCall))...)
 	}
 	return stmts
 }
@@ -761,21 +908,26 @@ func requestCookieStmts(op crudOperationPlan, modelVar string) []ast.Stmt {
 	}
 	stmts := make([]ast.Stmt, 0, len(op.cookieParams))
 	for _, p := range op.cookieParams {
-		stmts = append(stmts, astgen.ExprStmt(astgen.Call(
+		addCall := astgen.Call(
 			astgen.Selector(astgen.Ident("httpReq"), "AddCookie"),
 			astgen.UnaryPtr(astgen.CompositeLit(
 				astgen.QualExpr("http", "Cookie"),
 				astgen.KeyValue("Name", astgen.Lit(p.name)),
 				astgen.KeyValue("Value", paramValueExpr(modelVar, p)),
 			)),
-		)))
+		)
+		stmts = append(stmts, gateParamStmts(p, modelVar, astgen.ExprStmt(addCall))...)
 	}
 	return stmts
 }
 
-// pathValueExpr returns the expression rendering a path substitution's model
-// field as a string.
+// pathValueExpr returns the expression rendering a path substitution's value
+// as a string. A static literal (e.g. a path-versioning segment like "v4") is
+// emitted directly; otherwise the substitution's model field is rendered.
 func pathValueExpr(modelVar string, sub pathSubstitution) ast.Expr {
+	if sub.literal != "" {
+		return astgen.Lit(sub.literal)
+	}
 	return modelFieldStringExpr(modelVar, sub.field, sub.primitive)
 }
 
@@ -785,11 +937,29 @@ func paramValueExpr(modelVar string, p paramSubstitution) ast.Expr {
 	return modelFieldStringExpr(modelVar, p.field, p.primitive)
 }
 
-// modelFieldStringExpr renders a typed model field as a string, formatting
-// non-string primitives via strconv so they can be substituted into a path or
-// serialized into a query string or header.
-func modelFieldStringExpr(modelVar, field string, primitive ir.PrimitiveType) ast.Expr {
-	sel := astgen.Selector(astgen.Ident(modelVar), field)
+// gateParamStmts returns stmts as-is when p is required, or wrapped in a single
+// "if !<modelVar>.<field>.IsNull() { ... }" when p is optional. An unset
+// optional parameter is omitted from the request entirely rather than sent as
+// the zero-value empty string, which the API may reject or misinterpret. All
+// typed framework values implement attr.Value, whose IsNull method reports an
+// explicitly unset (null) value; user-supplied optional parameters are either
+// set (known) or null at apply time, so IsNull is the correct gate.
+func gateParamStmts(p paramSubstitution, modelVar string, stmts ...ast.Stmt) []ast.Stmt {
+	if p.required {
+		return stmts
+	}
+	sel := astgen.Selector(astgen.Ident(modelVar), p.field)
+	notNull := astgen.Unary(token.NOT, astgen.Call(astgen.Selector(sel, "IsNull")))
+	return []ast.Stmt{astgen.If(notNull, stmts...)}
+}
+
+// scalarValueExpr renders an expression denoting a typed framework scalar
+// value as a string, formatting non-string primitives via strconv so the result
+// can be substituted into a path or serialized into a query string or header.
+// It is the shared core for model fields (modelFieldStringExpr) and collection
+// elements (elementValueExpr): sel is the expression denoting the value — a
+// model field selector, or a range element identifier after a type assertion.
+func scalarValueExpr(sel ast.Expr, primitive ir.PrimitiveType) ast.Expr {
 	switch primitive {
 	case ir.TypeInt:
 		return astgen.Call(astgen.QualExpr("strconv", "FormatInt"), astgen.Call(astgen.Selector(sel, "ValueInt64")), astgen.IntLit(10))
@@ -800,6 +970,67 @@ func modelFieldStringExpr(modelVar, field string, primitive ir.PrimitiveType) as
 	default:
 		return astgen.Call(astgen.Selector(sel, "ValueString"))
 	}
+}
+
+// modelFieldStringExpr renders a typed model field as a string, formatting
+// non-string primitives via strconv so they can be substituted into a path or
+// serialized into a query string or header.
+func modelFieldStringExpr(modelVar, field string, primitive ir.PrimitiveType) ast.Expr {
+	return scalarValueExpr(astgen.Selector(astgen.Ident(modelVar), field), primitive)
+}
+
+// elementValueExpr renders a collection element as a string for a repeated query
+// value. types.List.Elements() returns []attr.Value, whose static type has no
+// ValueString/ValueInt64/... accessor, so the element is type-asserted to the
+// concrete scalar framework type (matching the List's ElementType) before
+// formatting via scalarValueExpr. elemVar is the range variable identifier.
+func elementValueExpr(elemVar string, primitive ir.PrimitiveType) ast.Expr {
+	var asserted ast.Expr
+	switch primitive {
+	case ir.TypeInt:
+		asserted = astgen.TypeAssertExpr(astgen.Ident(elemVar), astgen.QualExpr("types", "Int64"))
+	case ir.TypeFloat:
+		asserted = astgen.TypeAssertExpr(astgen.Ident(elemVar), astgen.QualExpr("types", "Float64"))
+	case ir.TypeBool:
+		asserted = astgen.TypeAssertExpr(astgen.Ident(elemVar), astgen.QualExpr("types", "Bool"))
+	default:
+		asserted = astgen.TypeAssertExpr(astgen.Ident(elemVar), astgen.QualExpr("types", "String"))
+	}
+	return scalarValueExpr(asserted, primitive)
+}
+
+// paramSetStmts emits the statement(s) that serialize one query parameter onto a
+// url.Values receiver from the model variable. A scalar parameter emits a single
+// `receiver.Set(name, value)`; a collection parameter (an array query parameter
+// modeled as a List attribute) emits a `for _, elem := range <modelVar>.<field>.
+// Elements() { receiver.Add(name, elemValue) }` so each element is sent as a
+// repeated query value (OpenAPI form style, explode: true → `?name=a&name=b`).
+// An optional parameter is gated on its model field being non-null via
+// gateParamStmts, so an unset parameter is omitted from the request rather than
+// sent as a zero-value empty string.
+func paramSetStmts(p paramSubstitution, modelVar string, receiver ast.Expr) []ast.Stmt {
+	if p.collection {
+		fieldSel := astgen.Selector(astgen.Ident(modelVar), p.field)
+		addCall := astgen.Call(
+			astgen.Selector(receiver, "Add"),
+			astgen.Lit(p.name),
+			elementValueExpr("elem", p.primitive),
+		)
+		loop := astgen.RangeStmt(
+			astgen.Ident("_"),
+			astgen.Ident("elem"),
+			token.DEFINE,
+			astgen.Call(astgen.Selector(fieldSel, "Elements")),
+			astgen.Block(astgen.ExprStmt(addCall)),
+		)
+		return gateParamStmts(p, modelVar, loop)
+	}
+	setCall := astgen.Call(
+		astgen.Selector(receiver, "Set"),
+		astgen.Lit(p.name),
+		paramValueExpr(modelVar, p),
+	)
+	return gateParamStmts(p, modelVar, astgen.ExprStmt(setCall))
 }
 
 // sendRequestStmts emits the NewRequest + Do + status-check sequence for a
@@ -979,8 +1210,8 @@ func sortedErrorCodes(m map[int]string) []int {
 
 // decodeAndApplyStmts emits the statements decoding a JSON response body and
 // applying it to the named model variable.
-func decodeAndApplyStmts(summary, modelVar string) []ast.Stmt {
-	return []ast.Stmt{
+func decodeAndApplyStmts(summary, modelVar, envelope string) []ast.Stmt {
+	stmts := []ast.Stmt{
 		astgen.DeclStmt(astgen.VarDeclGen(astgen.VarSpec(
 			"data",
 			astgen.MapType(astgen.Ident("string"), astgen.Ident("any")),
@@ -1006,6 +1237,38 @@ func decodeAndApplyStmts(summary, modelVar string) []ast.Stmt {
 				astgen.Return(),
 			),
 		},
+	}
+	// A {data: ...} response envelope (E1): the transformer flattened the payload
+	// out of the response schema, so unwrap the decoded body by the same key
+	// before applying it to the model. The type assertion is fail-safe — a
+	// response that does not carry the envelope object leaves data untouched and
+	// applyJSONToModel simply finds no matching fields.
+	if envelope != "" {
+		stmts = append(stmts, &ast.IfStmt{
+			Init: astgen.Assign(
+				[]ast.Expr{astgen.Ident("v"), astgen.Ident("ok")},
+				[]ast.Expr{astgen.IndexExpr(astgen.Ident("data"), astgen.Lit(envelope))},
+			),
+			Cond: astgen.Ident("ok"),
+			Body: astgen.Block(
+				&ast.IfStmt{
+					Init: astgen.Assign(
+						[]ast.Expr{astgen.Ident("m"), astgen.Ident("ok")},
+						[]ast.Expr{astgen.TypeAssertExpr(astgen.Ident("v"), astgen.MapType(astgen.Ident("string"), astgen.Ident("any")))},
+					),
+					Cond: astgen.Ident("ok"),
+					Body: astgen.Block(
+						astgen.AssignStmt(
+							[]ast.Expr{astgen.Ident("data")},
+							[]ast.Expr{astgen.Ident("m")},
+							token.ASSIGN,
+						),
+					),
+				},
+			),
+		})
+	}
+	stmts = append(stmts,
 		astgen.AssignStmt(
 			[]ast.Expr{astgen.Ident("err")},
 			[]ast.Expr{astgen.Call(
@@ -1016,7 +1279,8 @@ func decodeAndApplyStmts(summary, modelVar string) []ast.Stmt {
 			token.ASSIGN,
 		),
 		errCheckStmt(summary, "Could not map response to state: %s"),
-	}
+	)
+	return stmts
 }
 
 // stateSetStmt emits resp.Diagnostics.Append(resp.State.Set(ctx, &model)...).
@@ -1084,11 +1348,12 @@ func formBodyStmts(op crudOperationPlan, modelVar string) ([]ast.Stmt, ast.Expr)
 		astgen.CompositeLit(astgen.QualExpr("url", "Values")),
 	))
 	for _, p := range op.formDataParams {
-		stmts = append(stmts, astgen.ExprStmt(astgen.Call(
+		setCall := astgen.Call(
 			astgen.Selector(astgen.Ident("form"), "Set"),
 			astgen.Lit(p.name),
 			paramValueExpr(modelVar, p),
-		)))
+		)
+		stmts = append(stmts, gateParamStmts(p, modelVar, astgen.ExprStmt(setCall))...)
 	}
 	stmts = append(stmts, astgen.AssignSingle(
 		astgen.Ident("payload"),
@@ -1126,13 +1391,14 @@ func multipartBodyStmts(op crudOperationPlan, summary, modelVar string) ([]ast.S
 		),
 	)
 	for _, p := range op.formDataParams {
+		var inner []ast.Stmt
 		if p.binary {
 			// Binary parameter: the model field holds the upload path. Open it,
 			// create a file part named after the field using the path's base name
 			// as the filename (so the request does not leak the full local path),
 			// copy the file into the part, then close the file. Each step is
 			// error-checked and returns on failure.
-			stmts = append(stmts,
+			inner = append(inner,
 				astgen.Assign(
 					[]ast.Expr{astgen.Ident("file"), astgen.Ident("err")},
 					[]ast.Expr{astgen.Call(astgen.QualExpr("os", "Open"), paramValueExpr(modelVar, p))},
@@ -1174,12 +1440,15 @@ func multipartBodyStmts(op crudOperationPlan, summary, modelVar string) ([]ast.S
 			)
 		} else {
 			// Non-binary parameter: write it as a text field.
-			stmts = append(stmts, astgen.ExprStmt(astgen.Call(
+			inner = append(inner, astgen.ExprStmt(astgen.Call(
 				astgen.Selector(astgen.Ident("formWriter"), "WriteField"),
 				astgen.Lit(p.name),
 				paramValueExpr(modelVar, p),
 			)))
 		}
+		// An optional formData parameter is omitted from the body entirely when
+		// unset (its model field is null) rather than written as an empty field.
+		stmts = append(stmts, gateParamStmts(p, modelVar, inner...)...)
 	}
 	// Finalize the multipart body; a failure to close the writer leaves an
 	// incomplete body, so it is error-checked like the other steps.
@@ -1249,7 +1518,7 @@ func wiredCreateBody(r ir.ResourceIR, plan resourceWiringPlan, modelName string)
 	stmts = append(stmts, bodyStmts...)
 	stmts = append(stmts, requestPathStmts(plan.create, "plan")...)
 	stmts = append(stmts, sendRequestStmts(plan.create, "r", summary, "plan", bodyExpr, nil)...)
-	stmts = append(stmts, decodeAndApplyStmts(summary, "plan")...)
+	stmts = append(stmts, decodeAndApplyStmts(summary, "plan", plan.create.responseEnvelope)...)
 	stmts = append(stmts, createIDFallbackStmts(r, "plan", summary)...)
 	stmts = append(stmts, stateSetStmt("plan"))
 	return stmts
@@ -1328,7 +1597,7 @@ func wiredReadBody(r ir.ResourceIR, plan resourceWiringPlan, modelName string) [
 		)),
 		astgen.Return(),
 	})...)
-	stmts = append(stmts, decodeAndApplyStmts(summary, "state")...)
+	stmts = append(stmts, decodeAndApplyStmts(summary, "state", plan.read.responseEnvelope)...)
 	stmts = append(stmts, stateSetStmt("state"))
 	return stmts
 }
@@ -1377,7 +1646,7 @@ func wiredUpdateBody(r ir.ResourceIR, plan resourceWiringPlan, modelName string)
 	stmts = append(stmts, bodyStmts...)
 	stmts = append(stmts, requestPathStmts(plan.updateOp, "plan")...)
 	stmts = append(stmts, sendRequestStmts(plan.updateOp, "r", summary, "plan", bodyExpr, nil)...)
-	stmts = append(stmts, decodeAndApplyStmts(summary, "plan")...)
+	stmts = append(stmts, decodeAndApplyStmts(summary, "plan", plan.updateOp.responseEnvelope)...)
 	stmts = append(stmts, stateSetStmt("plan"))
 	return stmts
 }

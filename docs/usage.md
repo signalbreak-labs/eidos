@@ -456,7 +456,7 @@ datasource_overrides:
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `operation` | string | OpenAPI operationId to match. |
+| `operation` | string | OpenAPI operationId, or a `"METHOD /path"` form (e.g. `GET /snmp/throttle`) matched against the data source's read method and path. The method+path form disambiguates operations that share an operationId. |
 | `name` | string | Data source name/type name to match (alternative to `operation`). |
 | `datasource_name` | string | Generated data source name. |
 
@@ -477,7 +477,7 @@ action_overrides:
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `operation` | string | **Required.** OpenAPI operationId. |
+| `operation` | string | **Required.** OpenAPI operationId, or a `"METHOD /path"` form (e.g. `PUT /snmp/throttle`) matched against the action's invoke method and path. The method+path form disambiguates operations that share an operationId. |
 | `name` | string | Generated action name. |
 | `description` | string | Action description. |
 | `progress_messages` | bool | Stream progress messages during invocation. |
@@ -928,10 +928,12 @@ argument.
 - Generated resource CRUD methods are wired to the generated API client when the resource has a complete create/read/delete operation mapping (and an update mapping for `Update`); the provider `Configure` method constructs the client and the optional `endpoint` provider attribute overrides the API base URL. Data-source `Read` bodies and action `Invoke` bodies wire on the same terms, ephemeral `Open` wires when its mapping is bodiless and resolvable (with `Renew`/`Close` wiring via ephemeral private state), and list resources wire when the list mapping resolves (streaming via the generated client). Action `ModifyPlan`/`ValidateConfig` wire only when an explicit `modify_plan_operation`/`validate_config_operation` mapping is declared in `generator.yaml` (never auto-inferred). Resources with incomplete mappings and provider-defined functions emit clear runtime diagnostics instead of placeholder TODO comments, but they are not wired to real remote API calls.
 - Parser type-mismatch diagnostics are emitted for OpenAPI 3.0.x/3.1.x and for Swagger 2.0 scalar fields at every depth; any-value fields (default/example/const and the exclusive bounds) are preserved without warning.
 - `uniqueItems: true` is honored with Terraform Set attributes/blocks for managed resources, data sources (array responses), ephemerals, and actions. The one exception is list resources: the experimental Terraform `list/schema` package has no Set types, so a list endpoint whose response array declares `uniqueItems: true` is downgraded to a List and surfaced with a `diagnostics.Warning` at transform time (the downgrade is not silent).
-- Auth interceptors are generated for API key, HTTP basic/bearer, OAuth2 `client_credentials` and `password` grants, OAuth2 `authorization_code` (refresh-only — the initial code exchange is interactive and must happen out-of-band; the practitioner supplies a `refresh_token` and the provider refreshes it, handling rotation), and OpenID Connect (discovery, or an `oidc_token_url` override, then a client-credentials token fetch). The OAuth2 `implicit` flow has no interceptor (interactive redirect; deprecated in OAuth 2.1) and warns at runtime when configured.
+- Auth interceptors are generated for API key, HTTP basic/bearer, OAuth2 `client_credentials` and `password` grants, OAuth2 `authorization_code` (refresh-only — the initial code exchange is interactive and must happen out-of-band; the practitioner supplies a `refresh_token` and the provider refreshes it, handling rotation), and OpenID Connect (discovery, or an `oidc_token_url` override, then a client-credentials token fetch). The OAuth2 `implicit` flow has no interceptor (interactive redirect; deprecated in OAuth 2.1) and warns at runtime when configured. A spec that declares more than one HTTP bearer scheme qualifies each scheme's provider attribute with the scheme name (`account_token`, `agent_token`, …) so distinct tokens can be set per scheme; a single bearer scheme keeps the canonical `bearer_token`.
 - Wired create/update request bodies are encoded per the operation's selected media type (`transformer.RequestBodyKind`): JSON is the default (including JSON dialects ending in `+json`); primitive `in: formData` parameters are sent as `application/x-www-form-urlencoded`; a binary `formData` parameter (`type: string, format: binary`, including Swagger 2.0 `type: file`) selects `multipart/form-data` and is uploaded from the model field's file path; and `application/xml`/`text/xml` bodies are encoded with a best-effort element-per-field `mapToXML` (custom `xml` keyword names/attributes are out of scope). A media type the generator cannot encode (e.g. `application/octet-stream`) is surfaced with a fail-loud `Warning` and kept scaffolded. Swagger 2.0 `formData` parameters wire end to end: the v2 parser's request-body form schema is decomposed back into per-field parameters (`swagger-formdata` reference spec exercises both form-urlencoded and multipart).
 - Polymorphism: top-level `oneOf`/`anyOf` reach the IR as unions (the `dynamic_union` strategy renders a discriminated union as a `SingleNestedAttribute` with a `DiscriminatorValidator`; `split_resources` replaces a top-level polymorphic resource with one resource per variant). Nested `oneOf`/`anyOf` (inside properties or collection elements) render as Dynamic attributes with a fail-loud `warnCompositionNotModeled` warning — the flat Terraform attribute model cannot represent alternatives. The OpenAPI `discriminator` is only a validator: create/update bodies use generic JSON↔model conversion and do not switch on the discriminator property when encoding/decoding a variant, so a discriminated union round-trip is generic JSON, not variant-aware. `EnumValues` is not rendered as a `stringvalidator` (the allowed-keys check is covered by `DiscriminatorValidator`).
 - Security: when an operation declares more than one security requirement (any one suffices), eidos applies AND of all declared schemes and emits a warning — a non-interactive Terraform provider cannot reliably try/fallback across OR alternatives, and the warn-and-AND choice is stricter than OR and fail-loud. The OAuth2 `implicit` flow has no interceptor (interactive browser redirect; deprecated in OAuth 2.1) and `Configure` warns at runtime when configured.
+- Actions have no result surface: terraform-plugin-framework v1.19.0's `action.InvokeResponse` exposes only `Diagnostics` and `SendProgress` (no `Result` field), and `action/schema` attributes cannot be `Computed`, so a generated action that returns a value (e.g. an auth `register` action's token) reports success/failure but does not decode the response body. This is an upstream framework limitation, not a generator gap; no broken code is emitted.
+- `generator.yaml` must not claim one operation in both `resource_overrides` and `action_overrides`: a resource already owns the operation, so the duplicate action override is skipped with a fail-loud `Warning` naming the operation and its method+path (`Action override references an operation already claimed by a resource`).
 - Terraform State Stores (experimental in Terraform 1.15+) are not generated; eidos tracks the feature and waits for GA.
 - The generated mock server is intentionally a deterministic, single-resource lifecycle prover (hardcoded `example-id`, first-segment routes, no nested routes); the live acceptance tests (`testfixtures/live`, `TF_ACC=1`) run against a local deterministic mock server and never run in CI by design.
 - nested `metadata` wrapper flattening is not implemented: the reference mycloud spec exposes the path parameters (`name`, `workspace`) as top-level properties instead. A future enhancement could extend `ManagedResourceSchema` to flatten a single level of nested `metadata` into top-level path-param attributes.
@@ -951,6 +953,32 @@ keep previews self-contained.
 ### generate-config refuses to overwrite
 
 Pass `--force` to replace an existing `generator.yaml`.
+
+### Duplicate operationIds fail generation
+
+Two operations that share an `operationId` (or whose `operationId`s normalize
+to the same construct name) produce the same resource/action/data source name,
+which would make the generator emit two files at one path. Eidos fails loud
+with an error diagnostic naming both source operations instead of surfacing a
+confusing "duplicate output path" error.
+
+Resolve the collision by renaming one `operationId` in the spec, or by adding a
+`generator.yaml` override that matches the colliding operation by its
+`METHOD /path` and renames it:
+
+```yaml
+action_overrides:
+  - operation: "PUT /system/snmp/throttle"
+    name: redefine_system_snmp_throttle_config
+datasource_overrides:
+  - operation: "GET /licensing/module/all/flat"
+    datasource_name: get_all_cluster_licenses_flat
+```
+
+The `operation` field accepts either an OpenAPI operationId or a `"METHOD /path"`
+form; the method+path form disambiguates operations that share an operationId,
+which the operationId form cannot (it would match every operation carrying that
+operationId).
 
 ### Spec path resolution
 

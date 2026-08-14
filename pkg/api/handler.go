@@ -278,20 +278,38 @@ func validateContext(ctx context.Context, body []byte, contentType string) Valid
 	return resp
 }
 
+// loadRequestBodyWithContentType parses a spec body using the fixed display
+// name "request.yaml"/"request.json" — appropriate for the HTTP validate
+// endpoint, where the request body has no real filename.
 func loadRequestBodyWithContentType(body []byte, contentType string) (parser.Node, error) {
+	return loadRequestBody(body, contentType, "request.yaml", "request.json")
+}
+
+// loadRequestBodyWithName parses a spec body, attributing parse errors to name
+// (the caller's real spec path or URL) so diagnostics point at the actual file
+// rather than the generic "request.yaml". The name is used verbatim for both
+// formats: the file's own extension is authoritative.
+func loadRequestBodyWithName(body []byte, contentType, name string) (parser.Node, error) {
+	return loadRequestBody(body, contentType, name, name)
+}
+
+func loadRequestBody(body []byte, contentType, yamlName, jsonName string) (parser.Node, error) {
 	trimmed := bytes.TrimSpace(body)
 	if len(trimmed) == 0 {
 		return nil, fmt.Errorf("empty request body")
 	}
 
 	ct := strings.ToLower(strings.TrimSpace(contentType))
+	// Route explicitly by Content-Type / first byte (not by the display name's
+	// extension) so a spec body is always parsed with the right parser and errors
+	// are attributed to the caller's real file name.
 	if strings.Contains(ct, "yaml") || strings.Contains(ct, "yml") {
-		return parser.LoadFile("request.yaml", body)
+		return parser.LoadFileAsYAML(yamlName, body)
 	}
 	if strings.Contains(ct, "json") || trimmed[0] == '{' || trimmed[0] == '[' {
-		return parser.LoadFile("request.json", body)
+		return parser.LoadFileAsJSON(jsonName, body)
 	}
-	return parser.LoadFile("request.yaml", body)
+	return parser.LoadFileAsYAML(yamlName, body)
 }
 
 // extractConfig removes an optional top-level "config" string from the parsed
@@ -630,7 +648,7 @@ func buildIRPreview(spec *parser.Spec, version parser.Version, cfg *config.Confi
 	// classification unchanged. The transformer path-operation map is computed
 	// once and shared with the per-operation pass so data sources can build their
 	// schemas from the same resolved request/response shapes (REMAINING_GAPS §4).
-	groupedResources, consumed := buildGroupedResources(spec, name, pathOps)
+	groupedResources, consumed := buildGroupedResources(spec, name, pathOps, &previewDiags)
 	preview.Resources = append(preview.Resources, groupedResources...)
 
 	// resource_overrides with generate_resource or explicit CRUD operations
@@ -674,7 +692,18 @@ func buildIRPreview(spec *parser.Spec, version parser.Version, cfg *config.Confi
 	// auth surface and Configure has nothing to read even though the generated
 	// client ships ready-made interceptors.
 	applySecurityConfigAttributes(preview, &previewDiags)
-	applyConfigOverrides(preview, cfg, name, &previewDiags)
+	applyConfigOverrides(preview, cfg, name, pathOps, consumed, &previewDiags)
+	// Write-only and secret (Sensitive) inference are spec-driven passes, not
+	// generator.yaml preferences, so they run unconditionally (even when cfg is
+	// nil) after config overrides so override-added constructs are covered too.
+	applyWriteOnlyAttributesToProvider(preview, &previewDiags)
+	inferSensitiveAttributesToProvider(preview, &previewDiags)
+
+	// Two operations that normalize to the same construct name (e.g. duplicate
+	// operationIds) would make the generator emit two files at one path. Fail
+	// loud here with a diagnostic naming both source operations instead of
+	// surfacing a confusing "duplicate output path" error from the generator.
+	previewDiags = append(previewDiags, checkDuplicateConstructNames(preview)...)
 
 	return preview, previewDiags
 }
@@ -738,21 +767,63 @@ func addSpecPathOperations(preview *ir.ProviderIR, spec *parser.Spec, providerNa
 // applyConfigOverrides appends generator.yaml-declared actions, ephemeral
 // resources, list resources, and functions to the preview, applies the
 // remaining overrides, and surfaces override failures.
-func applyConfigOverrides(preview *ir.ProviderIR, cfg *config.Config, providerName string, diags *diagnostics.Diagnostics) {
+//
+// An override that matches an already-inferred construct modifies that
+// construct (via ApplyOverrides) rather than declaring a new one: appending a
+// fresh construct from the override would emit two constructs with the same
+// name — the override-created one and the renamed existing one. The override
+// fields that ApplyOverrides does not handle (preflight endpoints, lifecycle
+// mappings, function arguments) are applied to the matched construct here so
+// they are not silently dropped.
+//
+// pathOps and consumed thread the resolved operation map and the set of
+// operations already claimed by resources so an action override that targets a
+// resource-claimed operation fails loud instead of silently appending an empty
+// scaffold action (the operation was consumed by the resource, so no action was
+// inferred, and the bare actionFromOverride carries no ConfigSchema or
+// InvokeMapping).
+func applyConfigOverrides(preview *ir.ProviderIR, cfg *config.Config, providerName string, pathOps map[string]map[transformer.HTTPMethod]transformer.Operation, consumed map[string]map[string]bool, diags *diagnostics.Diagnostics) {
 	if cfg == nil {
 		return
 	}
 	for _, ao := range cfg.ActionOverrides {
+		if idx := matchingActionIndex(preview.Actions, ao); idx >= 0 {
+			applyActionOverrideExtras(&preview.Actions[idx], ao)
+			continue
+		}
+		if path, method, ok := actionOverrideDoubleClaimed(ao, pathOps, consumed); ok {
+			*diags = append(*diags, diagnostics.Diagnostic{
+				Severity: diagnostics.Warning,
+				Summary:  "Action override references an operation already claimed by a resource",
+				Detail: fmt.Sprintf(
+					"Action override %q targets %s %s, which a resource already consumes. The operation "+
+						"can be claimed by exactly one construct, so the action is skipped. Remove the "+
+						"operation from action_overrides or from the resource's create/read/update/delete "+
+						"operations so the claim is unambiguous.",
+					ao.Operation, strings.ToUpper(method), path),
+			})
+			continue
+		}
 		preview.Actions = append(preview.Actions, actionFromOverride(ao, providerName))
 	}
 	for _, eo := range cfg.EphemeralOverrides {
-		preview.EphemeralResources = append(preview.EphemeralResources, ephemeralFromOverride(eo, providerName))
+		if idx := matchingEphemeralIndex(preview.EphemeralResources, eo); idx >= 0 {
+			applyEphemeralOverrideExtras(&preview.EphemeralResources[idx], eo)
+		} else {
+			preview.EphemeralResources = append(preview.EphemeralResources, ephemeralFromOverride(eo, providerName))
+		}
 	}
 	for _, lo := range cfg.ListResourceOverrides {
-		preview.ListResources = append(preview.ListResources, listResourceFromOverride(lo, providerName))
+		if matchingListResourceIndex(preview.ListResources, lo) < 0 {
+			preview.ListResources = append(preview.ListResources, listResourceFromOverride(lo, providerName))
+		}
 	}
 	for _, fo := range cfg.FunctionOverrides {
-		preview.Functions = append(preview.Functions, functionFromOverride(fo, providerName))
+		if idx := matchingFunctionIndex(preview.Functions, fo); idx >= 0 {
+			applyFunctionOverrideExtras(&preview.Functions[idx], fo)
+		} else {
+			preview.Functions = append(preview.Functions, functionFromOverride(fo, providerName))
+		}
 	}
 
 	if err := transformer.ApplyOverrides(preview, cfg); err != nil {
@@ -762,7 +833,157 @@ func applyConfigOverrides(preview *ir.ProviderIR, cfg *config.Config, providerNa
 			Detail:   err.Error(),
 		})
 	}
-	applyWriteOnlyAttributesToProvider(preview, diags)
+}
+
+// actionOverrideDoubleClaimed reports whether an action override's operation is
+// already consumed by a resource (a grouped resource or a resource creation
+// override). The operation resolves in the spec but was claimed before
+// applyConfigOverrides ran, so appending an actionFromOverride would emit an
+// empty scaffold (no ConfigSchema, no InvokeMapping) for an operation the
+// resource already owns. Overrides that name a method+path or an operation with
+// no operationId leave ok=false — those legitimately declare a fresh construct.
+func actionOverrideDoubleClaimed(ao config.ActionOverride, pathOps map[string]map[transformer.HTTPMethod]transformer.Operation, consumed map[string]map[string]bool) (string, string, bool) {
+	path, method, op := resolveOperationByID(pathOps, ao.Operation)
+	if op == nil || !isConsumed(consumed, path, method) {
+		return "", "", false
+	}
+	return path, method, true
+}
+
+// matchingActionIndex returns the index of the first action an override matches
+// (by source operation, method+path, or name identity), or -1. When an override
+// matches an already-inferred action, it modifies that action rather than
+// declaring a new one.
+func matchingActionIndex(actions []ir.ActionIR, ao config.ActionOverride) int {
+	for i := range actions {
+		if transformer.OverrideMatchesEntity(actions[i].SourceOperation, actions[i].InvokeMapping, ao.Operation, actions[i].Name, actions[i].TypeName, actions[i].FullName) {
+			return i
+		}
+	}
+	return -1
+}
+
+// applyActionOverrideExtras applies the action-override fields that
+// transformer.ApplyOverrides does not handle — the explicit preflight and
+// server-side validation endpoints — to an existing action matched by an
+// override. Without this, an override that matches an existing action would
+// silently drop its declared modify_plan_operation / validate_config_operation.
+func applyActionOverrideExtras(a *ir.ActionIR, ao config.ActionOverride) {
+	if strings.TrimSpace(ao.ModifyPlanOperation) != "" {
+		m := operationMappingFromString(ao.ModifyPlanOperation)
+		a.ModifyPlanMapping = &m
+		a.ModifyPlan = true
+	}
+	if strings.TrimSpace(ao.ValidateConfigOperation) != "" {
+		m := operationMappingFromString(ao.ValidateConfigOperation)
+		a.ValidateConfigMapping = &m
+	}
+}
+
+func matchingEphemeralIndex(ephemerals []ir.EphemeralResourceIR, eo config.EphemeralOverride) int {
+	for i := range ephemerals {
+		if transformer.OverrideMatchesEntity(ephemerals[i].SourceOperation, ephemerals[i].OpenMapping, eo.Operation, ephemerals[i].Name, ephemerals[i].TypeName, ephemerals[i].FullName) {
+			return i
+		}
+	}
+	return -1
+}
+
+// applyEphemeralOverrideExtras applies the ephemeral-override fields that
+// transformer.ApplyOverrides does not handle — the Open/Renew/Close lifecycle
+// mappings — to an existing ephemeral resource matched by an override.
+func applyEphemeralOverrideExtras(e *ir.EphemeralResourceIR, eo config.EphemeralOverride) {
+	if strings.TrimSpace(eo.OpenMapping) != "" {
+		e.OpenMapping = operationMappingFromString(eo.OpenMapping)
+	}
+	if strings.TrimSpace(eo.RenewMapping) != "" {
+		rm := operationMappingFromString(eo.RenewMapping)
+		e.RenewMapping = &rm
+		e.HasRenew = true
+	}
+	if strings.TrimSpace(eo.CloseMapping) != "" {
+		cm := operationMappingFromString(eo.CloseMapping)
+		e.CloseMapping = &cm
+		e.HasClose = true
+	}
+}
+
+func matchingListResourceIndex(listResources []ir.ListResourceIR, lo config.ListResourceOverride) int {
+	for i := range listResources {
+		if transformer.OverrideMatchesEntity(listResources[i].SourceOperation, listResources[i].ListMapping, lo.Operation, listResources[i].Name, listResources[i].TypeName, listResources[i].FullName) {
+			return i
+		}
+	}
+	return -1
+}
+
+func matchingFunctionIndex(functions []ir.FunctionIR, fo config.FunctionOverride) int {
+	for i := range functions {
+		if transformer.OverrideMatchesEntity(functions[i].SourceOperation, ir.OperationMappingIR{}, fo.Operation, functions[i].Name, functions[i].TypeName, functions[i].FullName) {
+			return i
+		}
+	}
+	return -1
+}
+
+// applyFunctionOverrideExtras applies the function-override fields that
+// transformer.ApplyOverrides does not handle — the declared arguments — to an
+// existing function matched by an override.
+//
+// Declared arguments MERGE with the function's inferred arguments by name: an
+// override argument whose name matches an inferred argument (case-insensitively,
+// ignoring underscores) replaces that argument's type so the override can
+// correct an inferred type without duplicating it; an override argument with no
+// inferred counterpart is appended. Blindly appending every declared argument
+// duplicates the inferred signature when an override redeclares the same
+// parameters (e.g. an auto-generated config that records an inferred
+// function's query-parameter signature), producing "Parameter names must be
+// unique" validation errors at provider load.
+func applyFunctionOverrideExtras(f *ir.FunctionIR, fo config.FunctionOverride) {
+	for _, arg := range fo.Arguments {
+		name := strings.TrimSpace(arg.Name)
+		if name == "" {
+			continue
+		}
+		schema := ir.SchemaIR{Type: primitiveTypeFromString(arg.Type)}
+		if idx := functionArgumentIndex(f.Arguments, name); idx >= 0 {
+			// Replace only the type; preserve the inferred WireName and
+			// Description, which the override does not carry.
+			f.Arguments[idx].Schema = schema
+			continue
+		}
+		f.Arguments = append(f.Arguments, ir.FunctionParamIR{
+			Name:   transformer.SanitizeAttributeName(name),
+			Schema: schema,
+		})
+	}
+}
+
+// functionArgumentIndex returns the index of the first function argument whose
+// name matches target. Names are compared case-insensitively and with
+// underscores stripped so that an override's snake_case name (e.g. "start_time")
+// matches an inferred name derived from a camelCase or dotted parameter (e.g.
+// "startTime" or "fm.tags").
+func functionArgumentIndex(args []ir.FunctionParamIR, target string) int {
+	want := normalizeFunctionArgName(target)
+	if want == "" {
+		return -1
+	}
+	for i := range args {
+		if normalizeFunctionArgName(args[i].Name) == want {
+			return i
+		}
+	}
+	return -1
+}
+
+// normalizeFunctionArgName trims surrounding whitespace, strips underscores, and
+// lowercases a function-argument name for case- and formatting-insensitive
+// comparison. It mirrors transformer.normalizeName (which is not exported).
+func normalizeFunctionArgName(s string) string {
+	s = strings.TrimSpace(s)
+	s = strings.ReplaceAll(s, "_", "")
+	return strings.ToLower(s)
 }
 
 // sortedKeys returns the keys of m in lexicographic order. It is used to make
@@ -822,6 +1043,44 @@ func applyWriteOnlyAttributesToProvider(provider *ir.ProviderIR, diags *diagnost
 		transformer.ApplyWriteOnlyAttributesWithDiagnostics(&provider.ListResources[i].IdentitySchema, diags)
 		if provider.ListResources[i].ResourceSchema != nil {
 			transformer.ApplyWriteOnlyAttributesWithDiagnostics(provider.ListResources[i].ResourceSchema, diags)
+		}
+	}
+}
+
+// inferSensitiveAttributesToProvider marks string-typed attributes whose names
+// indicate a secret (password/secret/token/...) as Sensitive across every
+// schema kind the generator renders Sensitive for (resources, data sources,
+// ephemeral resources). For schema kinds that ignore Sensitive — action config
+// attributes (action.go) and list resource schema attributes (list.go) — it
+// emits a Warning per secret-named attribute instead, so the limitation is
+// surfaced rather than the secret leaking in state with no signal (fail-loud).
+// Existing Sensitive attributes (security-scheme inference, write-only
+// processing, overrides) are left untouched; this pass only ever adds.
+func inferSensitiveAttributesToProvider(provider *ir.ProviderIR, diags *diagnostics.Diagnostics) {
+	if provider == nil {
+		return
+	}
+	for i := range provider.Resources {
+		transformer.InferSensitiveAttributes(&provider.Resources[i].Schema)
+	}
+	for i := range provider.DataSources {
+		transformer.InferSensitiveAttributes(&provider.DataSources[i].Schema)
+	}
+	for i := range provider.EphemeralResources {
+		transformer.InferSensitiveAttributes(&provider.EphemeralResources[i].ConfigSchema)
+		transformer.InferSensitiveAttributes(&provider.EphemeralResources[i].ResultSchema)
+	}
+	// Actions and list resources cannot render Sensitive (action.go/list.go);
+	// surface the secret-named attributes we cannot mark so they are not silent.
+	for i := range provider.Actions {
+		transformer.WarnUnmarkableSensitive(&provider.Actions[i].ConfigSchema, "action", provider.Actions[i].TypeName, diags)
+	}
+	for i := range provider.ListResources {
+		name := provider.ListResources[i].TypeName
+		transformer.WarnUnmarkableSensitive(&provider.ListResources[i].ConfigSchema, "list resource", name, diags)
+		transformer.WarnUnmarkableSensitive(&provider.ListResources[i].IdentitySchema, "list resource", name, diags)
+		if provider.ListResources[i].ResourceSchema != nil {
+			transformer.WarnUnmarkableSensitive(provider.ListResources[i].ResourceSchema, "list resource", name, diags)
 		}
 	}
 }
@@ -1020,7 +1279,7 @@ func applySecurityConfigAttributes(preview *ir.ProviderIR, diags *diagnostics.Di
 		seen[a.Name] = struct{}{}
 	}
 	for _, scheme := range preview.SecurityIR.Schemes {
-		attrs, err := transformer.MapSecuritySchemeToProviderConfig(scheme)
+		attrs, err := transformer.MapSecuritySchemeToProviderConfig(scheme, preview.SecurityIR.Schemes)
 		if err != nil {
 			*diags = append(*diags, diagnostics.Diagnostic{
 				Severity: diagnostics.Error,
@@ -1193,7 +1452,11 @@ func providerName(spec *parser.Spec, cfg *config.Config) string {
 		return cfg.Provider.Name
 	}
 	if spec.Info != nil && strings.TrimSpace(spec.Info.Title) != "" {
-		return transformer.ToSnakeCase(spec.Info.Title)
+		// Terraform provider type names allow only letters, digits, and hyphens
+		// (no underscores or dots), so derive the default from the title as
+		// kebab-case rather than snake_case (e.g. "Example Cloud API" ->
+		// "example-cloud-api", not the invalid "example_cloud_api").
+		return transformer.ToProviderTypeName(spec.Info.Title)
 	}
 	return "generated"
 }
@@ -1209,7 +1472,16 @@ func addPathOperations(preview *ir.ProviderIR, spec *parser.Spec, path string, p
 		"PATCH":  pi.Patch,
 		"DELETE": pi.Delete,
 	}
-	for method, op := range ops {
+	// Iterate methods in a fixed order rather than ranging the map: Go
+	// randomizes map iteration order per process, so an unsorted range would
+	// make the relative order of same-path constructs (e.g. a PATCH action and
+	// a DELETE action on one path) nondeterministic across runs, violating
+	// byte-identical generation for an identical spec. The fixed order also
+	// keeps CRUD classification stable: GET (data source) before POST (create)
+	// before PUT/PATCH (update) before DELETE (delete) matches the natural
+	// CRUD lifecycle so a resource's operations are visited in lifecycle order.
+	for _, method := range []string{"GET", "POST", "PUT", "PATCH", "DELETE"} {
+		op := ops[method]
 		if op == nil {
 			continue
 		}
@@ -1217,11 +1489,11 @@ func addPathOperations(preview *ir.ProviderIR, spec *parser.Spec, path string, p
 			continue
 		}
 		op = mergePathParams(op, pi.Parameters)
-		switch classifyOperation(path, method, op, pathOps) {
+		switch classifyOperation(path, method, op, pathOps, true) {
 		case kindResource:
-			preview.Resources = append(preview.Resources, resourceFromOperation(op, providerName, path, method))
+			preview.Resources = append(preview.Resources, resourceFromOperation(op, providerName, path, method, pathOps))
 		case kindDataSource:
-			preview.DataSources = append(preview.DataSources, dataSourceFromOperation(op, providerName, path, method, pathOps, preview.ClientIR.Pagination))
+			preview.DataSources = append(preview.DataSources, dataSourceFromOperation(op, providerName, path, method, pathOps, preview.ClientIR.Pagination, diags))
 			// A collection GET paired with an instance Read is also a list
 			// resource (InferListResources). The promotion is additive — the
 			// data source above is kept so existing wiring is not broken —
@@ -1229,11 +1501,11 @@ func addPathOperations(preview *ir.ProviderIR, spec *parser.Spec, path string, p
 			// hatch. x-terraform-list operations take the kindListResource
 			// branch instead and are not double-emitted.
 			if method == "GET" && listPaths[path] != nil {
-				preview.ListResources = append(preview.ListResources, listResourceFromOperation(op, providerName, path, method, pathOps, listPaths[path]))
+				preview.ListResources = append(preview.ListResources, listResourceFromOperation(op, providerName, path, method, pathOps, listPaths[path], diags))
 				warnListUniqueItems(diags, pathOps, path, method)
 			}
 		case kindAction:
-			preview.Actions = append(preview.Actions, actionFromOperation(op, providerName, path, method))
+			preview.Actions = append(preview.Actions, actionFromOperation(op, providerName, path, method, pathOps))
 		case kindEphemeral:
 			preview.EphemeralResources = append(preview.EphemeralResources, ephemeralFromOperation(spec, op, providerName, path, method, pathOps))
 			// The sibling lifecycle operations the ephemeral claims as its
@@ -1245,7 +1517,7 @@ func addPathOperations(preview *ir.ProviderIR, spec *parser.Spec, path string, p
 			// "/revoke" siblings and the consumption is visible to them.
 			consumeEphemeralLifecycleOps(consumed, path)
 		case kindListResource:
-			preview.ListResources = append(preview.ListResources, listResourceFromOperation(op, providerName, path, method, pathOps, nil))
+			preview.ListResources = append(preview.ListResources, listResourceFromOperation(op, providerName, path, method, pathOps, nil, diags))
 			warnListUniqueItems(diags, pathOps, path, method)
 		case kindFunction:
 			preview.Functions = append(preview.Functions, functionFromOperation(op, providerName, path, method, pathOps))
@@ -1274,6 +1546,46 @@ func warnListUniqueItems(diags *diagnostics.Diagnostics, pathOps map[string]map[
 	}
 }
 
+// warnUnwritableManagedResource surfaces a Warning when a managed resource's
+// schema has no practitioner-writable (Required or Optional) attributes. This
+// is degenerate — Terraform cannot create or update a resource whose every
+// attribute is Computed — and typically indicates the inferred create operation
+// declares no request body (a spec defect), so every attribute is derived from
+// the read response. Fail loud instead of silently emitting an unwritable
+// resource.
+func warnUnwritableManagedResource(diags *diagnostics.Diagnostics, res ir.ResourceIR, create *transformer.Operation) {
+	if diags == nil {
+		return
+	}
+	for _, a := range res.Schema.Attributes {
+		if a.Required || a.Optional {
+			return
+		}
+	}
+	createDesc := "no request body"
+	if create != nil {
+		if create.OperationID != "" {
+			createDesc = "operation " + create.OperationID
+		}
+		if !create.RequestBody {
+			if createDesc != "no request body" {
+				createDesc += " declares no request body"
+			}
+		}
+	}
+	*diags = append(*diags, diagnostics.Diagnostic{
+		Severity: diagnostics.Warning,
+		Summary:  "Managed resource has no writable attributes",
+		Detail: fmt.Sprintf(
+			"Resource %s has no Required or Optional attributes, so every attribute is "+
+				"Computed-only and a practitioner cannot create or update it. The inferred "+
+				"create (%s) does not contribute a writable request body; verify the spec's "+
+				"create operation declares its inputs, or supply a generator.yaml "+
+				"resource_override pinning a create operation that does.",
+			res.FullName, createDesc),
+	})
+}
+
 // buildGroupedResources runs CRUD inference over the parsed spec and returns one
 // wired managed resource per complete CRUD group (Create + Read + Delete), plus
 // the set of (path, method) pairs those resources consume so the per-operation
@@ -1281,7 +1593,7 @@ func warnListUniqueItems(diags *diagnostics.Diagnostics, pathOps map[string]map[
 // classification. This is the §3 fix: real specs with a collection POST plus an
 // instance GET/DELETE now yield a single wired resource instead of separate
 // partial resources.
-func buildGroupedResources(spec *parser.Spec, providerName string, pathOps map[string]map[transformer.HTTPMethod]transformer.Operation) ([]ir.ResourceIR, map[string]map[string]bool) {
+func buildGroupedResources(spec *parser.Spec, providerName string, pathOps map[string]map[transformer.HTTPMethod]transformer.Operation, diags *diagnostics.Diagnostics) ([]ir.ResourceIR, map[string]map[string]bool) {
 	if len(pathOps) == 0 {
 		return nil, nil
 	}
@@ -1302,31 +1614,48 @@ func buildGroupedResources(spec *parser.Spec, providerName string, pathOps map[s
 			continue
 		}
 
+		// The CRUD group's name is derived from the last path segment (e.g.
+		// "trafficPolicyGraph", "alert-policy"); normalize it to snake_case so the
+		// Terraform type name is a valid, conventional HCL identifier (camelCase
+		// is a convention violation; hyphens make the resource handle unreferenceable
+		// in expressions, e.g. gigamon_alert-policy.x lexes as subtraction). This
+		// mirrors the data-source/list/action naming convention.
+		name := transformer.ToSnakeCase(g.Name)
 		res := ir.ResourceIR{
-			Name:            g.Name,
-			FullName:        providerName + "_" + g.Name,
-			TypeName:        providerName + "_" + g.Name,
+			Name:            name,
+			FullName:        providerName + "_" + name,
+			TypeName:        providerName + "_" + name,
+			Description:     operationDescription(crudGroupDescriptionOp(spec, g), fmt.Sprintf("Manages the %s resource.", humanizeConstructName(name))),
 			SourceOperation: groupSourceOperation(g),
 		}
-		res.CRUDMapping.Create = operationMapping("POST", g.CollectionPath, parserOp(spec, g.CollectionPath, "POST"))
+		res.CRUDMapping.Create = resourceOperationMapping(spec, "POST", g.CollectionPath, parserOp(spec, g.CollectionPath, "POST"), envelopeOf(g.Create))
 		res.CRUDMapping.Create.MediaType = mediaTypeOf(g.Create)
-		res.CRUDMapping.Read = operationMapping("GET", g.InstancePath, parserOp(spec, g.InstancePath, "GET"))
+		res.CRUDMapping.Read = resourceOperationMapping(spec, "GET", g.InstancePath, parserOp(spec, g.InstancePath, "GET"), envelopeOf(g.Read))
 		res.CRUDMapping.Read.MediaType = mediaTypeOf(g.Read)
 		if g.Update != nil {
 			updMethod := "PUT"
 			if g.FullUpdate == nil && g.PartialUpdate != nil {
 				updMethod = "PATCH"
 			}
-			upd := operationMapping(updMethod, g.InstancePath, parserOp(spec, g.InstancePath, updMethod))
+			upd := resourceOperationMapping(spec, updMethod, g.InstancePath, parserOp(spec, g.InstancePath, updMethod), envelopeOf(g.Update))
 			upd.MediaType = mediaTypeOf(g.Update)
 			res.CRUDMapping.Update = &upd
 		}
-		res.CRUDMapping.Delete = operationMapping("DELETE", g.InstancePath, parserOp(spec, g.InstancePath, "DELETE"))
+		res.CRUDMapping.Delete = resourceOperationMapping(spec, "DELETE", g.InstancePath, parserOp(spec, g.InstancePath, "DELETE"), envelopeOf(g.Delete))
 		res.CRUDMapping.Delete.MediaType = mediaTypeOf(g.Delete)
 
 		schema, idAttr := transformer.ManagedResourceSchema(g)
 		res.Schema = schema
 		res.IDAttribute = idAttr
+		// Fail loud when a managed resource ends up with no practitioner-writable
+		// attributes. This happens when the inferred create operation declares no
+		// request body (a spec defect — e.g. an archived/incomplete spec that
+		// omits the POST body) so every attribute is derived from the read
+		// response and is Computed-only. A resource with no Required/Optional
+		// attributes cannot be created or updated by a practitioner, so surface it
+		// as a Warning naming the resource and its create operation instead of
+		// silently emitting a degenerate, unwritable resource (fail-loud).
+		warnUnwritableManagedResource(diags, res, g.Create)
 		// Import wiring for grouped resources (REMAINING_GAPS §3/#10). A grouped
 		// resource is importable when its identifier attribute(s) are real schema
 		// attributes the import can populate. InferResourceCRUD expresses import
@@ -1409,7 +1738,7 @@ func applyResourceCreationOverrides(preview *ir.ProviderIR, spec *parser.Spec, p
 		}
 		readPath, _, readOp := resolveOperationByID(pathOps, ro.ReadOperation)
 		updatePath, updateMethod, updateOp := resolveOperationByID(pathOps, ro.UpdateOperation)
-		deletePath, _, deleteOp := resolveOperationByID(pathOps, ro.DeleteOperation)
+		deletePath, deleteMethod, deleteOp := resolveOperationByID(pathOps, ro.DeleteOperation)
 
 		g := transformer.ResourceCRUD{
 			Name:           resourceNameFromOverride(ro, createPath),
@@ -1436,7 +1765,11 @@ func applyResourceCreationOverrides(preview *ir.ProviderIR, spec *parser.Spec, p
 			markConsumed(consumed, updatePath, updateMethod)
 		}
 		if deletePath != "" {
-			markConsumed(consumed, deletePath, "DELETE")
+			// The delete operation may be a non-DELETE method (e.g. SpaceTraders
+			// scraps a ship via POST /my/ships/{shipSymbol}/scrap); consume the
+			// actual method so the per-operation pass does not double-emit it as an
+			// action.
+			markConsumed(consumed, deletePath, deleteMethod)
 		}
 	}
 }
@@ -1461,27 +1794,34 @@ func resourceNameFromOverride(ro config.ResourceOverride, createPath string) str
 // operations were resolved from an override (G8). Unlike inferred groups, the
 // create/read/update/delete paths may differ (e.g. dashboards).
 func resourceFromOverrideCRUD(spec *parser.Spec, providerName string, g transformer.ResourceCRUD) *ir.ResourceIR {
+	// Normalize the CRUD group name to snake_case for the Terraform type name
+	// (camelCase is a convention violation; hyphens make the resource handle
+	// unreferenceable in HCL expressions). See the inferred-group counterpart
+	// above; the Go struct/file names derive from Name via naming.PascalCase /
+	// naming.SnakeCase, which are idempotent on an already-snake name.
+	name := transformer.ToSnakeCase(g.Name)
 	res := ir.ResourceIR{
-		Name:            g.Name,
-		FullName:        providerName + "_" + g.Name,
-		TypeName:        providerName + "_" + g.Name,
+		Name:            name,
+		FullName:        providerName + "_" + name,
+		TypeName:        providerName + "_" + name,
+		Description:     operationDescription(crudGroupDescriptionOp(spec, g), fmt.Sprintf("Manages the %s resource.", humanizeConstructName(name))),
 		SourceOperation: groupSourceOperation(g),
 	}
 	if g.Create != nil {
-		res.CRUDMapping.Create = operationMapping(string(g.Create.Method), g.Create.Path, parserOp(spec, g.Create.Path, string(g.Create.Method)))
+		res.CRUDMapping.Create = resourceOperationMapping(spec, string(g.Create.Method), g.Create.Path, parserOp(spec, g.Create.Path, string(g.Create.Method)), envelopeOf(g.Create))
 		res.CRUDMapping.Create.MediaType = mediaTypeOf(g.Create)
 	}
 	if g.Read != nil {
-		res.CRUDMapping.Read = operationMapping(string(g.Read.Method), g.Read.Path, parserOp(spec, g.Read.Path, string(g.Read.Method)))
+		res.CRUDMapping.Read = resourceOperationMapping(spec, string(g.Read.Method), g.Read.Path, parserOp(spec, g.Read.Path, string(g.Read.Method)), envelopeOf(g.Read))
 		res.CRUDMapping.Read.MediaType = mediaTypeOf(g.Read)
 	}
 	if g.Update != nil {
-		upd := operationMapping(string(g.Update.Method), g.Update.Path, parserOp(spec, g.Update.Path, string(g.Update.Method)))
+		upd := resourceOperationMapping(spec, string(g.Update.Method), g.Update.Path, parserOp(spec, g.Update.Path, string(g.Update.Method)), envelopeOf(g.Update))
 		upd.MediaType = mediaTypeOf(g.Update)
 		res.CRUDMapping.Update = &upd
 	}
 	if g.Delete != nil {
-		res.CRUDMapping.Delete = operationMapping(string(g.Delete.Method), g.Delete.Path, parserOp(spec, g.Delete.Path, string(g.Delete.Method)))
+		res.CRUDMapping.Delete = resourceOperationMapping(spec, string(g.Delete.Method), g.Delete.Path, parserOp(spec, g.Delete.Path, string(g.Delete.Method)), envelopeOf(g.Delete))
 		res.CRUDMapping.Delete.MediaType = mediaTypeOf(g.Delete)
 	}
 	schema, idAttr := transformer.ManagedResourceSchema(g)
@@ -1500,6 +1840,26 @@ func mediaTypeOf(op *transformer.Operation) string {
 		return ""
 	}
 	return op.RequestMediaType
+}
+
+// envelopeOf returns the response-envelope key carried on a transformer
+// Operation (the {data: ...} property the transformer flattened out of the
+// response schema). It is nil-safe so a CRUD group missing one step yields the
+// empty key the generator treats as "no envelope".
+func envelopeOf(op *transformer.Operation) string {
+	if op == nil {
+		return ""
+	}
+	return op.ResponseEnvelope
+}
+
+// envelopeOfTransformerOp returns the response-envelope key for a path/method
+// pair from the transformer path-operation map, or "" when the pair is absent.
+func envelopeOfTransformerOp(pathOps map[string]map[transformer.HTTPMethod]transformer.Operation, path, method string) string {
+	if top := lookupTransformerOp(pathOps, path, method); top != nil {
+		return top.ResponseEnvelope
+	}
+	return ""
 }
 
 // groupedImportFormat builds the brace-enclosed import ID format for a grouped
@@ -1572,7 +1932,11 @@ func groupIsResource(spec *parser.Spec, g transformer.ResourceCRUD, pathOps map[
 		if op == nil {
 			return false
 		}
-		switch classifyOperation(ref.path, ref.method, op, pathOps) {
+		// checkFullCRUD is false here: the group's operations are already known
+		// to form a complete CRUD group, so the CRUD-completeness reclassification
+		// (which turns a partial-update PATCH into an action) must not veto the
+		// group. Only explicit extensions and path keywords reject a group.
+		switch classifyOperation(ref.path, ref.method, op, pathOps, false) {
 		case kindAction, kindEphemeral, kindFunction, kindListResource:
 			return false
 		}
@@ -1649,16 +2013,36 @@ func isConsumed(consumed map[string]map[string]bool, path, method string) bool {
 	return consumed[path][strings.ToUpper(method)]
 }
 
-func resourceFromOperation(op *parser.Operation, providerName, path, method string) ir.ResourceIR {
+// crudGroupDescriptionOp returns the parser operation whose summary/description
+// best describes a CRUD-grouped resource, preferring the Read (GET instance)
+// operation then the Create operation. It feeds operationDescription so a
+// grouped resource gets the same description fallback chain as a single-op
+// construct (spec description if a real sentence, else summary, else a
+// generated "Manages the X resource." phrase).
+func crudGroupDescriptionOp(spec *parser.Spec, g transformer.ResourceCRUD) *parser.Operation {
+	if g.Read != nil {
+		if op := parserOp(spec, g.Read.Path, string(g.Read.Method)); op != nil {
+			return op
+		}
+	}
+	if g.Create != nil {
+		if op := parserOp(spec, g.Create.Path, string(g.Create.Method)); op != nil {
+			return op
+		}
+	}
+	return nil
+}
+
+func resourceFromOperation(op *parser.Operation, providerName, path, method string, pathOps map[string]map[transformer.HTTPMethod]transformer.Operation) ir.ResourceIR {
 	name := resourceName(op, method, path)
 	res := ir.ResourceIR{
 		Name:            name,
 		FullName:        providerName + "_" + name,
 		TypeName:        providerName + "_" + name,
-		Description:     op.Description,
+		Description:     operationDescription(op, fmt.Sprintf("Manages the %s resource.", humanizeConstructName(name))),
 		SourceOperation: op.OperationID,
 	}
-	mapping := operationMapping(method, path, op)
+	mapping := operationMapping(method, path, op, envelopeOfTransformerOp(pathOps, path, method))
 	switch method {
 	case "POST":
 		res.CRUDMapping.Create = mapping
@@ -1672,14 +2056,15 @@ func resourceFromOperation(op *parser.Operation, providerName, path, method stri
 	return res
 }
 
-func dataSourceFromOperation(op *parser.Operation, providerName, path, method string, pathOps map[string]map[transformer.HTTPMethod]transformer.Operation, pagination *ir.PaginationIR) ir.DataSourceIR {
+func dataSourceFromOperation(op *parser.Operation, providerName, path, method string, pathOps map[string]map[transformer.HTTPMethod]transformer.Operation, pagination *ir.PaginationIR, diags *diagnostics.Diagnostics) ir.DataSourceIR {
 	name := resourceName(op, method, path)
 	ds := ir.DataSourceIR{
-		Name:        name,
-		FullName:    providerName + "_" + name,
-		TypeName:    providerName + "_" + name,
-		Description: op.Description,
-		ReadMapping: operationMapping(method, path, op),
+		Name:            name,
+		FullName:        providerName + "_" + name,
+		TypeName:        providerName + "_" + name,
+		Description:     operationDescription(op, fmt.Sprintf("Reads the %s data source.", humanizeConstructName(name))),
+		SourceOperation: op.OperationID,
+		ReadMapping:     operationMapping(method, path, op, envelopeOfTransformerOp(pathOps, path, method)),
 	}
 	// Build the data source schema from the resolved read operation so the
 	// generator can wire Read against real filter/output attributes instead of
@@ -1688,7 +2073,7 @@ func dataSourceFromOperation(op *parser.Operation, providerName, path, method st
 	// present there (e.g. an unsupported method), the schema stays empty and the
 	// generator keeps the honest scaffold Read body.
 	if top := lookupTransformerOp(pathOps, path, method); top != nil {
-		ds.Schema = transformer.DataSourceSchema(*top)
+		ds.Schema = transformer.DataSourceSchema(*top, diags)
 		// A top-level array response marks a list data source: the generator
 		// wires its Read to fetch (and paginate) the pages and expose them as a
 		// Computed `items` List attribute (REMAINING_GAPS §2/§4). Carry the
@@ -1724,9 +2109,9 @@ func resourceName(op *parser.Operation, method, path string) string {
 	return transformer.NormalizeOperationID("", method, path)
 }
 
-func operationMapping(method, path string, op *parser.Operation) ir.OperationMappingIR {
+func operationMapping(method, path string, op *parser.Operation, responseEnvelope string) ir.OperationMappingIR {
 	query, header, cookie, formData := paramsFromOperation(op)
-	return ir.OperationMappingIR{
+	m := ir.OperationMappingIR{
 		Method:               method,
 		PathTemplate:         path,
 		SuccessCodes:         successCodesFromResponses(op, method),
@@ -1736,7 +2121,20 @@ func operationMapping(method, path string, op *parser.Operation) ir.OperationMap
 		CookieParams:         cookie,
 		FormDataParams:       formData,
 		SecurityRequirements: securityRequirementsFromOp(op),
+		ResponseEnvelope:     responseEnvelope,
 	}
+	// A declared request body disables bodiless wiring for actions, list
+	// resources, and ephemeral resources: the generated client only encodes
+	// request bodies through the resource CRUD path, so a bodiless call would
+	// silently drop the practitioner's request body. Carry a non-nil BodySchema
+	// so the generator's wiring gates (planActionWiring / planListWiring /
+	// planEphemeralWiring) keep those constructs honestly scaffolded. The value
+	// is a presence marker: no generator path reads BodySchema's contents, and
+	// resource CRUD bodies get their schema from the transformer's RequestSchema.
+	if op != nil && op.RequestBody != nil && len(op.RequestBody.Content) > 0 {
+		m.BodySchema = &ir.SchemaIR{}
+	}
+	return m
 }
 
 // securityRequirementsFromOp carries the operation's declared security
@@ -1889,16 +2287,111 @@ func v2FormDataParams(op *parser.Operation) []ir.ParamIR {
 
 // paramIR converts a parser parameter to its IR form, carrying a best-effort
 // primitive schema type so downstream consumers can distinguish scalar
-// parameters from structured ones.
+// parameters from structured ones. The schema's const/default/enum are carried
+// so a path parameter that is not a resource attribute (e.g. a shared
+// {apiVersion} versioning segment with enum ["v4","v4beta"]) can be substituted
+// with a static literal by the generator's resolvePathSubstitution, wiring the
+// resource instead of leaving it an honest scaffold.
 func paramIR(p parser.Parameter) ir.ParamIR {
+	s := ir.SchemaIR{Type: paramPrimitiveType(p.Schema), Format: paramFormat(p.Schema)}
+	if p.Schema != nil {
+		if len(p.Schema.Enum) > 0 {
+			s.EnumValues = p.Schema.Enum
+		}
+		if p.Schema.Default != nil {
+			d := p.Schema.Default
+			s.Default = &d
+		}
+		if p.Schema.Const != nil {
+			c := p.Schema.Const
+			s.Const = &c
+		}
+	}
 	return ir.ParamIR{
 		Name:        p.Name,
 		In:          p.In,
 		Description: p.Description,
 		Required:    p.Required,
-		Schema:      ir.SchemaIR{Type: paramPrimitiveType(p.Schema), Format: paramFormat(p.Schema)},
+		Schema:      s,
 		Deprecated:  p.Deprecated,
 	}
+}
+
+// resolveParamRef resolves a parser parameter's $ref against the spec's
+// components/parameters, returning the dereferenced parameter. A parameter with
+// no $ref (declared inline) is returned as-is. This mirrors the transformer's
+// resolveParameter so path-level parameters referenced by $ref expose their
+// schema (and const/default/enum) to paramIR.
+func resolveParamRef(spec *parser.Spec, p parser.Parameter) *parser.Parameter {
+	if p.Ref == "" || spec == nil || spec.Components == nil {
+		return &p
+	}
+	name := p.Ref
+	if idx := strings.LastIndex(name, "/"); idx >= 0 {
+		name = name[idx+1:]
+	}
+	if resolved, ok := spec.Components.Parameters[name]; ok && resolved != nil {
+		return resolved
+	}
+	return &p
+}
+
+// pathParamIRs returns the in:path parameters declared on an operation, merging
+// path-level (path-item) parameters with operation-level parameters per OpenAPI
+// semantics: an operation-level parameter overrides a path-level parameter of
+// the same name. Each parameter's $ref is resolved so its schema is available.
+// The result is sorted by name for deterministic IR. Only managed-resource
+// CRUD mappings consume PathParams (via resolvePathSubstitution); data sources,
+// actions, ephemerals, and lists resolve their paths against their own config
+// schemas, so this is only populated for resource operations.
+func pathParamIRs(spec *parser.Spec, path string, op *parser.Operation) []ir.ParamIR {
+	var pi *parser.PathItem
+	if spec != nil && spec.Paths != nil {
+		pi = spec.Paths[path]
+	}
+	if pi == nil && op == nil {
+		return nil
+	}
+	seen := make(map[string]bool, 4)
+	var out []ir.ParamIR
+	// Operation-level parameters take precedence; add them first so a same-named
+	// path-level parameter is skipped.
+	if op != nil {
+		for _, p := range op.Parameters {
+			if !strings.EqualFold(p.In, "path") {
+				continue
+			}
+			r := resolveParamRef(spec, p)
+			out = append(out, paramIR(*r))
+			seen[r.Name] = true
+		}
+	}
+	if pi != nil {
+		for _, p := range pi.Parameters {
+			if !strings.EqualFold(p.In, "path") {
+				continue
+			}
+			r := resolveParamRef(spec, p)
+			if seen[r.Name] {
+				continue
+			}
+			out = append(out, paramIR(*r))
+			seen[r.Name] = true
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out
+}
+
+// resourceOperationMapping builds an operation mapping for a managed-resource
+// CRUD step and populates PathParams from the operation's merged path-level and
+// operation-level path parameters. This lets resolvePathSubstitution substitute
+// a static literal for a shared path segment that is not a resource attribute
+// (e.g. {apiVersion}), wiring the resource instead of leaving it scaffolded.
+func resourceOperationMapping(spec *parser.Spec, method, path string, op *parser.Operation, responseEnvelope string) ir.OperationMappingIR {
+	m := operationMapping(method, path, op, responseEnvelope)
+	m.PathParams = pathParamIRs(spec, path, op)
+	return m
 }
 
 // paramFormat carries a parameter schema's OpenAPI format onto the IR so the
@@ -2040,7 +2533,7 @@ var (
 // in PROJECT_DESIGN.md sections 8.7-8.10 and can be overridden via generator.yaml.
 // pathOps is the transformer's operation map, shared so POST classification
 // agrees with transformer.InferActions instead of running a parallel heuristic.
-func classifyOperation(path, method string, op *parser.Operation, pathOps map[string]map[transformer.HTTPMethod]transformer.Operation) operationKind {
+func classifyOperation(path, method string, op *parser.Operation, pathOps map[string]map[transformer.HTTPMethod]transformer.Operation, checkFullCRUD bool) operationKind {
 	method = strings.ToUpper(method)
 
 	if k, ok := extensionKind(op); ok {
@@ -2052,7 +2545,7 @@ func classifyOperation(path, method string, op *parser.Operation, pathOps map[st
 		return k
 	}
 
-	return methodKind(method, path, op, pathOps)
+	return methodKind(method, path, op, pathOps, checkFullCRUD)
 }
 
 // extensionKind returns the kind implied by explicit Terraform extension keys,
@@ -2116,7 +2609,7 @@ func keywordKind(method, pathLower string) (operationKind, bool) {
 // action, as is a POST whose trailing path segment or operationId leading verb
 // is a recognized action verb. Only a POST that is a CRUD Create stays a
 // (partial) resource.
-func methodKind(method, path string, op *parser.Operation, pathOps map[string]map[transformer.HTTPMethod]transformer.Operation) operationKind {
+func methodKind(method, path string, op *parser.Operation, pathOps map[string]map[transformer.HTTPMethod]transformer.Operation, checkFullCRUD bool) operationKind {
 	itemPath := isItemPath(path)
 	lastSegment := lastPathSegment(path)
 	lastLower := strings.ToLower(lastSegment)
@@ -2140,15 +2633,30 @@ func methodKind(method, path string, op *parser.Operation, pathOps map[string]ma
 		if !transformer.IsCRUDCreatePath(path, pathOps) {
 			return kindAction
 		}
+		// A POST that is a CRUD Create but whose group lacks a full
+		// Create+Read+Delete mapping is reclassified as an action: a scaffolded
+		// resource with an empty model is worse than a wired action, and a
+		// resource without a Delete cannot be destroyed by Terraform. The check
+		// is skipped when classifying a group's own operations (groupIsResource),
+		// which are already known to form a complete CRUD group.
+		if checkFullCRUD && !transformer.HasFullCRUD(path, transformer.HTTPMethod(method), pathOps) {
+			return kindAction
+		}
 		return kindResource
 	case "PUT", "PATCH":
 		if itemPath {
+			if checkFullCRUD && !transformer.HasFullCRUD(path, transformer.HTTPMethod(method), pathOps) {
+				return kindAction
+			}
 			return kindResource
 		}
 		// PUT/PATCH on a collection is an unusual bulk update; treat as action.
 		return kindAction
 	case "DELETE":
 		if itemPath {
+			if checkFullCRUD && !transformer.HasFullCRUD(path, transformer.HTTPMethod(method), pathOps) {
+				return kindAction
+			}
 			return kindResource
 		}
 		// DELETE on a collection is a bulk/clear action.
@@ -2217,19 +2725,81 @@ func operationIDVerb(op *parser.Operation) string {
 	return ""
 }
 
-func actionFromOperation(op *parser.Operation, providerName, path, method string) ir.ActionIR {
+func actionFromOperation(op *parser.Operation, providerName, path, method string, pathOps map[string]map[transformer.HTTPMethod]transformer.Operation) ir.ActionIR {
 	name := resourceName(op, method, path)
+	// Build the config schema from the operation's parameters AND request-body
+	// properties (via the transformer's ObjectSchemaFromOperation, the same
+	// builder the ephemeral path uses) so a body-bearing action — even one the
+	// generator keeps honestly scaffolded because the client cannot send its
+	// body — still surfaces its intended inputs to the practitioner. Without
+	// this, the essential register action would present an empty schema.
+	configSchema := ir.ObjectSchemaIR{Attributes: actionConfigAttributes(op)}
+	if top := lookupTransformerOp(pathOps, path, method); top != nil {
+		configSchema = transformer.ObjectSchemaFromOperation(*top)
+	}
 	return ir.ActionIR{
 		Name:            name,
 		FullName:        providerName + "_" + name,
 		TypeName:        providerName + "_" + name,
-		Description:     op.Description,
+		Description:     actionDescription(op),
 		SourceOperation: op.OperationID,
-		InvokeMapping:   operationMapping(method, path, op),
-		ConfigSchema: ir.ObjectSchemaIR{
-			Attributes: actionConfigAttributes(op),
-		},
+		// Actions have no result surface: the wired Invoke neither decodes a
+		// response nor sets a result, so no response envelope is carried.
+		InvokeMapping: operationMapping(method, path, op, ""),
+		ConfigSchema:  configSchema,
 	}
+}
+
+// operationDescription picks the most useful human-readable description for a
+// construct (resource, data source, or action) inferred from an OpenAPI
+// operation. Operations carry both a short summary and a verbose description;
+// either is acceptable, but some specs (notably the Gigamon GigaVUE-FM bundle)
+// accidentally copy a referenced schema component name into the operation
+// description field (e.g. description "GigaAlarmBulkAcknowledgementSpec"
+// alongside summary "Acknowledge Multiple Alarms"). A bare PascalCase
+// identifier with no whitespace is not a description a practitioner can use, so
+// such leaked titles are skipped in favor of the summary. The fallback chain
+// is:
+//
+//  1. op.Description, when it reads as a sentence (contains whitespace)
+//  2. op.Summary, when present
+//  3. fallback (a construct-specific generated phrase, or "" for actions)
+//
+// This keeps real verbose descriptions, fills the many constructs whose only
+// human-readable field is the summary, and never surfaces a leaked schema
+// title as the description. The same chain is applied to resources, data
+// sources, and actions so the generated schema MarkdownDescription and the
+// docs front matter stay consistent and non-empty.
+func operationDescription(op *parser.Operation, fallback string) string {
+	if op == nil {
+		return fallback
+	}
+	if desc := strings.TrimSpace(op.Description); desc != "" && strings.ContainsAny(desc, " \t\n") {
+		return desc
+	}
+	if summary := strings.TrimSpace(op.Summary); summary != "" {
+		return summary
+	}
+	return fallback
+}
+
+// humanizeConstructName turns a snake_case construct name into a space-separated
+// phrase for use in a generated description fallback (e.g. "alert_policy" ->
+// "alert policy").
+func humanizeConstructName(name string) string {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return "resource"
+	}
+	return strings.ReplaceAll(name, "_", " ")
+}
+
+// actionDescription returns the description for an auto-inferred action. Actions
+// have no natural noun phrase, so the empty-description fallback is "" (the
+// generator omits an empty Description cleanly) rather than a generated
+// sentence.
+func actionDescription(op *parser.Operation) string {
+	return operationDescription(op, "")
 }
 
 // actionConfigAttributes builds the config schema attributes for an
@@ -2240,11 +2810,13 @@ func actionFromOperation(op *parser.Operation, providerName, path, method string
 // parameters preserve their declared Required flag. formData parameters are
 // intentionally not surfaced here because the generated client only encodes
 // JSON bodies; an action with formData parameters stays honestly scaffolded
-// (REMAINING_GAPS §2). The request body (BodySchema) is not modeled for
-// auto-inferred actions, so a bodiless action is the wired shape. Non-primitive
-// parameters yield an empty type, which the generator treats as unmapped and
-// keeps the action honestly scaffolded rather than wiring a body that cannot
-// send them.
+// (REMAINING_GAPS §2). The request body is not modeled for auto-inferred
+// actions either: operationMapping carries a non-nil BodySchema for body-bearing
+// operations, so the generator keeps such actions honestly scaffolded rather
+// than wiring a bodiless Invoke that would drop the practitioner's body. Only a
+// truly bodiless action is the wired shape. Non-primitive parameters yield an
+// empty type, which the generator treats as unmapped and keeps the action
+// honestly scaffolded rather than wiring a body that cannot send them.
 func actionConfigAttributes(op *parser.Operation) []ir.AttributeIR {
 	if op == nil {
 		return nil
@@ -2281,9 +2853,9 @@ func ephemeralFromOperation(spec *parser.Spec, op *parser.Operation, providerNam
 		Name:            name,
 		FullName:        providerName + "_" + name,
 		TypeName:        providerName + "_" + name,
-		Description:     op.Description,
+		Description:     operationDescription(op, fmt.Sprintf("Opens the %s ephemeral resource.", humanizeConstructName(name))),
 		SourceOperation: op.OperationID,
-		OpenMapping:     operationMapping(method, path, op),
+		OpenMapping:     operationMapping(method, path, op, envelopeOfTransformerOp(pathOps, path, method)),
 	}
 	// Build the config (input) schema from the open operation's path/query/header
 	// parameters and the result (output) schema from its resolved response, so an
@@ -2300,18 +2872,18 @@ func ephemeralFromOperation(spec *parser.Spec, op *parser.Operation, providerNam
 	// inferEphemeralResource. When no such operations exist the mappings stay
 	// unset — never a placeholder pointing at the open operation.
 	if renewOp := parserOp(spec, path+"/renew", "POST"); renewOp != nil {
-		rm := operationMapping("POST", path+"/renew", renewOp)
+		rm := operationMapping("POST", path+"/renew", renewOp, "")
 		er.RenewMapping = &rm
 		er.HasRenew = true
 	}
 	if closeOp := parserOp(spec, path+"/close", "DELETE"); closeOp != nil {
-		cm := operationMapping("DELETE", path+"/close", closeOp)
+		cm := operationMapping("DELETE", path+"/close", closeOp, "")
 		er.CloseMapping = &cm
 		er.HasClose = true
 	}
 	if !er.HasClose {
 		if revokeOp := parserOp(spec, path+"/revoke", "DELETE"); revokeOp != nil {
-			cm := operationMapping("DELETE", path+"/revoke", revokeOp)
+			cm := operationMapping("DELETE", path+"/revoke", revokeOp, "")
 			er.CloseMapping = &cm
 			er.HasClose = true
 		}
@@ -2328,15 +2900,15 @@ func ephemeralFromOperation(spec *parser.Spec, op *parser.Operation, providerNam
 // set. Both come from the resolved response schema carried on pathOps: an
 // array-of-objects response populates them, anything else leaves them empty
 // (the generator keeps the list resource honestly scaffolded — F1).
-func listResourceFromOperation(op *parser.Operation, providerName, path, method string, pathOps map[string]map[transformer.HTTPMethod]transformer.Operation, identityParams []string) ir.ListResourceIR {
+func listResourceFromOperation(op *parser.Operation, providerName, path, method string, pathOps map[string]map[transformer.HTTPMethod]transformer.Operation, identityParams []string, diags *diagnostics.Diagnostics) ir.ListResourceIR {
 	name := resourceName(op, method, path)
 	lr := ir.ListResourceIR{
 		Name:            name,
 		FullName:        providerName + "_" + name,
 		TypeName:        providerName + "_" + name,
-		Description:     op.Description,
+		Description:     operationDescription(op, fmt.Sprintf("Lists %s resources.", humanizeConstructName(name))),
 		SourceOperation: op.OperationID,
-		ListMapping:     operationMapping(method, path, op),
+		ListMapping:     operationMapping(method, path, op, envelopeOfTransformerOp(pathOps, path, method)),
 	}
 
 	top := lookupTransformerOp(pathOps, path, method)
@@ -2347,7 +2919,7 @@ func listResourceFromOperation(op *parser.Operation, providerName, path, method 
 	// (filter) schema, so a list resource whose collection path carries
 	// parameters can resolve its path substitutions and wire its List body
 	// (PROJECT_DESIGN §23).
-	lr.ConfigSchema = transformer.ListResourceConfigSchema(*top)
+	lr.ConfigSchema = transformer.ListResourceConfigSchema(*top, diags)
 	item := top.ResponseSchema.Items
 	if item == nil || len(item.Properties) == 0 {
 		return lr
@@ -2420,7 +2992,7 @@ func functionFromOperation(op *parser.Operation, providerName, path, method stri
 		Name:            name,
 		FullName:        providerName + "_" + name,
 		TypeName:        providerName + "_" + name,
-		Description:     op.Description,
+		Description:     operationDescription(op, fmt.Sprintf("Provider-defined function %s.", humanizeConstructName(name))),
 		SourceOperation: op.OperationID,
 		Arguments:       actionConfigAttributes(op),
 	}
@@ -2492,7 +3064,7 @@ func functionReturnSchema(spec *transformer.SchemaSpec) ir.SchemaIR {
 // returned slice and are also surfaced through the error when version detection
 // fails.
 func BuildProviderIR(spec []byte, cfg *config.Config) (*ir.ProviderIR, parser.Version, diagnostics.Diagnostics, error) {
-	return buildProviderIRWithContentType(spec, "", cfg)
+	return buildProviderIR(spec, "", "", cfg)
 }
 
 // BuildProviderIRWithContentType parses an OpenAPI document with an explicit
@@ -2500,11 +3072,26 @@ func BuildProviderIR(spec []byte, cfg *config.Config) (*ir.ProviderIR, parser.Ve
 // builds a ProviderIR from it. An empty contentType falls back to the
 // first-byte JSON/YAML sniff shared by the local-file path.
 func BuildProviderIRWithContentType(spec []byte, contentType string, cfg *config.Config) (*ir.ProviderIR, parser.Version, diagnostics.Diagnostics, error) {
-	return buildProviderIRWithContentType(spec, contentType, cfg)
+	return buildProviderIR(spec, "", contentType, cfg)
 }
 
-func buildProviderIRWithContentType(spec []byte, contentType string, cfg *config.Config) (*ir.ProviderIR, parser.Version, diagnostics.Diagnostics, error) {
-	root, err := loadRequestBodyWithContentType(spec, contentType)
+// BuildProviderIRWithName parses an OpenAPI document and builds a ProviderIR,
+// attributing parse errors to name (the spec's real path or URL) rather than
+// the generic "request.yaml" used by the HTTP validate endpoint. The
+// contentType hint (e.g. from a remote fetch's Content-Type header) routes
+// JSON vs YAML parsing; an empty contentType sniffs the first byte.
+func BuildProviderIRWithName(spec []byte, name, contentType string, cfg *config.Config) (*ir.ProviderIR, parser.Version, diagnostics.Diagnostics, error) {
+	return buildProviderIR(spec, name, contentType, cfg)
+}
+
+func buildProviderIR(spec []byte, name, contentType string, cfg *config.Config) (*ir.ProviderIR, parser.Version, diagnostics.Diagnostics, error) {
+	var root parser.Node
+	var err error
+	if name == "" {
+		root, err = loadRequestBodyWithContentType(spec, contentType)
+	} else {
+		root, err = loadRequestBodyWithName(spec, contentType, name)
+	}
 	if err != nil {
 		return nil, parser.VersionUnknown, nil, fmt.Errorf("failed to load spec: %w", err)
 	}
@@ -2520,6 +3107,13 @@ func buildProviderIRWithContentType(spec []byte, contentType string, cfg *config
 	}
 
 	allDiags := append(diagnostics.Diagnostics(versionDiags), convertDiags...)
+	// Run the same structural and $ref validation the HTTP /validate endpoint
+	// applies (parser.Validate). The converter records a schema's $ref string but
+	// never resolves it; only Validate rejects non-local refs and unresolvable
+	// local pointers. Without it, `eidos generate` silently dropped dangling
+	// external refs (e.g. a bundled spec's sibling schema files) and emitted
+	// empty-schema resources instead of failing loud.
+	allDiags = append(allDiags, parser.Validate(root, sp, version)...)
 	preview, previewDiags := buildIRPreview(sp, version, cfg)
 	allDiags = append(allDiags, previewDiags...)
 	return preview, version, allDiags, nil
@@ -2534,7 +3128,28 @@ func buildProviderIRWithContentType(spec []byte, contentType string, cfg *config
 // overall generation succeeds. Version detection diagnostics are returned as
 // part of the error instead.
 func GenerateStarterConfig(spec []byte, providerName string) (*config.Config, parser.Version, diagnostics.Diagnostics, error) {
-	preview, version, allDiags, err := BuildProviderIR(spec, nil)
+	return generateStarterConfig(spec, "", providerName)
+}
+
+// GenerateStarterConfigWithName is GenerateStarterConfig with parse errors
+// attributed to name (the spec's real path or URL) rather than the generic
+// "request.yaml".
+func GenerateStarterConfigWithName(spec []byte, name, providerName string) (*config.Config, parser.Version, diagnostics.Diagnostics, error) {
+	return generateStarterConfig(spec, name, providerName)
+}
+
+func generateStarterConfig(spec []byte, name, providerName string) (*config.Config, parser.Version, diagnostics.Diagnostics, error) {
+	var (
+		preview  *ir.ProviderIR
+		version  parser.Version
+		allDiags diagnostics.Diagnostics
+		err      error
+	)
+	if name == "" {
+		preview, version, allDiags, err = BuildProviderIR(spec, nil)
+	} else {
+		preview, version, allDiags, err = BuildProviderIRWithName(spec, name, "", nil)
+	}
 	if err != nil {
 		return nil, version, allDiags, err
 	}

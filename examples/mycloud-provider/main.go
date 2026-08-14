@@ -11,6 +11,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-go/tfprotov5/tf5server"
 	provider "github.com/mycloud/terraform-provider-mycloud/internal/provider"
 )
+
 // main is the executable entry point for the generated Terraform provider.
 var (
 	version string = "dev"

@@ -44,6 +44,7 @@ type ephemeralWiringPlan struct {
 
 	needsStrings bool
 	needsStrconv bool
+	needsURL     bool
 }
 
 // AnyEphemeralWired reports whether at least one ephemeral resource has a
@@ -94,8 +95,10 @@ func planEphemeralWiring(er ir.EphemeralResourceIR) ephemeralWiringPlan {
 	}
 	plan.privateParams = lifecyclePrivateParams(plan.renew, plan.close)
 	if len(plan.privateParams) > 0 {
-		// The Renew/Close bodies rebuild their paths with strings.ReplaceAll.
+		// The Renew/Close bodies rebuild their paths with strings.ReplaceAll and
+		// url.PathEscape.
 		plan.needsStrings = true
+		plan.needsURL = true
 	}
 	// strings.ReplaceAll is only referenced by requestPathStmts for path
 	// placeholders; query/header/cookie parameters render through url.Values /
@@ -104,6 +107,7 @@ func planEphemeralWiring(er ir.EphemeralResourceIR) ephemeralWiringPlan {
 	// unused, mirroring the data source wiring note.
 	for _, sub := range open.subs {
 		plan.needsStrings = true
+		plan.needsURL = true
 		if sub.primitive != ir.TypeString {
 			plan.needsStrconv = true
 		}
@@ -219,6 +223,7 @@ func planEphemeralOpen(er ir.EphemeralResourceIR) (crudOperationPlan, bool) {
 	planned.template = strings.TrimSpace(op.PathTemplate)
 	planned.successCodes = op.SuccessCodes
 	planned.errorMappings = errorMappingDescriptions(op.ErrorMappings)
+	planned.responseEnvelope = op.ResponseEnvelope
 	if planned.method == "" || planned.template == "" {
 		return planned, false
 	}
@@ -365,7 +370,7 @@ func wiredEphemeralOpenBody(er ir.EphemeralResourceIR, wiring ephemeralWiringPla
 	// An ephemeral Open has no state to drop on a 404; a non-success status is
 	// surfaced as an error by the generic non-success branch.
 	stmts = append(stmts, sendRequestStmts(plan, "e", summary, "config", nil, nil)...)
-	stmts = append(stmts, decodeAndApplyStmts(summary, "config")...)
+	stmts = append(stmts, decodeAndApplyStmts(summary, "config", plan.responseEnvelope)...)
 	stmts = append(stmts, privateParamStashStmts(wiring.privateParams)...)
 	stmts = append(stmts, resultSetStmt("config"))
 	return stmts
@@ -481,7 +486,7 @@ func wiredEphemeralLifecycleBody(er ir.EphemeralResourceIR, plan crudOperationPl
 				astgen.QualExpr("strings", "ReplaceAll"),
 				astgen.Ident("reqPath"),
 				astgen.Lit("{"+sub.placeholder+"}"),
-				lifecycleParamString(sub.field),
+				astgen.Call(astgen.QualExpr("url", "PathEscape"), lifecycleParamString(sub.field)),
 			)},
 			token.ASSIGN,
 		))

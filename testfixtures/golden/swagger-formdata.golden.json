@@ -68,24 +68,8 @@
     "reason": "retry logic with exponential backoff"
   },
   {
-    "path": "internal/protocol/value_mappers.go",
-    "reason": "tftypes.Value to Go struct converters"
-  },
-  {
-    "path": "internal/protocol/value_mappers_test.go",
-    "reason": "value mapper round-trip tests"
-  },
-  {
     "path": "internal/provider/json_convert.go",
     "reason": "JSON/model conversion helpers for wired CRUD bodies"
-  },
-  {
-    "path": "internal/provider/model_note.go",
-    "reason": "API model for resource note"
-  },
-  {
-    "path": "internal/provider/model_upload.go",
-    "reason": "API model for resource upload"
   },
   {
     "path": "internal/provider/provider.go",
@@ -97,7 +81,7 @@
   },
   {
     "path": "internal/provider/resource_note.go",
-    "reason": "resource form_data_api_note"
+    "reason": "resource form-data-api_note"
   },
   {
     "path": "internal/provider/resource_note_acceptance_test.go",
@@ -109,11 +93,7 @@
   },
   {
     "path": "internal/provider/resource_upload.go",
-    "reason": "resource form_data_api_upload"
-  },
-  {
-    "path": "internal/provider/resource_upload_acceptance_test.go",
-    "reason": "acceptance tests for resource upload"
+    "reason": "resource form-data-api_upload"
   },
   {
     "path": "internal/provider/resource_upload_test.go",

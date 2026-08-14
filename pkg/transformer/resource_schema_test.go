@@ -283,7 +283,7 @@ func TestDataSourceSchema_UniqueItemsIsSet(t *testing.T) {
 		Path:           "/pets",
 		ResponseSchema: &SchemaSpec{Type: "array", UniqueItems: true, Items: &SchemaSpec{Type: "string"}},
 	}
-	schema := DataSourceSchema(op)
+	schema := DataSourceSchema(op, nil)
 
 	var items *ir.AttributeIR
 	for i := range schema.Attributes {
@@ -350,6 +350,200 @@ func TestManagedResourceSchema_RequestOnlyInputs(t *testing.T) {
 		}
 		if !a.Optional || a.Computed || a.Required {
 			t.Errorf("request-only input %q must be Optional (not Computed/Required), got %+v", want, a)
+		}
+	}
+}
+
+// TestManagedResourceSchema_NestedArrayOfObject_ReconcilesRequired mirrors the
+// Gigamon gigamon_role.scope shape: a top-level Required array whose element is
+// an object (RoleScope) with required nested fields (type, actions) and an
+// optional/response-only field (hierarchy). The nested children must be
+// reconciled against the request body so type/actions are Required and
+// hierarchy stays Computed, rather than all children being unconditionally
+// Computed (the nestedAttributesFromSpec default).
+func TestManagedResourceSchema_NestedArrayOfObject_ReconcilesRequired(t *testing.T) {
+	roleScope := SchemaSpec{
+		Type:     "object",
+		Required: []string{"type", "actions"},
+		Properties: map[string]SchemaSpec{
+			"type":      {Type: "string"},
+			"actions":   {Type: "array", Items: &SchemaSpec{Type: "string"}},
+			"hierarchy": {Type: "boolean"},
+		},
+	}
+	requestSpec := &SchemaSpec{
+		Type:     "object",
+		Required: []string{"name", "scope"},
+		Properties: map[string]SchemaSpec{
+			"name": {Type: "string"},
+			"scope": {
+				Type:  "array",
+				Items: &roleScope,
+			},
+		},
+	}
+	stateSpec := &SchemaSpec{
+		Type:     "object",
+		Required: []string{"name", "scope"},
+		Properties: map[string]SchemaSpec{
+			"name": {Type: "string"},
+			"scope": {
+				Type: "array",
+				Items: &SchemaSpec{
+					Type:     "object",
+					Required: []string{"type", "actions"},
+					Properties: map[string]SchemaSpec{
+						"type":      {Type: "string"},
+						"actions":   {Type: "array", Items: &SchemaSpec{Type: "string"}},
+						"hierarchy": {Type: "boolean"},
+					},
+				},
+			},
+		},
+	}
+	c := ResourceCRUD{
+		Name: "role",
+		Create: &Operation{
+			Method:         MethodPost,
+			Path:           "/roles",
+			RequestSchema:  requestSpec,
+			ResponseSchema: stateSpec,
+		},
+		Read: &Operation{
+			Method:         MethodGet,
+			Path:           "/roles/{name}",
+			ResponseSchema: stateSpec,
+		},
+		Delete: &Operation{Method: MethodDelete, Path: "/roles/{name}"},
+	}
+
+	schema, _ := ManagedResourceSchema(c)
+
+	scope, ok := findAttr(schema.Attributes, "scope")
+	if !ok {
+		t.Fatalf("no scope attribute: %+v", schema.Attributes)
+	}
+	if !scope.Required {
+		t.Errorf("scope must be Required (request-required), got %+v", scope)
+	}
+	if scope.Schema.Collection == nil {
+		t.Fatalf("scope must be a collection, got %+v", scope.Schema)
+	}
+	elem := scope.Schema.Collection.ElementType
+	if len(elem.Attributes) == 0 {
+		t.Fatalf("scope element must have nested attributes, got %+v", elem)
+	}
+	for _, a := range elem.Attributes {
+		switch a.WireName {
+		case "type", "actions":
+			if !a.Required || a.Computed || a.Optional {
+				t.Errorf("nested %q must be Required (request-required), got R=%v O=%v C=%v", a.WireName, a.Required, a.Optional, a.Computed)
+			}
+		case "hierarchy":
+			// hierarchy is in the request's RoleScope properties (with a default)
+			// but not required, so it reconciles to Optional+Computed (G18): the
+			// practitioner may set it and the response also returns it.
+			if !a.Optional || !a.Computed || a.Required {
+				t.Errorf("nested hierarchy must be Optional+Computed (in request, not required), got R=%v O=%v C=%v", a.Required, a.Optional, a.Computed)
+			}
+		}
+	}
+}
+
+// TestManagedResourceSchema_NestedArrayOfObject_RequestOnly_Reconciles mirrors
+// the Gigamon gigamon_role envelope: the Read response is a {role: {...}} wrapper
+// whose unwrapped state shape does NOT carry scope, so scope is a request-only
+// top-level Required attribute. Its nested children must still be reconciled
+// against the request body — type/actions Required, hierarchy Optional only
+// (NOT Computed: the response never returns scope, so the server cannot
+// repopulate hierarchy after apply; marking it Computed would leave the
+// framework expecting a value the provider cannot supply).
+func TestManagedResourceSchema_NestedArrayOfObject_RequestOnly_Reconciles(t *testing.T) {
+	roleScope := SchemaSpec{
+		Type:     "object",
+		Required: []string{"type", "actions"},
+		Properties: map[string]SchemaSpec{
+			"type":      {Type: "string"},
+			"actions":   {Type: "array", Items: &SchemaSpec{Type: "string"}},
+			"hierarchy": {Type: "boolean"},
+		},
+	}
+	requestSpec := &SchemaSpec{
+		Type:     "object",
+		Required: []string{"name", "scope"},
+		Properties: map[string]SchemaSpec{
+			"name": {Type: "string"},
+			"scope": {
+				Type:  "array",
+				Items: &roleScope,
+			},
+		},
+	}
+	// The state shape is the {role: {...}} envelope unwrapped only to the role
+	// object, which does NOT include scope as a peer of name. scope is therefore a
+	// request-only input.
+	stateSpec := &SchemaSpec{
+		Type:     "object",
+		Required: []string{"role"},
+		Properties: map[string]SchemaSpec{
+			"role": {
+				Type:     "object",
+				Required: []string{"name"},
+				Properties: map[string]SchemaSpec{
+					"name": {Type: "string"},
+				},
+			},
+		},
+	}
+	c := ResourceCRUD{
+		Name: "role",
+		Create: &Operation{
+			Method:         MethodPost,
+			Path:           "/roles",
+			RequestSchema:  requestSpec,
+			ResponseSchema: requestSpec, // create returns the request body
+		},
+		Read: &Operation{
+			Method:         MethodGet,
+			Path:           "/roles/{name}",
+			ResponseSchema: stateSpec,
+		},
+		Delete: &Operation{Method: MethodDelete, Path: "/roles/{name}"},
+	}
+
+	schema, _ := ManagedResourceSchema(c)
+
+	scope, ok := findAttr(schema.Attributes, "scope")
+	if !ok {
+		t.Fatalf("no scope attribute (request-only input): %+v", schema.Attributes)
+	}
+	if !scope.Required {
+		t.Errorf("scope must be Required (request-required), got %+v", scope)
+	}
+	// scope is request-only: the response does not echo it, so it must not be
+	// Computed (the server never repopulates it).
+	if scope.Computed {
+		t.Errorf("request-only scope must not be Computed, got %+v", scope)
+	}
+	if scope.Schema.Collection == nil {
+		t.Fatalf("scope must be a collection, got %+v", scope.Schema)
+	}
+	elem := scope.Schema.Collection.ElementType
+	if len(elem.Attributes) == 0 {
+		t.Fatalf("scope element must have nested attributes, got %+v", elem)
+	}
+	for _, a := range elem.Attributes {
+		switch a.WireName {
+		case "type", "actions":
+			if !a.Required || a.Computed || a.Optional {
+				t.Errorf("nested %q must be Required (request-required), got R=%v O=%v C=%v", a.WireName, a.Required, a.Optional, a.Computed)
+			}
+		case "hierarchy":
+			// hierarchy is in the request (not required) but the response does not
+			// echo scope, so it is Optional only — NOT Computed.
+			if !a.Optional || a.Computed || a.Required {
+				t.Errorf("nested hierarchy must be Optional only (request-only parent), got R=%v O=%v C=%v", a.Required, a.Optional, a.Computed)
+			}
 		}
 	}
 }

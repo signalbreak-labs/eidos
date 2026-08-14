@@ -209,3 +209,98 @@ func TestObjectSchemaHasDiscriminatedUnion(t *testing.T) {
 		}
 	})
 }
+
+// TestContainsNestedDynamic locks in the predicate that decides whether a
+// collection element must force the whole collection to DynamicAttribute. The
+// framework rejects any collection whose element type contains a dynamic at any
+// depth (fwtype.ContainsCollectionWithDynamic).
+func TestContainsNestedDynamic(t *testing.T) {
+	// Primitive dynamic / null are dynamic.
+	if !ContainsNestedDynamic(ir.SchemaIR{Type: ir.TypeDynamic}) {
+		t.Error("TypeDynamic should be dynamic")
+	}
+	if !ContainsNestedDynamic(ir.SchemaIR{Type: ir.TypeNull}) {
+		t.Error("TypeNull should be dynamic")
+	}
+	// Plain primitives and objects of primitives are not.
+	if ContainsNestedDynamic(ir.SchemaIR{Type: ir.TypeString}) {
+		t.Error("TypeString should not be dynamic")
+	}
+	plainObject := ir.SchemaIR{Attributes: []ir.AttributeIR{{Name: "id", Schema: ir.SchemaIR{Type: ir.TypeString}}}}
+	if ContainsNestedDynamic(plainObject) {
+		t.Error("object of primitives should not be dynamic")
+	}
+	// A non-discriminated (or unmergeable) union renders as DynamicAttribute.
+	if !ContainsNestedDynamic(ir.SchemaIR{Union: &ir.UnionType{Kind: ir.OneOf, Variants: []ir.SchemaIR{{Type: ir.TypeString}}}}) {
+		t.Error("non-discriminated union should be dynamic")
+	}
+	// A discriminated, mergeable union renders as a SingleNestedAttribute and
+	// is dynamic only if a merged attribute is dynamic.
+	if ContainsNestedDynamic(discriminatedUnionSchema()) {
+		t.Error("discriminated union of primitives should not be dynamic")
+	}
+	// The Gigamon shape: an object element whose property is a non-discriminated
+	// union (endPointProperties oneOf) forces the enclosing collection to
+	// DynamicAttribute.
+	endPoint := ir.SchemaIR{Attributes: []ir.AttributeIR{
+		{Name: "id", Schema: ir.SchemaIR{Type: ir.TypeString}},
+		{Name: "end_point_properties", Schema: ir.SchemaIR{Union: &ir.UnionType{Kind: ir.OneOf, Variants: []ir.SchemaIR{{Type: ir.TypeString}}}}},
+	}}
+	if !ContainsNestedDynamic(endPoint) {
+		t.Error("object with a union property should be dynamic")
+	}
+	// Dynamic nested two levels deep inside an object element is still detected.
+	nestedDeep := ir.SchemaIR{Attributes: []ir.AttributeIR{{
+		Name:   "end_points",
+		Schema: ir.SchemaIR{Attributes: []ir.AttributeIR{{Name: "sources", Schema: endPoint}}},
+	}}}
+	if !ContainsNestedDynamic(nestedDeep) {
+		t.Error("dynamic nested deep in an object tree should be detected")
+	}
+	// A collection whose element contains a dynamic is dynamic (recursion
+	// through the element).
+	if !ContainsNestedDynamic(ir.SchemaIR{Collection: &ir.CollectionType{Kind: ir.Set, ElementType: endPoint}}) {
+		t.Error("collection of object-with-union should be dynamic")
+	}
+	// A collection of primitives is not.
+	if ContainsNestedDynamic(ir.SchemaIR{Collection: &ir.CollectionType{Kind: ir.List, ElementType: ir.SchemaIR{Type: ir.TypeString}}}) {
+		t.Error("collection of strings should not be dynamic")
+	}
+	// A block containing a dynamic attribute is detected.
+	withBlock := ir.SchemaIR{Blocks: []ir.BlockIR{{
+		Name:   "details",
+		Schema: ir.ObjectSchemaIR{Attributes: []ir.AttributeIR{{Name: "blob", Schema: ir.SchemaIR{Type: ir.TypeDynamic}}}},
+	}}}
+	if !ContainsNestedDynamic(withBlock) {
+		t.Error("block with a dynamic attribute should be detected")
+	}
+}
+
+// TestIsDynamicAttribute covers the top-level DynamicAttribute detection used
+// by the example/acceptance config writer to decide between a scalar placeholder
+// and a collection literal. A primitive dynamic/null and a collection whose
+// element is dynamic or nests a dynamic all degrade to a DynamicAttribute; a
+// plain primitive, a plain object, and a typed collection of primitives do not.
+func TestIsDynamicAttribute(t *testing.T) {
+	cases := []struct {
+		name string
+		s    ir.SchemaIR
+		want bool
+	}{
+		{name: "primitive dynamic", s: ir.SchemaIR{Type: ir.TypeDynamic}, want: true},
+		{name: "primitive null", s: ir.SchemaIR{Type: ir.TypeNull}, want: true},
+		{name: "plain string", s: ir.SchemaIR{Type: ir.TypeString}, want: false},
+		{name: "plain object of primitives", s: ir.SchemaIR{Attributes: []ir.AttributeIR{{Name: "id", Schema: ir.SchemaIR{Type: ir.TypeString}}}}, want: false},
+		{name: "collection of primitives", s: ir.SchemaIR{Collection: &ir.CollectionType{Kind: ir.List, ElementType: ir.SchemaIR{Type: ir.TypeString}}}, want: false},
+		{name: "collection of dynamic element", s: ir.SchemaIR{Collection: &ir.CollectionType{Kind: ir.List, ElementType: ir.SchemaIR{Type: ir.TypeDynamic}}}, want: true},
+		{name: "collection of union element", s: ir.SchemaIR{Collection: &ir.CollectionType{Kind: ir.Set, ElementType: ir.SchemaIR{Union: &ir.UnionType{Kind: ir.OneOf, Variants: []ir.SchemaIR{{Type: ir.TypeString}}}}}}, want: true},
+		{name: "collection of object with nested dynamic", s: ir.SchemaIR{Collection: &ir.CollectionType{Kind: ir.List, ElementType: ir.SchemaIR{Attributes: []ir.AttributeIR{{Name: "blob", Schema: ir.SchemaIR{Type: ir.TypeDynamic}}}}}}, want: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := IsDynamicAttribute(tc.s); got != tc.want {
+				t.Errorf("IsDynamicAttribute(%+v) = %v, want %v", tc.s, got, tc.want)
+			}
+		})
+	}
+}

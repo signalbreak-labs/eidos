@@ -2,12 +2,12 @@
 page_title: "mycloud_list_configs List Resource - mycloud"
 subcategory: ""
 description: |-
-  
+  List Configs
 ---
 
 # mycloud_list_configs List Resource
 
-
+List Configs
 
 ## Example Usage
 

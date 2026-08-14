@@ -74,13 +74,13 @@ func generateActionFile(a ir.ActionIR, clientImport string) *ast.File {
 			ifc  string
 		}{"action.ActionWithConfigure", "ActionWithConfigure"})
 	}
-	if a.ModifyPlan {
+	if wiring.modifyPlan != nil {
 		assertions = append(assertions, struct {
 			name string
 			ifc  string
 		}{"action.ActionWithModifyPlan", "ActionWithModifyPlan"})
 	}
-	if hasActionValidateConfig(a) {
+	if wiring.validateConfig != nil {
 		assertions = append(assertions, struct {
 			name string
 			ifc  string
@@ -203,19 +203,15 @@ func generateActionFile(a ir.ActionIR, clientImport string) *ast.File {
 	// modify_plan_operation mapping: the body calls the preflight endpoint and
 	// surfaces non-success statuses as diagnostics. The spec does not encode
 	// plan mutations, so a successful call leaves the plan unchanged.
-	if a.ModifyPlan {
+	//
+	// The interface and method are emitted only when the mapping resolves. A
+	// scaffold ModifyPlan that hard-errors (resp.Diagnostics.AddError) would
+	// fail every terraform plan for the action — the framework invokes ModifyPlan
+	// during planning — so an action without a resolvable preflight endpoint
+	// simply does not implement the optional ActionWithModifyPlan interface.
+	if wiring.modifyPlan != nil {
 		f.AddComment("ModifyPlan validates the action plan with optional API access.")
-		modifyPlanBody := []ast.Stmt{
-			astgen.ExprStmt(astgen.Call(
-				astgen.Selector(astgen.Selector(astgen.Ident("resp"), "Diagnostics"), "AddError"),
-				astgen.Lit("Generated provider scaffold"),
-				astgen.Lit("ModifyPlan is not wired to a remote API endpoint."),
-			)),
-		}
-		if wiring.modifyPlan != nil {
-			summary := fmt.Sprintf("Error running preflight for action %s", actionTypeName(a))
-			modifyPlanBody = wiredActionPreflightBody(*wiring.modifyPlan, modelName, summary)
-		}
+		summary := fmt.Sprintf("Error running preflight for action %s", actionTypeName(a))
 		f.AddDecl(astgen.MethodDecl(
 			"ModifyPlan", "r", astgen.StarExpr(astgen.Ident(structName)),
 			astgen.Params(
@@ -224,26 +220,22 @@ func generateActionFile(a ir.ActionIR, clientImport string) *ast.File {
 				astgen.Field("resp", astgen.StarExpr(astgen.QualExpr("action", "ModifyPlanResponse")), ""),
 			),
 			astgen.Results(),
-			astgen.Block(modifyPlanBody...),
+			astgen.Block(wiredActionPreflightBody(*wiring.modifyPlan, modelName, summary)...),
 		))
 	}
 
 	// ValidateConfig method. Wired when the action declares a resolvable
 	// validate_config_operation mapping: the body calls the server-side
 	// validation endpoint and surfaces non-success statuses as diagnostics.
-	if hasActionValidateConfig(a) {
+	//
+	// The interface and method are emitted only when the mapping resolves. A
+	// scaffold ValidateConfig that hard-errors would fail every terraform plan
+	// for the action — the framework invokes ValidateConfig during planning — so
+	// an action without a resolvable server-side validation endpoint simply does
+	// not implement the optional ActionWithValidateConfig interface.
+	if wiring.validateConfig != nil {
 		f.AddComment("ValidateConfig validates the action configuration.")
-		validateConfigBody := []ast.Stmt{
-			astgen.ExprStmt(astgen.Call(
-				astgen.Selector(astgen.Selector(astgen.Ident("resp"), "Diagnostics"), "AddError"),
-				astgen.Lit("Generated provider scaffold"),
-				astgen.Lit("ValidateConfig is not wired to a remote API endpoint."),
-			)),
-		}
-		if wiring.validateConfig != nil {
-			summary := fmt.Sprintf("Error validating action %s configuration", actionTypeName(a))
-			validateConfigBody = wiredActionPreflightBody(*wiring.validateConfig, modelName, summary)
-		}
+		summary := fmt.Sprintf("Error validating action %s configuration", actionTypeName(a))
 		f.AddDecl(astgen.MethodDecl(
 			"ValidateConfig", "r", astgen.StarExpr(astgen.Ident(structName)),
 			astgen.Params(
@@ -252,7 +244,7 @@ func generateActionFile(a ir.ActionIR, clientImport string) *ast.File {
 				astgen.Field("resp", astgen.StarExpr(astgen.QualExpr("action", "ValidateConfigResponse")), ""),
 			),
 			astgen.Results(),
-			astgen.Block(validateConfigBody...),
+			astgen.Block(wiredActionPreflightBody(*wiring.validateConfig, modelName, summary)...),
 		))
 	}
 
@@ -268,16 +260,23 @@ func generateActionFile(a ir.ActionIR, clientImport string) *ast.File {
 	f.AddImport("github.com/hashicorp/terraform-plugin-framework/action/schema", "schema")
 	if wiring.wired {
 		// Wired Invoke bodies build and send HTTP requests through the generated
-		// client and surface errors via Diagnostics. Actions are bodiless, so
-		// there is no request body to encode (no bytes) and no response to
-		// decode (no encoding/json, no io).
+		// client and surface errors via Diagnostics. A body-bearing action
+		// encodes the config model as a JSON request body (modelToJSONMap +
+		// json.Marshal + bytes.NewReader), so encoding/json and bytes are
+		// imported only when sendsBody; there is no response to decode (no io).
 		f.AddImport(clientImport, "client")
 		f.AddImports("fmt", "net/http")
+		if wiring.sendsBody {
+			f.AddImports("bytes", "encoding/json")
+		}
 		if wiring.needsStrings {
 			f.AddImport("strings", "")
 		}
 		if wiring.needsStrconv {
 			f.AddImport("strconv", "")
+		}
+		if wiring.needsURL {
+			f.AddImport("net/url", "")
 		}
 	}
 	// The model struct references types.* via modelFieldType for every config
@@ -382,13 +381,6 @@ func actionTypeName(a ir.ActionIR) string {
 		return strings.TrimSpace(a.TypeName)
 	}
 	return ""
-}
-
-// hasActionValidateConfig reports whether the action should implement
-// ActionWithValidateConfig. An action with a non-empty configuration schema
-// gets a ValidateConfig stub so generated validators can be added later.
-func hasActionValidateConfig(a ir.ActionIR) bool {
-	return len(a.ConfigSchema.Attributes) > 0 || len(a.ConfigSchema.Blocks) > 0
 }
 
 // actionSchemaValues builds the []ast.Expr key/value elements for
@@ -506,10 +498,14 @@ func frameworkActionAttributeExpr(attr ir.AttributeIR) ast.Expr {
 // unrepresentable in the framework (G12).
 func actionCollectionAttributeExpr(attr ir.AttributeIR) ast.Expr {
 	elem := schema.DynamicUnionElement(attr.Schema.Collection.ElementType)
-	// A collection whose element is dynamic/null cannot be represented as a
-	// framework collection (List{ElementType: DynamicType} is rejected by the
-	// framework); map it to a DynamicAttribute (G12).
-	if elem.Type == ir.TypeDynamic || elem.Type == ir.TypeNull {
+	// A collection whose element is, or contains at any depth, a dynamic-typed
+	// shape cannot be rendered as a typed framework collection: the framework
+	// rejects any collection whose element type contains a dynamic
+	// (fwtype.ContainsCollectionWithDynamic). Emit the whole collection as a
+	// DynamicAttribute instead, per the framework's own guidance. An enclosing
+	// collection's ContainsNestedDynamic check promotes any collection ancestor,
+	// so this is never reached inside a collection (G12).
+	if schema.ContainsNestedDynamic(elem) {
 		return astgen.CompositeLit(astgen.QualExpr("schema", "DynamicAttribute"), actionAttributeValues(attr, nil)...)
 	}
 	switch attr.Schema.Collection.Kind {

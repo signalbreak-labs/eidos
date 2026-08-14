@@ -3,11 +3,13 @@ package generator
 import (
 	"fmt"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/signalbreak-labs/eidos/pkg/generator/internal/naming"
 	"github.com/signalbreak-labs/eidos/pkg/generator/internal/schema"
 	"github.com/signalbreak-labs/eidos/pkg/ir"
+	"github.com/signalbreak-labs/eidos/pkg/transformer"
 )
 
 // ResourceExampleFile returns the generated examples/resources/<name>/resource.tf
@@ -199,8 +201,43 @@ func includeInExample(attr ir.AttributeIR) bool {
 func writeHCLAttribute(h *hclBuilder, attr ir.AttributeIR) {
 	s := attr.Schema
 
+	// A DynamicAttribute (primitive dynamic, or a collection degraded to dynamic
+	// because its element is/nests a dynamic) carries arbitrary JSON. Emit a
+	// scalar placeholder rather than a collection literal: a list literal on a
+	// DynamicAttribute parses as a Tuple whose element types the response mapping
+	// cannot reliably reproduce, so a user copying the example would hit "wrong
+	// final value type: tuple required" at apply (G18). A Required Dynamic needs a
+	// non-null value (null is rejected at plan time); an Optional Dynamic uses
+	// null, which round-trips as an omitted field.
+	if schema.IsDynamicAttribute(s) {
+		if attr.Required {
+			h.writeLinef("%s = %s", attr.Name, `"example"`)
+		} else {
+			h.writeLinef("%s = %s", attr.Name, "null")
+		}
+		return
+	}
+
 	if s.Collection != nil {
 		writeHCLCollectionAttribute(h, attr)
+		return
+	}
+
+	// Union types (oneOf/anyOf): a discriminated union renders as a
+	// SingleNestedAttribute merging variant fields plus the discriminator, with
+	// a DiscriminatorValidator (D2); any other union degrades to a
+	// DynamicAttribute and is emitted as a scalar placeholder. This mirrors the
+	// resource schema emission order (resource.go) so the example matches the
+	// generated schema shape.
+	if s.Union != nil {
+		if writeHCLDiscriminatedUnion(h, attr, writeHCLAttribute) {
+			return
+		}
+		if attr.Required {
+			h.writeLinef("%s = %s", attr.Name, `"example"`)
+		} else {
+			h.writeLinef("%s = %s", attr.Name, "null")
+		}
 		return
 	}
 
@@ -215,6 +252,56 @@ func writeHCLAttribute(h *hclBuilder, attr ir.AttributeIR) {
 	}
 
 	h.writeLinef("%s = %s", attr.Name, primitiveExampleValue(s.Type))
+}
+
+// writeHCLDiscriminatedUnion emits an HCL object literal for a discriminated
+// union attribute, which the generator renders as a SingleNestedAttribute
+// merging all variant fields plus the discriminator, with a
+// DiscriminatorValidator (D2). The discriminator property is set to the first
+// sorted variant key so the validator accepts the example/config; the
+// remaining configurable merged attributes are rendered by attrWriter. It
+// returns false when the union cannot be merged (non-discriminated, or variant
+// fields collide), in which case the caller emits a dynamic placeholder
+// (the schema degrades to DynamicAttribute). attrWriter is the per-call-site
+// attribute renderer (writeHCLAttribute for examples, writeHCLAcceptanceAttribute
+// for acceptance configs) so nested attributes follow each call site's rules
+// (e.g. the acceptance config's %s placeholder for the varied primitive).
+func writeHCLDiscriminatedUnion(h *hclBuilder, attr ir.AttributeIR, attrWriter func(*hclBuilder, ir.AttributeIR)) bool {
+	merged := schema.MergedDiscriminatedUnion(attr.Schema)
+	if merged == nil {
+		return false
+	}
+	disc := attr.Schema.Union.Discriminator
+	discName := transformer.ToSnakeCase(disc.PropertyName)
+	keys := make([]string, 0, len(disc.Mapping))
+	for k := range disc.Mapping {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	h.writeLinef("%s = {", attr.Name)
+	h.indent++
+	// The discriminator is a Required string attribute; it must always be
+	// present. When the spec's discriminator declares a mapping, emit the first
+	// (sorted) key so the DiscriminatorValidator accepts the value. When the
+	// mapping is absent (inline variants, no $ref names to infer from) the
+	// validator's allowed-key set is empty and it skips the membership check, so
+	// any string satisfies it — emit "example" to satisfy the Required field.
+	if len(keys) > 0 {
+		h.writeLinef("%s = %q", discName, keys[0])
+	} else {
+		h.writeLinef("%s = %q", discName, "example")
+	}
+	// Emit the remaining configurable attributes in merged-attribute order,
+	// skipping the discriminator (already written) and Computed-only fields.
+	for _, a := range merged.Attributes {
+		if a.Name == discName || !includeInExample(a) {
+			continue
+		}
+		attrWriter(h, a)
+	}
+	h.indent--
+	h.writeLinef("}")
+	return true
 }
 
 // writeHCLCollectionAttribute renders a list, set, or map attribute in HCL.

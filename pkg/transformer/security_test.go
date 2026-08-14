@@ -268,7 +268,9 @@ func TestMapSecuritySchemeToProviderConfig(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := MapSecuritySchemeToProviderConfig(tt.scheme)
+			// A single-scheme spec: the allSchemes list is just this scheme, so a
+			// bearer scheme keeps the canonical "bearer_token" attribute name.
+			got, err := MapSecuritySchemeToProviderConfig(tt.scheme, []ir.SecuritySchemeIR{tt.scheme})
 			if (err != nil) != tt.wantErr {
 				t.Fatalf("MapSecuritySchemeToProviderConfig() error = %v, wantErr %v", err, tt.wantErr)
 			}
@@ -282,6 +284,65 @@ func TestMapSecuritySchemeToProviderConfig(t *testing.T) {
 	}
 }
 
+// TestBearerTokenAttributeName covers the scheme-qualification rule: a single
+// bearer scheme keeps the canonical "bearer_token" attribute, while a spec with
+// several bearer schemes qualifies each attribute with the scheme name so
+// practitioners can set distinct tokens per scheme.
+func TestBearerTokenAttributeName(t *testing.T) {
+	bearer := func(name string) ir.SecuritySchemeIR {
+		return ir.SecuritySchemeIR{Name: name, Type: ir.SecuritySchemeHTTP, Scheme: "bearer"}
+	}
+
+	single := []ir.SecuritySchemeIR{bearer("AccountToken")}
+	if got := BearerTokenAttributeName(bearer("AccountToken"), single); got != "bearer_token" {
+		t.Errorf("single bearer scheme: BearerTokenAttributeName = %q, want bearer_token", got)
+	}
+
+	multi := []ir.SecuritySchemeIR{bearer("AccountToken"), bearer("AgentToken")}
+	if got := BearerTokenAttributeName(bearer("AccountToken"), multi); got != "account_token" {
+		t.Errorf("multi-bearer: BearerTokenAttributeName(AccountToken) = %q, want account_token", got)
+	}
+	if got := BearerTokenAttributeName(bearer("AgentToken"), multi); got != "agent_token" {
+		t.Errorf("multi-bearer: BearerTokenAttributeName(AgentToken) = %q, want agent_token", got)
+	}
+
+	// A non-bearer scheme in the list must not change the count.
+	mixed := []ir.SecuritySchemeIR{bearer("AccountToken"), bearer("AgentToken"), {Name: "api_key", Type: ir.SecuritySchemeAPIKey, In: "header"}}
+	if got := BearerTokenAttributeName(bearer("AccountToken"), mixed); got != "account_token" {
+		t.Errorf("mixed schemes: BearerTokenAttributeName(AccountToken) = %q, want account_token", got)
+	}
+
+	// A multi-bearer spec with a nameless scheme falls back to the canonical name.
+	nameless := []ir.SecuritySchemeIR{bearer(""), bearer("AgentToken")}
+	if got := BearerTokenAttributeName(bearer(""), nameless); got != "bearer_token" {
+		t.Errorf("nameless scheme: BearerTokenAttributeName = %q, want bearer_token", got)
+	}
+}
+
+// TestMapSecuritySchemeToProviderConfig_MultiBearerQualifies asserts that two
+// bearer schemes map to distinct, scheme-qualified config attributes rather than
+// collapsing onto one bearer_token (the SpaceTraders AccountToken/AgentToken
+// case).
+func TestMapSecuritySchemeToProviderConfig_MultiBearerQualifies(t *testing.T) {
+	schemes := []ir.SecuritySchemeIR{
+		{Name: "AccountToken", Type: ir.SecuritySchemeHTTP, Scheme: "bearer"},
+		{Name: "AgentToken", Type: ir.SecuritySchemeHTTP, Scheme: "bearer"},
+	}
+	attrs, err := MapSecuritySchemeToProviderConfig(schemes[0], schemes)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(attrs) != 1 {
+		t.Fatalf("expected 1 attribute, got %d: %+v", len(attrs), attrs)
+	}
+	if attrs[0].Name != "account_token" {
+		t.Errorf("attribute name = %q, want account_token", attrs[0].Name)
+	}
+	if !attrs[0].Sensitive {
+		t.Error("bearer token attribute must be sensitive")
+	}
+}
+
 // TestMapOpenIDConnectSurfacesDiscoveryURL locks in the L-106 fix: when the
 // spec declares an OpenIDConnectURL, it is carried into the oidc_token_url
 // attribute description so practitioners do not have to look it up manually.
@@ -291,7 +352,7 @@ func TestMapOpenIDConnectSurfacesDiscoveryURL(t *testing.T) {
 		Type:             ir.SecuritySchemeOpenIDConnect,
 		OpenIDConnectURL: "https://example.com/.well-known/openid-configuration",
 	}
-	got, err := MapSecuritySchemeToProviderConfig(scheme)
+	got, err := MapSecuritySchemeToProviderConfig(scheme, []ir.SecuritySchemeIR{scheme})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

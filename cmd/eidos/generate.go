@@ -132,12 +132,16 @@ func runGenerate(cmd *cobra.Command, flags *generateFlags) error {
 		return fmt.Errorf("--output is required for full provider generation")
 	}
 
-	provider, _, genDiags, err := api.BuildProviderIRWithContentType(specBytes, contentType, cfg)
+	provider, _, genDiags, err := api.BuildProviderIRWithName(specBytes, specDisplay, contentType, cfg)
 	if err != nil {
-		for _, d := range genDiags {
-			printDiagnostic(cmd.ErrOrStderr(), d)
-		}
-		return fmt.Errorf("failed to build provider IR: %w", err)
+		return failBuildProviderIR(cmd, genDiags, err)
+	}
+	// Error-severity diagnostics (e.g. duplicate construct names from colliding
+	// operationIds) mean the spec cannot be generated as-is; fail before the
+	// generator runs so the user sees the actionable diagnostic rather than a
+	// downstream "duplicate output path" error.
+	if genDiags.HasErrors() {
+		return failBuildProviderIR(cmd, genDiags, fmt.Errorf("spec cannot be generated: the provider IR contains error diagnostics (see above)"))
 	}
 
 	if cfg != nil {
@@ -232,6 +236,16 @@ func handleGenerateConfig(cmd *cobra.Command, flags *generateFlags, specBytes []
 		printDiagnostic(cmd.ErrOrStderr(), d)
 	}
 	return true, writeStarterConfigHint(cmd.OutOrStdout(), outputPath, specDisplay)
+}
+
+// failBuildProviderIR prints the pipeline diagnostics and wraps err so the
+// caller returns a single error. It is shared by the build-failure and
+// error-diagnostic paths so both surface the same actionable diagnostics.
+func failBuildProviderIR(cmd *cobra.Command, genDiags diagnostics.Diagnostics, err error) error {
+	for _, d := range genDiags {
+		printDiagnostic(cmd.ErrOrStderr(), d)
+	}
+	return err
 }
 
 func printDiagnostic(w io.Writer, d diagnostics.Diagnostic) {

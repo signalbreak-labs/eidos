@@ -2,12 +2,12 @@
 page_title: "mycloud_get_member Data Source - mycloud"
 subcategory: ""
 description: |-
-  
+  Get a member
 ---
 
 # mycloud_get_member Data Source
 
-
+Get a member
 
 ## Example Usage
 

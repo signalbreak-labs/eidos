@@ -246,6 +246,9 @@ func generateEphemeralFile(er ir.EphemeralResourceIR, clientImport string) *ast.
 		if wiring.needsStrconv {
 			f.AddImport("strconv", "")
 		}
+		if wiring.needsURL {
+			f.AddImport("net/url", "")
+		}
 	}
 	// The schema/validator package is only referenced by ephemeralBlockExpr when a
 	// List/Set block emits a validator.List/validator.Set composite, which in turn
@@ -411,7 +414,26 @@ func ephemeralMergedAttributes(er ir.EphemeralResourceIR) []ir.AttributeIR {
 	for _, attr := range er.ResultSchema.Attributes {
 		if existing, ok := byName[attr.Name]; ok {
 			if !ephemeralAttributeTypesCompatible(existing, attr) {
-				panic(fmt.Sprintf("ephemeral resource %q: attribute %q has incompatible types in config and result schemas", er.Name, attr.Name))
+				// The config and result schemas disagree on the shape of this
+				// attribute (e.g. an object on the request side and a primitive
+				// on the response side). The plugin-framework ephemeral schema
+				// has no first-class union attribute, so degrade the merged
+				// attribute to a DynamicAttribute instead of panicking (G2): a
+				// conflicting config/result value can only be represented as
+				// dynamic, and generation must stay honest rather than crash.
+				// The attribute-level Name/WireName/Description/Sensitive are
+				// preserved; only the schema shape is reset to dynamic.
+				existing.Schema = ir.SchemaIR{
+					Type:        ir.TypeDynamic,
+					Description: existing.Schema.Description,
+				}
+				if existing.Required {
+					existing.Required = false
+					existing.Optional = true
+				}
+				existing.Computed = true
+				byName[attr.Name] = existing
+				continue
 			}
 			// Same attribute in config and result: allow optional+computed.
 			// The config schema's IR (including SchemaIR type) takes precedence.
@@ -626,6 +648,17 @@ func ephemeralCollectionAttributeExpr(attr ir.AttributeIR, attrPath, resourceNam
 		if strings.Contains(attrPath, ".") {
 			return nil
 		}
+		return astgen.CompositeLit(astgen.QualExpr("ephemeralschema", "DynamicAttribute"), ephemeralAttributeValues(attr, nil)...)
+	}
+	// A collection whose element is an object (or nested collection) that
+	// contains a dynamic at any depth cannot be rendered as a typed framework
+	// collection: the framework rejects any collection whose element type
+	// contains a dynamic (fwtype.ContainsCollectionWithDynamic). Emit the whole
+	// collection as a DynamicAttribute, per the framework's own guidance. This is
+	// valid in an object-or-top-level context; an enclosing collection's
+	// ContainsNestedDynamic check promotes any collection ancestor, so this is
+	// never reached inside a collection.
+	if schema.ContainsNestedDynamic(elem) {
 		return astgen.CompositeLit(astgen.QualExpr("ephemeralschema", "DynamicAttribute"), ephemeralAttributeValues(attr, nil)...)
 	}
 	switch attr.Schema.Collection.Kind {

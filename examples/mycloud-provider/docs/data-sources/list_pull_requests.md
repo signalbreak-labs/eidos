@@ -2,12 +2,12 @@
 page_title: "mycloud_list_pull_requests Data Source - mycloud"
 subcategory: ""
 description: |-
-  
+  List pull requests
 ---
 
 # mycloud_list_pull_requests Data Source
 
-
+List pull requests
 
 ## Example Usage
 

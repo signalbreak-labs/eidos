@@ -185,6 +185,46 @@ func TestResourceFile_ImportState_Simple(t *testing.T) {
 	}
 }
 
+// TestResourceFile_ImportState_IntID verifies that a resource with an integer
+// identifier parses the string import ID with strconv.ParseInt before storing
+// it, because storing a Go string into an Int64 attribute makes the framework's
+// SetAttribute fail with a tftypes conversion error ("can't unmarshal
+// tftypes.String into *big.Float"). A failed parse surfaces a loud diagnostic
+// instead of that confusing value-conversion error.
+func TestResourceFile_ImportState_IntID(t *testing.T) {
+	r := sampleResourceIR()
+	for i := range r.Schema.Attributes {
+		if r.Schema.Attributes[i].Name == "id" {
+			r.Schema.Attributes[i].Schema.Type = ir.TypeInt
+		}
+	}
+
+	file := ResourceFile(r, testClientImport)
+	var buf bytes.Buffer
+	if err := file.Render(&buf); err != nil {
+		t.Fatalf("Render() error = %v", err)
+	}
+	got := buf.String()
+
+	wantSubstrings := []string{
+		"func (r *PetResource) ImportState",
+		`importId, err := strconv.ParseInt(req.ID, 10, 64)`,
+		`resp.State.SetAttribute(ctx, path.Root("id"), importId)`,
+		`"Error importing mycloud_pet"`,
+		`Could not parse import identifier %q as an integer: %s`,
+		`"strconv"`,
+	}
+	for _, want := range wantSubstrings {
+		if !strings.Contains(got, want) {
+			t.Errorf("generated resource file missing %q\ncontent:\n%s", want, got)
+		}
+	}
+	// The string-typed path must be absent: req.ID is parsed before being stored.
+	if strings.Contains(got, `resp.State.SetAttribute(ctx, path.Root("id"), req.ID)`) {
+		t.Errorf("generated resource file must not store req.ID verbatim into an Int64 attribute\ncontent:\n%s", got)
+	}
+}
+
 // TestResourceFile_ImportState_SingleBrace verifies that a resource with a
 // single braced import attribute and no explicit id_attribute emits
 // path.Root for that parsed attribute name.

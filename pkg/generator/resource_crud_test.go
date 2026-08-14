@@ -161,6 +161,59 @@ func TestWiredBody_CookieParam_Render(t *testing.T) {
 	}
 }
 
+// gatedQueryParamResourceIR returns a wired resource whose Read operation carries
+// one optional query parameter (filter) and one required query parameter
+// (region), each mapped to a same-named schema attribute. It exercises the
+// optional-parameter gating: an unset optional parameter is omitted from the
+// request rather than sent as the zero-value empty string.
+func gatedQueryParamResourceIR() ir.ResourceIR {
+	r := sampleResourceIR()
+	r.Schema.Attributes = append(r.Schema.Attributes,
+		ir.AttributeIR{Name: "filter", Optional: true, Schema: ir.SchemaIR{Type: ir.TypeString}},
+		ir.AttributeIR{Name: "region", Required: true, Schema: ir.SchemaIR{Type: ir.TypeString}},
+	)
+	r.CRUDMapping.Read = ir.OperationMappingIR{
+		Method:       "GET",
+		PathTemplate: "/pets/{id}",
+		SuccessCodes: []int{200},
+		QueryParams: []ir.ParamIR{
+			{Name: "filter", In: "query", Schema: ir.SchemaIR{Type: ir.TypeString}},
+			{Name: "region", In: "query", Required: true, Schema: ir.SchemaIR{Type: ir.TypeString}},
+		},
+	}
+	return r
+}
+
+// TestWiredBody_OptionalQueryParamsAreGated asserts that an optional query
+// parameter is emitted inside an "if !state.<field>.IsNull() { ... }" guard so
+// an unset optional parameter is omitted from the request, while a required
+// query parameter is emitted unguarded (it is always set at apply time).
+func TestWiredBody_OptionalQueryParamsAreGated(t *testing.T) {
+	r := gatedQueryParamResourceIR()
+
+	file := ResourceFile(r, testClientImport)
+	var buf bytes.Buffer
+	if err := file.Render(&buf); err != nil {
+		t.Fatalf("Render() error = %v", err)
+	}
+	got := buf.String()
+
+	// Optional parameter is guarded against a null model field.
+	if !strings.Contains(got, "if !state.Filter.IsNull() {") {
+		t.Errorf("optional query param should be gated on !state.Filter.IsNull(), missing in body:\n%s", got)
+	}
+	if !strings.Contains(got, `query.Set("filter", state.Filter.ValueString())`) {
+		t.Errorf("optional query param emission missing in body:\n%s", got)
+	}
+	// Required parameter is emitted unguarded.
+	if !strings.Contains(got, `query.Set("region", state.Region.ValueString())`) {
+		t.Errorf("required query param emission missing in body:\n%s", got)
+	}
+	if strings.Contains(got, "if !state.Region.IsNull() {") {
+		t.Errorf("required query param must NOT be gated on IsNull, but a guard was emitted:\n%s", got)
+	}
+}
+
 // TestPlanOperation_RequiredCookieParamDisablesWiring verifies that a required
 // cookie parameter with no matching schema attribute disables wiring, mirroring
 // the query/header rule, so the body never omits a required cookie at runtime.
@@ -225,6 +278,43 @@ func TestPlanOperation_CompositeIDNoIDFallback(t *testing.T) {
 	}
 }
 
+// TestPlanOperation_StaticSegmentPlusIDFallback wires a resource whose instance
+// path has a shared static versioning segment ({apiVersion}, enum ["v4beta"])
+// plus an instance-id placeholder ({channelId}) with no same-named schema
+// attribute. Because {apiVersion} resolves to a static literal, only {channelId}
+// is dynamic, so the resource-id fallback remains valid and the resource wires
+// (the Linode alert_channel case). Without the static-segment exclusion the
+// two-placeholder path would be treated as composite and left scaffolded.
+func TestPlanOperation_StaticSegmentPlusIDFallback(t *testing.T) {
+	versionParam := []ir.ParamIR{
+		{Name: "apiVersion", In: "path", Schema: ir.SchemaIR{Type: ir.TypeString, EnumValues: []any{"v4beta"}}},
+	}
+	r := sampleResourceIR() // has an "id" attribute but no "channel_id" attribute
+	r.CRUDMapping.Create = ir.OperationMappingIR{Method: "POST", PathTemplate: "/{apiVersion}/monitor/alert-channels", PathParams: versionParam}
+	r.CRUDMapping.Read = ir.OperationMappingIR{Method: "GET", PathTemplate: "/{apiVersion}/monitor/alert-channels/{channelId}", PathParams: append(versionParam, ir.ParamIR{Name: "channelId", In: "path", Schema: ir.SchemaIR{Type: ir.TypeInt}})}
+	r.CRUDMapping.Delete = ir.OperationMappingIR{Method: "DELETE", PathTemplate: "/{apiVersion}/monitor/alert-channels/{channelId}", PathParams: append(versionParam, ir.ParamIR{Name: "channelId", In: "path", Schema: ir.SchemaIR{Type: ir.TypeInt}})}
+	plan := planResourceWiring(r)
+	if !plan.wired {
+		t.Fatalf("expected static-segment + id-fallback resource to wire, got wired=false")
+	}
+	// {channelId} resolves to the resource id field; {apiVersion} to a literal.
+	var sawLiteral, sawIDField bool
+	for _, sub := range plan.read.subs {
+		if sub.placeholder == "apiVersion" && sub.literal == "v4beta" {
+			sawLiteral = true
+		}
+		if sub.placeholder == "channelId" && sub.field == "Id" {
+			sawIDField = true
+		}
+	}
+	if !sawLiteral {
+		t.Errorf("expected {apiVersion} to resolve to literal %q, subs=%+v", "v4beta", plan.read.subs)
+	}
+	if !sawIDField {
+		t.Errorf("expected {channelId} to resolve to the id attribute, subs=%+v", plan.read.subs)
+	}
+}
+
 // TestWiredCreateBody_LocationIDFallback asserts the wired Create body falls
 // back to the Location header when the response body leaves the string
 // identifier unset, and surfaces a clear error when neither is present.
@@ -266,7 +356,7 @@ func TestResolvePathSubstitution_UIDShapedPlaceholder(t *testing.T) {
 		},
 	}
 
-	sub, ok := resolvePathSubstitution(r, "folder_uid", false)
+	sub, ok := resolvePathSubstitution(r, "folder_uid", false, nil)
 	if !ok {
 		t.Fatalf("expected a substitution for {folder_uid}")
 	}
@@ -275,15 +365,69 @@ func TestResolvePathSubstitution_UIDShapedPlaceholder(t *testing.T) {
 	}
 
 	// An exact-name match still wins (uid placeholder -> uid attribute).
-	sub, ok = resolvePathSubstitution(r, "uid", false)
+	sub, ok = resolvePathSubstitution(r, "uid", false, nil)
 	if !ok || sub.field != "Uid" {
 		t.Fatalf("expected {uid} to map to uid attribute, got ok=%v field=%q", ok, sub.field)
 	}
 
 	// A non-UID placeholder falls back to the numeric id.
-	sub, ok = resolvePathSubstitution(r, "folderId", false)
+	sub, ok = resolvePathSubstitution(r, "folderId", false, nil)
 	if !ok || sub.field != "Id" {
 		t.Fatalf("expected non-UID placeholder to fall back to id, got ok=%v field=%q", ok, sub.field)
+	}
+}
+
+// TestResolvePathSubstitution_StaticVersionSegment verifies that a shared
+// path-versioning placeholder (e.g. Linode's {apiVersion}, enum ["v4","v4beta"],
+// no default) that has no matching schema attribute is resolved to a static
+// literal derived from the path parameter's schema (default, then first enum
+// value, then const) rather than disabling wiring for the whole composite-path
+// resource. This is what lets eidos wire Linode resources whose instance paths
+// are /{apiVersion}/linode/instances/{linodeId}.
+func TestResolvePathSubstitution_StaticVersionSegment(t *testing.T) {
+	r := ir.ResourceIR{
+		Name: "linode_instance",
+		Schema: ir.ObjectSchemaIR{
+			Attributes: []ir.AttributeIR{
+				{Name: "id", Computed: true, Schema: ir.SchemaIR{Type: ir.TypeInt}},
+				{Name: "label", Optional: true, Schema: ir.SchemaIR{Type: ir.TypeString}},
+			},
+		},
+	}
+	pathParams := []ir.ParamIR{
+		{Name: "apiVersion", In: "path", Schema: ir.SchemaIR{Type: ir.TypeString, EnumValues: []any{"v4", "v4beta"}}},
+		{Name: "linodeId", In: "path", Schema: ir.SchemaIR{Type: ir.TypeInt}},
+	}
+
+	// {apiVersion} has no matching attribute; with the ID fallback suppressed
+	// (composite path) it resolves to the first enum value as a literal.
+	sub, ok := resolvePathSubstitution(r, "apiVersion", true, pathParams)
+	if !ok {
+		t.Fatalf("expected a static substitution for {apiVersion}, got ok=%v", ok)
+	}
+	if sub.literal != "v4" {
+		t.Fatalf("expected literal %q for {apiVersion} (first enum value), got %q", "v4", sub.literal)
+	}
+	if sub.field != "" {
+		t.Fatalf("expected no model field for a static substitution, got field %q", sub.field)
+	}
+
+	// {linodeId} has no matching attribute either but its param declares no
+	// const/default/enum, so static substitution does not apply and the
+	// composite-path guard disables wiring (returns false).
+	if _, ok := resolvePathSubstitution(r, "linodeId", true, pathParams); ok {
+		t.Fatalf("expected {linodeId} (no static value, composite path) to be unresolvable, got ok=true")
+	}
+
+	// A default value is preferred over the enum when both are present
+	// (const > default > enum[0] is the priority order in staticPathValue).
+	stableAny := any("stable")
+	pathParamsDefault := []ir.ParamIR{
+		{Name: "ver", In: "path", Schema: ir.SchemaIR{Type: ir.TypeString, Default: &stableAny, EnumValues: []any{"alpha", "stable"}}},
+	}
+	sub, ok = resolvePathSubstitution(r, "ver", true, pathParamsDefault)
+	if !ok || sub.literal != "stable" {
+		t.Fatalf("expected default %q to win over enum, got ok=%v literal=%q", "stable", ok, sub.literal)
 	}
 }
 

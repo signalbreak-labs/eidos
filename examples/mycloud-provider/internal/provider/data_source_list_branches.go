@@ -14,33 +14,40 @@ import (
 	types "github.com/hashicorp/terraform-plugin-framework/types"
 	client "github.com/mycloud/terraform-provider-mycloud/internal/client"
 )
+
 // Compile-time interface assertion.
 var (
 	_ datasource.DataSource              = (*ListBranchesDataSource)(nil)
 	_ datasource.DataSourceWithConfigure = (*ListBranchesDataSource)(nil)
 )
+
 // ListBranchesDataSource is the generated Terraform data source implementation.
 type ListBranchesDataSource struct {
 	client *client.Client
 }
+
 // ListBranchesDataSourceModel describes the data source state shape.
 type ListBranchesDataSourceModel struct {
 	Items        types.List   `tfsdk:"items"`
 	Organization types.String `tfsdk:"organization"`
 	Project      types.String `tfsdk:"project"`
 }
+
 // NewListBranchesDataSource returns a new instance of the generated data source.
 func NewListBranchesDataSource() datasource.DataSource {
 	return &ListBranchesDataSource{}
 }
+
 // Metadata returns the data source type name.
 func (d *ListBranchesDataSource) Metadata(_ context.Context, _ datasource.MetadataRequest, resp *datasource.MetadataResponse) {
 	resp.TypeName = "mycloud_list_branches"
 }
+
 // Schema returns the data source schema.
 func (d *ListBranchesDataSource) Schema(_ context.Context, _ datasource.SchemaRequest, resp *datasource.SchemaResponse) {
-	resp.Schema = schema.Schema{Attributes: map[string]schema.Attribute{"items": schema.ListNestedAttribute{Computed: true, NestedObject: schema.NestedAttributeObject{Attributes: map[string]schema.Attribute{"branch": schema.StringAttribute{Computed: true}, "id": schema.Int64Attribute{Computed: true}, "name": schema.StringAttribute{Computed: true}, "organization": schema.StringAttribute{Computed: true}, "project": schema.StringAttribute{Computed: true}, "protected": schema.BoolAttribute{Computed: true}, "sha": schema.StringAttribute{Computed: true}}}}, "organization": schema.StringAttribute{Required: true}, "project": schema.StringAttribute{Required: true}}}
+	resp.Schema = schema.Schema{MarkdownDescription: "List branches", Attributes: map[string]schema.Attribute{"items": schema.ListNestedAttribute{Computed: true, NestedObject: schema.NestedAttributeObject{Attributes: map[string]schema.Attribute{"branch": schema.StringAttribute{Computed: true}, "id": schema.Int64Attribute{Computed: true}, "name": schema.StringAttribute{Computed: true}, "organization": schema.StringAttribute{Computed: true}, "project": schema.StringAttribute{Computed: true}, "protected": schema.BoolAttribute{Computed: true}, "sha": schema.StringAttribute{Computed: true}}}}, "organization": schema.StringAttribute{Required: true}, "project": schema.StringAttribute{Required: true}}}
 }
+
 // Read fetches remote state into the data source model.
 func (d *ListBranchesDataSource) Read(ctx context.Context, req datasource.ReadRequest, resp *datasource.ReadResponse) {
 	var config ListBranchesDataSourceModel
@@ -49,29 +56,23 @@ func (d *ListBranchesDataSource) Read(ctx context.Context, req datasource.ReadRe
 		return
 	}
 	if d.client == nil {
-		{
-			resp.Diagnostics.AddError("Client Not Configured", "The API client was not set on the resource. The provider Configure method must run before resource operations; this is a bug in the generated provider.")
-			return
-		}
+		resp.Diagnostics.AddError("Client Not Configured", "The API client was not set on the resource. The provider Configure method must run before resource operations; this is a bug in the generated provider.")
+		return
 	}
 	reqPath := "/organizations/{organization}/projects/{project}/branches"
-	reqPath = strings.ReplaceAll(reqPath, "{organization}", config.Organization.ValueString())
-	reqPath = strings.ReplaceAll(reqPath, "{project}", config.Project.ValueString())
+	reqPath = strings.ReplaceAll(reqPath, "{organization}", url.PathEscape(config.Organization.ValueString()))
+	reqPath = strings.ReplaceAll(reqPath, "{project}", url.PathEscape(config.Project.ValueString()))
 	params := url.Values{}
 	var nextURL string
 	fetch := func(ctx context.Context, p url.Values) (*http.Response, error) {
 		httpReq, err := d.client.NewRequest(ctx, http.MethodGet, reqPath, nil)
 		if err != nil {
-			{
-				return nil, err
-			}
+			return nil, err
 		}
 		if nextURL != "" {
 			parsed, perr := url.Parse(nextURL)
 			if perr != nil {
-				{
-					return nil, perr
-				}
+				return nil, perr
 			}
 			httpReq.URL = parsed
 		} else {
@@ -99,6 +100,7 @@ func (d *ListBranchesDataSource) Read(ctx context.Context, req datasource.ReadRe
 	}
 	resp.Diagnostics.Append(resp.State.Set(ctx, &config)...)
 }
+
 // Configure stores the API client supplied by the provider.
 func (d *ListBranchesDataSource) Configure(_ context.Context, req datasource.ConfigureRequest, resp *datasource.ConfigureResponse) {
 	if req.ProviderData == nil {
@@ -106,10 +108,8 @@ func (d *ListBranchesDataSource) Configure(_ context.Context, req datasource.Con
 	}
 	c, ok := req.ProviderData.(*client.Client)
 	if !ok {
-		{
-			resp.Diagnostics.AddError("Unexpected Data Source Configure Type", fmt.Sprintf("Expected *client.Client, got: %T. Please report this issue to the provider developers.", req.ProviderData))
-			return
-		}
+		resp.Diagnostics.AddError("Unexpected Data Source Configure Type", fmt.Sprintf("Expected *client.Client, got: %T. Please report this issue to the provider developers.", req.ProviderData))
+		return
 	}
 	d.client = c
 }

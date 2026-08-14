@@ -45,6 +45,48 @@ func TestToSnakeCase(t *testing.T) {
 	}
 }
 
+func TestToProviderTypeName(t *testing.T) {
+	cases := []struct {
+		input string
+		want  string
+	}{
+		{"getPet", "get-pet"},
+		{"GetPet", "get-pet"},
+		{"get_pet", "get-pet"},
+		{"get-pet", "get-pet"},
+		{"get pet", "get-pet"},
+		{"get.pet", "get-pet"},
+		{"HTTPResponse", "http-response"},
+		{"getHTTPResponse", "get-http-response"},
+		{"petID", "pet-id"},
+		{"getPetByID", "get-pet-by-id"},
+		{"pet_v2", "pet-v2"},
+		{"api_v2", "api-v2"},
+		{"URL", "url"},
+		{"", ""},
+		{"__mixed--Case__", "mixed-case"},
+		{" already_snake ", "already-snake"},
+		// Terraform provider type names reject underscores and dots, so a
+		// multi-word title must produce kebab-case, not snake_case.
+		{"Mycloud Pets", "mycloud-pets"},
+		{"AllOf Nesting API", "all-of-nesting-api"},
+		// Leading-digit inputs must not produce an identifier starting with a
+		// digit (invalid in Go and HCL); an "x" prefix is added (L-99).
+		{"2fa", "x2-fa"},
+		{"2FA", "x2-fa"},
+		{"2024_report", "x2024-report"},
+		{"123", "x123"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.input, func(t *testing.T) {
+			if got := ToProviderTypeName(tc.input); got != tc.want {
+				t.Fatalf("ToProviderTypeName(%q) = %q, want %q", tc.input, got, tc.want)
+			}
+		})
+	}
+}
+
 func TestToPascalCase(t *testing.T) {
 	cases := []struct {
 		input string

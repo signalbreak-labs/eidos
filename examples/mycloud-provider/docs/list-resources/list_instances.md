@@ -2,12 +2,12 @@
 page_title: "mycloud_list_instances List Resource - mycloud"
 subcategory: ""
 description: |-
-  
+  List Instances
 ---
 
 # mycloud_list_instances List Resource
 
-
+List Instances
 
 ## Example Usage
 

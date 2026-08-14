@@ -322,7 +322,7 @@ The following matrix maps every major OpenAPI construct to its Terraform provide
 | `anyOf` | Dynamic union (same rendering as `oneOf`) | See Section 12 |
 | `allOf` | Flattened merged object | All properties merged into one `SingleNestedAttribute` |
 | `discriminator` | `SingleNestedAttribute` merging variant fields + `DiscriminatorValidator` (allowed-keys check) | See Section 12 |
-| `$ref` | Dereferenced and inlined | Circular refs are marked `Opaque` and treated as an opaque boundary (scalar fields kept, nested properties dropped) |
+| `$ref` | Dereferenced and inlined | Circular refs are marked `Opaque` on the ref holder and expanded up to `maxCyclicDepth` levels, then cut to an opaque boundary (first-entry properties preserved, deeper re-entry scalar-only) |
 | `readOnly: true` | Parsed but not mapped | Computed-ness is derived from request/response membership, not `readOnly` |
 | `writeOnly: true` | `WriteOnly: true` + `Sensitive: true` (Terraform 1.10+) | Renamed to `<name>_wo` with a companion `<name>_wo_version` Int64 attribute |
 | `nullable` / `type: ["string", "null"]` | `Optional` + `Computed` | Null is a valid state |
@@ -1333,7 +1333,7 @@ All three build the config from the IR via `generator.GenerateConfig` in `pkg/ge
 **Package**: `pkg/transformer/` (normalization phase; the `normalizer_*.go` files)
 
 **Responsibilities**:
-1. **`$ref` resolution**: Recursively dereference all JSON Pointer `$ref` entries. Circular references are detected by the parser and produce a warning; the parser marks cyclic component schemas `Opaque`, and the transformer treats an `Opaque` schema as an opaque boundary (its scalar fields are kept, but nested properties/items are not descended into).
+1. **`$ref` resolution**: Recursively dereference all JSON Pointer `$ref` entries. Circular references are detected by the parser and produce a warning; the parser marks the cyclic ref holders `Opaque`, and the transformer expands a cyclic ref up to `maxCyclicDepth` levels (preserving first-entry properties) before cutting deeper re-entry to an opaque boundary (see §12.4).
 2. **`allOf` flattening**: Merge all `allOf` schemas into a single flat object, resolving property conflicts (duplicate required fields with same type → merge; conflicting types → error).
 3. **Polymorphism normalization**: Convert `oneOf` + `discriminator` combinations into `UnionType` with `DiscriminatorIR`; `anyOf` becomes `UnionType` without a discriminator.
 4. **Parameter resolution**: Merge path-level parameters into operation-level parameters; resolve `parameters` references.
@@ -2152,7 +2152,7 @@ pkg/parser/
 - Local JSON Pointers (`#/components/schemas/Pet`) are resolved against the in-memory spec.
 - External file references (`./models.yaml#/Pet`) are rejected with a fail-loud error diagnostic; only same-document refs resolve.
 - Remote references (`https://example.com/spec.yaml#/Pet`) are rejected with a fail-loud error diagnostic rather than fetched.
-- Circular references are detected and reported as warnings; the parser marks the participating schemas `Opaque` so downstream phases treat them as opaque boundaries instead of expanding them.
+- Circular references are detected and reported as warnings; the parser marks the cyclic ref holders `Opaque` so the transformer bounds their expansion (up to `maxCyclicDepth` levels, then an opaque boundary) instead of expanding them unboundedly.
 
 #### Validation
 
@@ -2164,7 +2164,7 @@ The parser reports diagnostics at the source location rather than failing silent
 | Invalid `$ref` target | Error with ref path and location |
 | Type mismatch | Warning with suggested coercion |
 | Unsupported keyword | Warning describing limitation |
-| Circular `$ref` | Warning; field marked opaque |
+| Circular `$ref` | Warning; ref holder marked Opaque and expansion bounded to `maxCyclicDepth` levels |
 
 #### Technology stack update
 
@@ -2221,7 +2221,7 @@ Each OpenAPI security scheme maps to provider-level configuration attributes and
 | `apiKey` (query) | `api_key` (Sensitive, String) | Append `?api_key=<value>` to URL |
 | `apiKey` (cookie) | `api_key` (Sensitive, String) | Inject `Cookie: api_key=<value>` header |
 | `http/basic` | `username` (String), `password` (Sensitive, String) | `Authorization: Basic <base64(user:pass)>` |
-| `http/bearer` | `bearer_token` (Sensitive, String) | `Authorization: Bearer <token>` |
+| `http/bearer` | `bearer_token` (Sensitive, String) — qualified to `<scheme>_token` when the spec declares several bearer schemes | `Authorization: Bearer <token>` |
 | `oauth2/client_credentials` | `client_id`, `client_secret` (Sensitive), `token_url`, `scopes` | Token exchange at `token_url`, cache token, inject `Authorization: Bearer <token>` |
 | `oauth2/authorization_code` | `client_id`, `client_secret` (Sensitive), `auth_url`, `token_url`, `refresh_token` (Sensitive), `scopes` | Refresh-only: the initial code exchange is interactive and happens out-of-band; the provider refreshes the supplied `refresh_token` at `token_url` (handling rotation) and injects `Authorization: Bearer <token>` |
 | `oauth2/implicit` | `auth_url`, `scopes` | No interceptor (interactive redirect; deprecated in OAuth 2.1); fail-loud runtime warning |
@@ -2229,6 +2229,8 @@ Each OpenAPI security scheme maps to provider-level configuration attributes and
 | `openIdConnect` | `oidc_token_url`, `client_id`, `client_secret` (Sensitive) | Token endpoint from `oidc_token_url` override, else OIDC discovery (cached); client-credentials token fetch, inject Bearer |
 
 Multiple security schemes on a single operation are resolved with **AND semantics**, not OR: an operation declaring exactly one security requirement authenticates with exactly that requirement's schemes via `client.WithSchemes(...)` (per-operation AND). An operation declaring no `security` inherits the global default (every configured scheme interceptor applies); an operation declaring a single empty requirement (`security: [{}]`) is unauthenticated. An operation (or global `security`) declaring **more than one requirement** — OR, where any one suffices — is ambiguous for a non-interactive provider: eidos applies every declared scheme (AND of all, which is stricter than OR) and emits a fail-loud Warning diagnostic (`warnPerOpORSecurity` for per-operation OR; the global case warns via `buildSecurityIR`). This is fail-loud, not silent — a non-interactive Terraform provider cannot reliably try/fallback across OR alternatives.
+
+A spec declaring **more than one bearer scheme** qualifies each scheme's provider attribute with the scheme name (`account_token`, `agent_token`, …) via `transformer.BearerTokenAttributeName`, so each interceptor reads its own token and per-operation `WithSchemes(...)` selection is meaningful. A single bearer scheme keeps the canonical `bearer_token`. Both the config-schema mapping (`applySecurityConfigAttributes`) and the generated Configure wiring (`pkg/generator/provider_auth.go`) resolve the same helper, so the attribute a practitioner sets is the attribute the interceptor reads.
 
 ### 11.1 Provider-Level HTTP Trace Logging
 
@@ -2381,12 +2383,26 @@ When `$ref` forms a cycle (e.g., `Person` → `children: Person[]`), the parser'
 `DetectCircularSchemaRefs` detects it and emits a `Warning` diagnostic
 ("Circular schema reference" — the ref "resolves back to itself or an ancestor
 schema, forming a cycle"). Every schema whose `$ref` participates in a cycle is
-then marked `Opaque` (`markCircularSchemaRefs`). The transformer treats an
-Opaque schema as an opaque boundary: it keeps the schema's scalar fields (type,
-format, nullable, required, …) but does not descend into nested properties or
-items, so the cycle terminates instead of recursing forever. The
-recursive nested property is therefore dropped from the generated model rather
-than rendered as a self-referential attribute.
+then marked `Opaque` (`markCircularSchemaRefs`); the parser marks the *ref
+holder* (the property/inline schema carrying the cyclic `$ref`), not the
+referenced component.
+
+The transformer (`schemaSpecFromParserDepth` in `pkg/transformer/from_parser.go`)
+expands a cyclic ref a bounded number of levels before cutting it, rather than
+treating the first entry as an opaque boundary. `cycleDepth` counts how many
+cyclic (Opaque) `$ref` edges have been descended on the current path; a cyclic
+ref is expanded up to `maxCyclicDepth` (2) levels — preserving the first-entry
+properties of the circular schema so the generated attribute is a concrete
+object, not `DynamicAttribute` — and deeper re-entry is cut to an opaque
+(scalar-only) boundary. This keeps the IR finite and shallow: a dense cyclic
+component graph is expanded a fixed number of levels per operation instead of
+re-expanding the whole graph, so generation terminates on specs that previously
+hung. Because cyclic refs are not added to the path-local `visited` set,
+`cycleDepth` is the only path-varying dimension for an Opaque ref, so the
+conversion of a schema at a given `cycleDepth` is path-independent and memoizing
+on `(schema, cycleDepth)` is sound (the previous schema-pointer-only memo could
+conflate the expanded and cut forms). The `visited` set remains as a backstop
+for cycles the parser did not mark Opaque (a synthetic or malformed spec).
 
 ---
 
@@ -3082,7 +3098,7 @@ by the implementation-status matrix and is no longer maintained as a checklist.
 | 3 | Large spec → huge generated provider (1000+ resources) | Medium | Medium | Support resource filtering via `generator.yaml` allow-list; code splitting per resource; lazy schema registration. |
 | 4 | Breaking changes in `terraform-plugin-framework` | Low | High | Pin framework version in generated `go.mod`; generate compatibility shims; test against multiple Terraform CLI versions. |
 | 5 | Security scheme complexity (OAuth2 authorization code, OIDC) | Medium | Medium | Generate provider config blocks for tokens; leave full interactive flows to user-supplied middleware; document manual setup steps. |
-| 6 | Circular `$ref` in specs | Medium | Low | Detect cycles during parsing; mark cyclic schemas `Opaque` and emit a warning; the transformer treats them as an opaque boundary (scalar fields kept, nested properties dropped) so generation terminates. |
+| 6 | Circular `$ref` in specs | Medium | Low | Detect cycles during parsing; mark cyclic ref holders `Opaque` and emit a warning; the transformer expands a cyclic ref up to `maxCyclicDepth` levels (preserving first-entry properties) then cuts deeper re-entry to an opaque boundary, so the IR stays finite and generation terminates on dense cyclic specs that previously hung. |
 | 7 | Ambiguous CRUD inference (multiple POST endpoints for same resource) | Medium | Medium | Require explicit `generator.yaml` override for ambiguous operations; emit error listing candidates. |
 | 8 | Non-RESTful APIs (GraphQL, gRPC, WebSocket) | Low | Low | Document that Eidos targets REST/HTTP APIs only; non-REST APIs produce warnings. |
 | 9 | Spec version incompatibilities (2.0 vs 3.0 vs 3.1 edge cases) | Medium | Medium | Dedicated in-house parser with a comprehensive version-specific test suite; no reliance on third-party parser behavior. |
@@ -3189,6 +3205,14 @@ upstream constraint changes or a product decision is made.
   (browser redirect) and deprecated in OAuth 2.1; `Configure` emits an
   `AddWarning` for every scheme that exposes config attributes but has no
   generated interceptor.
+- **Actions have no result surface (upstream framework limit).**
+  terraform-plugin-framework v1.19.0's `action.InvokeResponse` exposes only
+  `Diagnostics` and `SendProgress` — there is no `Result` field, and every
+  `action/schema` attribute rejects `Computed` — so a generated action that
+  returns a value (e.g. SpaceTraders `register`'s token) cannot surface it. No
+  broken code is emitted: the action reports success/failure and the response
+  body is intentionally not decoded. Revisit when the framework adds an action
+  output API.
 - **List-resource `uniqueItems: true` falls back to List.** The experimental
   `list/schema` package has no Set types, so a list endpoint whose response
   array declares `uniqueItems: true` is downgraded to List with a fail-loud
@@ -3208,3 +3232,21 @@ upstream constraint changes or a product decision is made.
   `ManagedResourceSchema` to flatten a single level of nested `metadata` into
   top-level path-param attributes (and would exercise the list body's nested-
   `metadata` identity probing).
+
+### 23.3 Residual risk & investigation areas
+
+These are not confirmed gaps and not accepted limitations; they are areas flagged
+for verification that have not yet been broadly exercised against real specs.
+
+- **Construct-name quality on specs that omit `operationId`.** Resource,
+  data-source, and action inference relies on `operationId` for naming; when an
+  operation omits it, eidos falls back to a `METHOD /path`-derived name. Name
+  quality and collision behavior on a spec that omits `operationId` extensively
+  has not been broadly verified. (`generator.yaml` overrides can always pin a
+  name via the `METHOD /path` form.)
+- **Golden snapshot coverage is structural, not content.** The golden test
+  corpus records only `{Path, Reason}` per generated file (a structural
+  fingerprint), so the full generated output is only visible by regenerating
+  with `EIDOS_UPDATE_GOLDEN=1`. A change that preserves the file list and
+  reason strings but alters body content would pass the golden test silently;
+  richer snapshot content is a future hardening consideration.

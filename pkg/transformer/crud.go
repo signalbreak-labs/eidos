@@ -45,6 +45,13 @@ type Operation struct {
 	// the matching body encoding (A2).
 	RequestMediaType string
 	ResponseSchema   *SchemaSpec
+	// ResponseEnvelope is the property name of a {data: ...} response envelope
+	// that OperationsFromSpecWithDiagnostics unwrapped from ResponseSchema (e.g.
+	// "data" for a response shaped {"data": <payload>}). It is empty when the
+	// response is not enveloped. The generator reads it to unwrap the decoded
+	// response body before applying it to the model, so the schema and the
+	// response stay consistent after the envelope is flattened.
+	ResponseEnvelope string
 	// ResponseHeaders holds response header names used for pagination/style detection.
 	// It is populated from the successful response's headers by OperationsFromSpec.
 	ResponseHeaders []string
@@ -59,6 +66,18 @@ type Parameter struct {
 	In       string // path, query, header, cookie
 	Required bool
 	Type     string
+	// ItemsType is the scalar element type when Type is "array" (the `items`
+	// type of an array parameter); empty for non-array parameters. Used to model
+	// an array query parameter as a List of the element primitive so the
+	// generator serializes one repeated query value per element.
+	ItemsType string
+	// Style is the OpenAPI 3.x serialization style of the parameter (e.g.
+	// "form", "spaceDelimited", "pipeDelimited"); the v2 parser converts
+	// collectionFormat to style. Empty means the default ("form" for query). The
+	// array-query-parameter modeling serializes repeated values (form +
+	// explode: true); a non-form style is lossy and surfaced with a fail-loud
+	// warning rather than dropped silently.
+	Style string
 }
 
 // IDKind classifies how a resource instance is identified.
@@ -159,6 +178,34 @@ func InferResourceCRUD(pathOps map[string]map[HTTPMethod]Operation) []ResourceCR
 	})
 	resources = dedupCRUDByName(resources)
 	return resources
+}
+
+// HasFullCRUD reports whether the operation at (path, method) belongs to a
+// complete CRUD group (Create + Read + Delete). Operations that are not part of
+// a full CRUD group are reclassified as actions by the API layer: a scaffolded
+// resource with an empty model is worse than a wired action, and a resource
+// without a Delete cannot be destroyed by Terraform.
+func HasFullCRUD(path string, method HTTPMethod, pathOps map[string]map[HTTPMethod]Operation) bool {
+	for _, g := range InferResourceCRUD(pathOps) {
+		if g.Create == nil || g.Read == nil || g.Delete == nil {
+			continue
+		}
+		if groupHasOperation(g, path, method) {
+			return true
+		}
+	}
+	return false
+}
+
+// groupHasOperation reports whether the CRUD group contains the given
+// operation, comparing both path and method.
+func groupHasOperation(g ResourceCRUD, path string, method HTTPMethod) bool {
+	for _, op := range []*Operation{g.Create, g.Read, g.Update, g.Delete} {
+		if op != nil && op.Path == path && op.Method == method {
+			return true
+		}
+	}
+	return false
 }
 
 // crudCompleteness returns a count of the CRUD operations a group actually

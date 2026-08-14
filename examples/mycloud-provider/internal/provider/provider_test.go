@@ -5,6 +5,7 @@ import (
 	"testing"
 )
 import tfframeworkprovider "github.com/hashicorp/terraform-plugin-framework/provider"
+
 // TestProviderSchemaValidation verifies that the generated provider schema is valid.
 func TestProviderSchemaValidation(t *testing.T) {
 	p := New()
@@ -15,6 +16,7 @@ func TestProviderSchemaValidation(t *testing.T) {
 		t.Fatalf("schema validation failed: %s", diags)
 	}
 }
+
 // TestProviderMetadata verifies that the generated provider reports the expected type name.
 func TestProviderMetadata(t *testing.T) {
 	p := New()

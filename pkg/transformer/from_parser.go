@@ -112,6 +112,13 @@ func operationFromParser(spec *parser.Spec, path string, method HTTPMethod, op *
 			if out.ResponseSchema != nil && out.ResponseSchema.RefName == "" {
 				out.ResponseSchema.RefName = refBaseName(s.Ref)
 			}
+			// Flatten a single-property response envelope (a common API
+			// convention, e.g. SpaceTraders {data: <payload>} or DigitalOcean
+			// {agent: <payload>}) so the Terraform schema exposes the payload
+			// attributes directly instead of nesting them under a wrapper
+			// attribute. The envelope key is recorded so the generator unwraps the
+			// decoded response body to match (E1).
+			out.ResponseSchema, out.ResponseEnvelope = UnwrapResponseEnvelope(out.ResponseSchema, out.RequestSchema)
 		}
 		out.ResponseHeaders = headerNames(resp.Headers)
 	}
@@ -131,14 +138,27 @@ func parametersFromParser(spec *parser.Spec, pi *parser.PathItem, op *parser.Ope
 		}
 		seen[k] = true
 		paramType := ""
+		itemsType := ""
 		if resolved.Schema != nil {
 			paramType = schemaTypeString(resolved.Schema.Type)
+			// An array parameter's element type comes from its `items` schema.
+			// The parser resolves Schema.Items to *parser.Schema (see
+			// circular.go); surface it so an array query parameter can be modeled
+			// as a List of the element primitive instead of being flattened to a
+			// single string.
+			if strings.EqualFold(paramType, "array") {
+				if itemSchema, ok := resolved.Schema.Items.(*parser.Schema); ok && itemSchema != nil {
+					itemsType = schemaTypeString(itemSchema.Type)
+				}
+			}
 		}
 		params = append(params, Parameter{
-			Name:     resolved.Name,
-			In:       resolved.In,
-			Required: resolved.Required,
-			Type:     paramType,
+			Name:      resolved.Name,
+			In:        resolved.In,
+			Required:  resolved.Required,
+			Type:      paramType,
+			ItemsType: itemsType,
+			Style:     resolved.Style,
 		})
 	}
 	// Operation-level parameters take precedence over path-item parameters per
@@ -281,6 +301,75 @@ func firstContentSchema(content map[string]*parser.MediaType) *parser.Schema {
 	return content[name].Schema
 }
 
+// UnwrapResponseEnvelope flattens a single-property response envelope — a
+// common API convention where the response is {<wrapper>: <payload>} plus
+// optional "meta"/"links" companions — into the payload schema itself, returning
+// the flattened schema and the envelope property name. It returns the input
+// schema unchanged with an empty key when the response is not enveloped.
+//
+// The canonical {data: <payload>} envelope is always unwrapped. Any other
+// single-property wrapper (e.g. {agent: {...}}, {role: {...}}) is unwrapped only
+// when there is evidence the wrapper is an envelope rather than the resource's
+// real shape: the create/update request body must NOT be the same
+// single-property object (i.e. request and response are not both wrapped with
+// the same key). When the request body is absent or a flat multi-field object,
+// the wrapper is treated as an envelope. This prevents flattening a genuinely
+// single-field resource whose request and response are both {<wrapper>: {...}},
+// where the request body must carry the wrapper key.
+//
+// The payload must be an object with properties, an unresolved $ref to one, or
+// an array; a scalar or map (additionalProperties) wrapper value is a legitimate
+// field, not an envelope. Only "meta" and "links" are permitted as companion
+// properties, so a spec that carries a meaningful top-level object alongside
+// other payload fields is not mis-flattened. The generator reads the returned
+// key to unwrap the decoded response body before applying it to the model,
+// keeping the schema and the response consistent (E1).
+func UnwrapResponseEnvelope(spec, requestSpec *SchemaSpec) (*SchemaSpec, string) {
+	if spec == nil || !strings.EqualFold(spec.Type, "object") || len(spec.Properties) == 0 {
+		return spec, ""
+	}
+	// Scan for exactly one payload property (the envelope wrapper). The
+	// conventional envelope companions "meta" and "links" are allowed regardless
+	// of their shape (pagination metadata is often an object with properties); a
+	// non-companion property that is not a payload means this is a normal
+	// multi-field object, not an envelope.
+	var candName string
+	var cand SchemaSpec
+	for name, p := range spec.Properties {
+		if strings.EqualFold(name, "meta") || strings.EqualFold(name, "links") {
+			continue
+		}
+		isPayload := p.RefName != "" ||
+			(strings.EqualFold(p.Type, "object") && len(p.Properties) > 0) ||
+			strings.EqualFold(p.Type, "array")
+		if !isPayload {
+			return spec, ""
+		}
+		if candName != "" {
+			// More than one payload property → not a single-wrapper envelope.
+			return spec, ""
+		}
+		candName = name
+		cand = p
+	}
+	if candName == "" {
+		return spec, ""
+	}
+	// A non-"data" wrapper is unwrapped only when the request body is not the
+	// same single-property object. If request and response are both wrapped with
+	// the same key, the wrapper is the resource's real shape (the request body
+	// must carry it), not an envelope, so it is kept.
+	if !strings.EqualFold(candName, "data") && requestSpec != nil &&
+		strings.EqualFold(requestSpec.Type, "object") && len(requestSpec.Properties) == 1 {
+		for reqKey := range requestSpec.Properties {
+			if strings.EqualFold(reqKey, candName) {
+				return spec, ""
+			}
+		}
+	}
+	return &cand, candName
+}
+
 // selectMediaType returns the media-type name whose schema is carried into the
 // IR, chosen deterministically: application/json is preferred when it carries a
 // schema, otherwise the first schema-bearing media type in lexicographic order
@@ -333,6 +422,17 @@ func RequestBodyKind(mt string) string {
 	if isJSONMediaType(m) {
 		return "json"
 	}
+	// "*/*" (and the equivalent "application/octet-stream"-agnostic wildcard)
+	// declares that the endpoint accepts any request body media type. The client
+	// therefore chooses the encoding; JSON is the natural choice for a
+	// Terraform provider's structured request body, matching the OpenAPI 2.0
+	// convention that an unspecified content type defaults to application/json.
+	// Real-world specs rely on this: Kubernetes declares consumes: ["*/*"] on
+	// every create/update while its API server accepts JSON. Treating "*/*" as
+	// JSON wires those operations instead of leaving them honestly scaffolded.
+	if m == "*/*" {
+		return "json"
+	}
 	switch m {
 	case "application/x-www-form-urlencoded":
 		return "form"
@@ -381,8 +481,41 @@ func headerNames(headers map[string]*parser.Header) []string {
 // deep-nesting path.
 const maxSchemaDepth = 1000
 
+// maxCyclicDepth bounds how many cyclic $ref edges schemaSpecFromParser descends
+// along a single path before cutting the cycle to an opaque (scalar-only)
+// boundary. It preserves the first-entry properties of a circular schema (the
+// target's direct fields are emitted) while keeping the generated IR finite and
+// shallow: a cyclic ref is expanded up to maxCyclicDepth levels, then deeper
+// re-entry is treated as an opaque boundary instead of recursing forever.
+//
+// This is the resolution to the circular-schema tension documented in
+// docs/PROJECT_DESIGN.md §12.4: cutting at the ref holder
+// (depth 0) regressed first-entry circular refs to DynamicAttribute, while
+// unbounded expansion produced an enormous IR that hung generation. Expanding a
+// fixed number of levels keeps first-entry properties and bounds output size,
+// and — because cycleDepth is the only path-varying dimension for an Opaque ref
+// (cyclic refs are not added to the visited set) — the conversion of a schema at
+// a given cycleDepth is path-independent, so memoizing on (schema, cycleDepth)
+// is sound.
+const maxCyclicDepth = 2
+
+// schemaMemo caches the SchemaSpec conversion of a (non-ref parser.Schema,
+// cycleDepth) pair so a shared sub-schema in a DAG is converted once per
+// top-level conversion instead of once per path (exponential on real-world
+// specs). The cycleDepth dimension is required for cyclic schemas: a schema
+// reached after k cyclic-ref descents has a different (bounded) shape than the
+// same schema reached after k+1, and the cycleDepth key keeps those distinct
+// without conflating them. The memo is scoped to a single schemaSpecFromParser
+// call, so concurrent conversions (e.g. the API server handling requests in
+// parallel) never share a cache.
+type schemaMemoKey struct {
+	schema     *parser.Schema
+	cycleDepth int
+}
+type schemaMemo map[schemaMemoKey]*SchemaSpec
+
 func schemaSpecFromParser(spec *parser.Spec, s *parser.Schema, diags *diagnostics.Diagnostics) *SchemaSpec {
-	return schemaSpecFromParserDepth(spec, s, 0, nil, diags)
+	return schemaSpecFromParserDepth(spec, s, 0, 0, nil, make(schemaMemo), diags)
 }
 
 // schemaSpecFromParserDepth converts a parser.Schema into a SchemaSpec, recursing
@@ -392,31 +525,66 @@ func schemaSpecFromParser(spec *parser.Spec, s *parser.Schema, diags *diagnostic
 // not just a top-level request/response $ref — carries the referenced shape
 // instead of falling back to Dynamic.
 //
-// Cycle safety is layered: (1) the parser marks schemas participating in direct
-// $ref cycles as Opaque, which the guard below treats as an opaque boundary; (2)
+// cycleDepth counts how many cyclic (Opaque) $ref edges have been descended on
+// the current path. It bounds circular-schema expansion: a cyclic ref is
+// expanded up to maxCyclicDepth levels (preserving first-entry properties) and
+// then cut to an opaque boundary, so the IR stays finite and shallow instead of
+// re-expanding the dense component graph on every operation.
+//
+// Cycle safety is layered: (1) the parser marks $ref cycles as Opaque on the
+// ref holder, and the Opaque branch below bounds expansion by cycleDepth; (2)
 // resolveSchemaRef stops following a chained ref at a cycle; (3) the path-local
-// visited set passed to each descent stops a $ref re-entered via object
-// properties (a cross-property cycle like A.b -> $ref B, B.a -> $ref A) from
-// recursing to maxSchemaDepth and generating pathological nesting. The visited
-// set is copied only when a ref is resolved, so sibling properties (which do not
-// grow the path) share it without interfering with each other.
-func schemaSpecFromParserDepth(spec *parser.Spec, s *parser.Schema, depth int, visited map[string]bool, diags *diagnostics.Diagnostics) *SchemaSpec {
+// visited set passed to each *acyclic* descent stops a $ref re-entered via
+// object properties (a cross-property cycle the parser did not mark Opaque,
+// e.g. a synthetic or malformed spec) from recursing to maxSchemaDepth. Cyclic
+// (Opaque) refs are intentionally not added to visited, so the conversion of a
+// schema at a given cycleDepth is path-independent and memoizing on
+// (schema, cycleDepth) is sound. The visited set is copied only when an acyclic
+// ref is resolved, so sibling properties (which do not grow the path) share it
+// without interfering with each other.
+func schemaSpecFromParserDepth(spec *parser.Spec, s *parser.Schema, depth, cycleDepth int, visited map[string]bool, memo schemaMemo, diags *diagnostics.Diagnostics) *SchemaSpec {
 	if s == nil {
 		return nil
 	}
-	var refName string
 	// Resolve a nested $ref against the component schemas before processing, so
 	// referenced properties/items/additionalProperties contribute their real
-	// shape. If the same ref is already on this descent path, stop: re-entering
-	// it is a cross-property cycle, and descending would recurse to maxSchemaDepth
-	// and emit pathological nesting. Treat the boundary as opaque (scalar fields
-	// only, no descent), matching the Opaque handling below.
+	// shape.
 	if s.Ref != "" && spec != nil {
+		refName := refBaseName(s.Ref)
+		if s.Opaque {
+			// A cyclic $ref. Bound expansion by cycleDepth so the circular schema
+			// is expanded a fixed number of levels (preserving first-entry
+			// properties) and then cut to an opaque boundary, instead of
+			// re-expanding the cycle on every operation. Cyclic refs are not
+			// added to the visited set: cycleDepth is the only path-varying
+			// dimension, which keeps the (schema, cycleDepth) memo sound.
+			if cycleDepth >= maxCyclicDepth {
+				return &SchemaSpec{
+					Type:     schemaTypeString(s.Type),
+					Format:   s.Format,
+					Nullable: s.Nullable,
+					RefName:  refName,
+				}
+			}
+			resolved := resolveSchemaRef(spec, s)
+			out := schemaSpecFromParserDepth(spec, resolved, depth+1, cycleDepth+1, visited, memo, diags)
+			if out != nil && out.RefName == "" {
+				out.RefName = refName
+			}
+			return out
+		}
+		// An acyclic $ref. The visited set backstops cycles the parser did not
+		// mark Opaque (a synthetic or malformed spec): if the same ref is already
+		// on this descent path, stop — re-entering it is a cross-property cycle,
+		// and descending would recurse to maxSchemaDepth and emit pathological
+		// nesting. Treat the boundary as opaque (scalar fields only, no descent),
+		// matching the Opaque handling below.
 		if visited[s.Ref] {
 			return &SchemaSpec{
 				Type:     schemaTypeString(s.Type),
 				Format:   s.Format,
 				Nullable: s.Nullable,
+				RefName:  refName,
 			}
 		}
 		// Copy the path-local visited set and add this ref so descendants see it,
@@ -427,9 +595,46 @@ func schemaSpecFromParserDepth(spec *parser.Spec, s *parser.Schema, depth int, v
 		}
 		pathVisited[s.Ref] = true
 		visited = pathVisited
-		refName = refBaseName(s.Ref)
-		s = resolveSchemaRef(spec, s)
+		resolved := resolveSchemaRef(spec, s)
+		out := schemaSpecFromParserDepth(spec, resolved, depth+1, cycleDepth, visited, memo, diags)
+		if out != nil && out.RefName == "" {
+			out.RefName = refName
+		}
+		return out
 	}
+	// A non-ref schema the parser marked Opaque (e.g. an additionalProperties
+	// bare $ref that closes a cycle) is an opaque boundary too: keep its scalar
+	// fields but do not descend, which would recurse forever (M-41).
+	if s.Opaque {
+		return &SchemaSpec{
+			Type:     schemaTypeString(s.Type),
+			Format:   s.Format,
+			Nullable: s.Nullable,
+		}
+	}
+	// A non-ref schema is converted once per (schema, cycleDepth) and memoized:
+	// the schema graph is a DAG whose shared sub-schemas would otherwise be
+	// re-converted along every path (exponential on real-world specs). With the
+	// cycleDepth bound above, a schema participating in a $ref cycle is cut after
+	// a fixed number of levels, so the conversion result depends only on
+	// (schema, cycleDepth) and memoizing on that pair is sound. The cached result
+	// is returned as a shallow copy so callers that stamp a RefName
+	// (operationFromParser, unionSpecsFromParser) never mutate the cache.
+	key := schemaMemoKey{schema: s, cycleDepth: cycleDepth}
+	if cached, ok := memo[key]; ok {
+		cp := *cached
+		return &cp
+	}
+	out := schemaSpecFromParserDepthInner(spec, s, depth, cycleDepth, visited, memo, diags)
+	memo[key] = out
+	return out
+}
+
+// schemaSpecFromParserDepthInner converts a non-ref parser.Schema into a
+// SchemaSpec, recursing into items, object properties, and additionalProperties.
+// It is the memoized body of schemaSpecFromParserDepth; callers must go through
+// the memoizing wrapper so shared sub-schemas are converted once.
+func schemaSpecFromParserDepthInner(spec *parser.Spec, s *parser.Schema, depth, cycleDepth int, visited map[string]bool, memo schemaMemo, diags *diagnostics.Diagnostics) *SchemaSpec {
 	out := &SchemaSpec{
 		Type:        schemaTypeString(s.Type),
 		Format:      s.Format,
@@ -437,18 +642,20 @@ func schemaSpecFromParserDepth(spec *parser.Spec, s *parser.Schema, depth int, v
 		UniqueItems: s.UniqueItems,
 		WriteOnly:   s.WriteOnly,
 		Required:    s.Required,
-		RefName:     refName,
 	}
-	// An Opaque schema participates in a $ref cycle (set by the parser). Treat it
-	// as an opaque boundary: keep its scalar fields but do not descend into its
-	// nested schemas, which would recurse forever (M-41).
-	if s.Opaque || depth >= maxSchemaDepth {
+	// A depth backstop keeps a pathologically deep (non-cyclic) schema from
+	// stack-overflowing; the Opaque/visited/cycleDepth guards above handle
+	// cycles.
+	if depth >= maxSchemaDepth {
 		return out
 	}
+	// Descents into items/properties/additionalProperties are not $ref descents,
+	// so cycleDepth is propagated unchanged: only descending through a cyclic
+	// $ref (handled in schemaSpecFromParserDepth) grows it.
 	switch v := s.Items.(type) {
 	case *parser.Schema:
 		if v != nil {
-			out.Items = schemaSpecFromParserDepth(spec, v, depth+1, visited, diags)
+			out.Items = schemaSpecFromParserDepth(spec, v, depth+1, cycleDepth, visited, memo, diags)
 		}
 	case bool:
 		// items: false means no items are allowed; items: true is the permissive
@@ -464,7 +671,7 @@ func schemaSpecFromParserDepth(spec *parser.Spec, s *parser.Schema, depth int, v
 			if prop == nil {
 				continue
 			}
-			if child := schemaSpecFromParserDepth(spec, prop, depth+1, visited, diags); child != nil {
+			if child := schemaSpecFromParserDepth(spec, prop, depth+1, cycleDepth, visited, memo, diags); child != nil {
 				out.Properties[name] = *child
 			}
 		}
@@ -472,21 +679,28 @@ func schemaSpecFromParserDepth(spec *parser.Spec, s *parser.Schema, depth int, v
 	switch v := s.AdditionalProperties.(type) {
 	case *parser.Schema:
 		if v != nil {
-			out.AdditionalProperties = schemaSpecFromParserDepth(spec, v, depth+1, visited, diags)
+			out.AdditionalProperties = schemaSpecFromParserDepth(spec, v, depth+1, cycleDepth, visited, memo, diags)
 		}
 	case bool:
-		// additionalProperties: false means the object has a closed property set
-		// (which Terraform objects model by default, so dropping is benign); true
-		// means arbitrary extras are allowed, which Terraform's closed object
-		// type cannot represent. Warn on the permissive (true) case where the
-		// generated schema will be stricter than the spec, and on false to make
-		// the dropped constraint observable (L-97).
-		warnBooleanSchemaDropped(diags, "additionalProperties", s.SourceLocation)
+		if v {
+			// additionalProperties: true means arbitrary extras are allowed,
+			// which Terraform's closed object type cannot represent; the
+			// generated schema is stricter than the spec, so this is a real
+			// information loss that must be surfaced (fail-loud).
+			warnBooleanSchemaDropped(diags, "additionalProperties", s.SourceLocation)
+		}
+		// additionalProperties: false (a closed property set) is benign and
+		// intentionally NOT warned: Terraform objects are closed by default, so
+		// dropping the constraint changes nothing. Warning on it would flag a
+		// no-op — real-world specs declare additionalProperties: false on
+		// thousands of objects (Linode: 3147 vs only 4 true), and warning on
+		// each drowns out genuine losses. The fail-loud principle targets
+		// constructs that change behavior when dropped; false does not.
 		_ = v
 	}
 	// allOf/oneOf/anyOf composition inside nested properties is handled by a
 	// separate pass so the main conversion stays readable (REMAINING_GAPS §3).
-	flattenCompositionInto(out, spec, s, depth, visited, diags)
+	flattenCompositionInto(out, spec, s, depth, cycleDepth, visited, memo, diags)
 	return out
 }
 
@@ -503,26 +717,26 @@ func schemaSpecFromParserDepth(spec *parser.Spec, s *parser.Schema, depth int, v
 // composition still renders as a Dynamic attribute and emits a fail-loud
 // Warning (L-97) because the flat attribute model cannot switch on
 // alternatives there.
-func flattenCompositionInto(out *SchemaSpec, spec *parser.Spec, s *parser.Schema, depth int, visited map[string]bool, diags *diagnostics.Diagnostics) {
+func flattenCompositionInto(out *SchemaSpec, spec *parser.Spec, s *parser.Schema, depth, cycleDepth int, visited map[string]bool, memo schemaMemo, diags *diagnostics.Diagnostics) {
 	for _, member := range s.AllOf {
 		if member == nil {
 			continue
 		}
-		merged := schemaSpecFromParserDepth(spec, member, depth+1, visited, diags)
+		merged := schemaSpecFromParserDepth(spec, member, depth+1, cycleDepth, visited, memo, diags)
 		if merged == nil {
 			continue
 		}
 		mergeAllOfSchemaSpec(out, *merged)
 	}
 	if len(s.OneOf) > 0 {
-		out.OneOf = unionSpecsFromParser(spec, s.OneOf, depth, visited, diags)
+		out.OneOf = unionSpecsFromParser(spec, s.OneOf, depth, cycleDepth, visited, memo, diags)
 		out.Discriminator = discriminatorSpecFromParser(s.Discriminator)
 		if depth > 0 {
 			warnCompositionNotModeled(diags, "oneOf", s.SourceLocation)
 		}
 	}
 	if len(s.AnyOf) > 0 {
-		out.AnyOf = unionSpecsFromParser(spec, s.AnyOf, depth, visited, diags)
+		out.AnyOf = unionSpecsFromParser(spec, s.AnyOf, depth, cycleDepth, visited, memo, diags)
 		if depth > 0 {
 			warnCompositionNotModeled(diags, "anyOf", s.SourceLocation)
 		}
@@ -533,13 +747,13 @@ func flattenCompositionInto(out *SchemaSpec, spec *parser.Spec, s *parser.Schema
 // variant's RefName from its $ref's final segment (e.g. "Cat") so union
 // variants carry the concrete schema names the split-resources strategy and
 // the discriminator mapping need. Nil members are skipped.
-func unionSpecsFromParser(spec *parser.Spec, members []*parser.Schema, depth int, visited map[string]bool, diags *diagnostics.Diagnostics) []SchemaSpec {
+func unionSpecsFromParser(spec *parser.Spec, members []*parser.Schema, depth, cycleDepth int, visited map[string]bool, memo schemaMemo, diags *diagnostics.Diagnostics) []SchemaSpec {
 	out := make([]SchemaSpec, 0, len(members))
 	for _, member := range members {
 		if member == nil {
 			continue
 		}
-		converted := schemaSpecFromParserDepth(spec, member, depth+1, visited, diags)
+		converted := schemaSpecFromParserDepth(spec, member, depth+1, cycleDepth, visited, memo, diags)
 		if converted == nil {
 			continue
 		}

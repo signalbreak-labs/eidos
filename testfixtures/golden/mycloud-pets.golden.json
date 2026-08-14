@@ -76,16 +76,8 @@
     "reason": "retry logic with exponential backoff"
   },
   {
-    "path": "internal/protocol/value_mappers.go",
-    "reason": "tftypes.Value to Go struct converters"
-  },
-  {
-    "path": "internal/protocol/value_mappers_test.go",
-    "reason": "value mapper round-trip tests"
-  },
-  {
     "path": "internal/provider/data_source_list_pets.go",
-    "reason": "data source mycloud_pets_list_pets"
+    "reason": "data source mycloud-pets_list_pets"
   },
   {
     "path": "internal/provider/data_source_list_pets_test.go",
@@ -97,11 +89,7 @@
   },
   {
     "path": "internal/provider/list_list_pets.go",
-    "reason": "list resource mycloud_pets_list_pets"
-  },
-  {
-    "path": "internal/provider/model_pet.go",
-    "reason": "API model for resource pet"
+    "reason": "list resource mycloud-pets_list_pets"
   },
   {
     "path": "internal/provider/provider.go",
@@ -113,7 +101,7 @@
   },
   {
     "path": "internal/provider/resource_pet.go",
-    "reason": "resource mycloud_pets_pet"
+    "reason": "resource mycloud-pets_pet"
   },
   {
     "path": "internal/provider/resource_pet_acceptance_test.go",

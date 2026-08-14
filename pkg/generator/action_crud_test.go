@@ -111,7 +111,7 @@ func TestWiredActionInvoke_Render(t *testing.T) {
 		`r.client == nil`,
 		// Path template and substitution from the config.
 		`reqPath := "/servers/{server_id}/reboot"`,
-		`strings.ReplaceAll(reqPath, "{server_id}"`,
+		`strings.ReplaceAll(reqPath, "{server_id}", url.PathEscape(`,
 		// Bodiless request through the generated client (no body argument).
 		`r.client.NewRequest(ctx, http.MethodPost, reqPath, nil)`,
 		// Query parameter encoded onto the request URL.
@@ -270,11 +270,25 @@ func TestPlanActionWiring(t *testing.T) {
 		}
 	})
 
-	t.Run("request body not wired", func(t *testing.T) {
+	t.Run("JSON request body wired", func(t *testing.T) {
 		a := wiredActionIR()
-		a.InvokeMapping.BodySchema = &ir.SchemaIR{}
+		a.InvokeMapping.BodySchema = &ir.SchemaIR{Type: ir.TypeString}
+		a.InvokeMapping.MediaType = "application/json"
+		plan := planActionWiring(a)
+		if !plan.wired {
+			t.Fatalf("Invoke with a JSON request body must be wired")
+		}
+		if !plan.sendsBody {
+			t.Fatalf("plan.sendsBody = false, want true (JSON body encoded from config)")
+		}
+	})
+
+	t.Run("non-JSON request body not wired", func(t *testing.T) {
+		a := wiredActionIR()
+		a.InvokeMapping.BodySchema = &ir.SchemaIR{Type: ir.TypeString}
+		a.InvokeMapping.MediaType = "application/xml"
 		if planActionWiring(a).wired {
-			t.Fatalf("Invoke with a request body must not be wired (bodiless only)")
+			t.Fatalf("Invoke with a non-JSON request body must not be wired (JSON-only client)")
 		}
 	})
 
@@ -319,7 +333,15 @@ func TestAnyActionWired(t *testing.T) {
 	if !AnyActionWired([]ir.ActionIR{wiredActionIR()}) {
 		t.Fatalf("AnyActionWired = false for a wired action, want true")
 	}
-	scaffold := sampleActionIR() // no InvokeMapping → scaffolded
+	// A fully unwired action (no invoke/modify-plan/validate-config mapping) is
+	// scaffolded: AnyActionWired must not wire the provider client for it.
+	scaffold := ir.ActionIR{
+		Name:     "ping",
+		TypeName: "mycloud_ping",
+		ConfigSchema: ir.ObjectSchemaIR{Attributes: []ir.AttributeIR{
+			{Name: "target", Required: true, Schema: ir.SchemaIR{Type: ir.TypeString}},
+		}},
+	}
 	if AnyActionWired([]ir.ActionIR{scaffold}) {
 		t.Fatalf("AnyActionWired = true for a scaffolded action, want false")
 	}
@@ -371,7 +393,7 @@ func TestWiredActionModifyPlan_Render(t *testing.T) {
 
 	for _, want := range []string{
 		`reqPath := "/servers/{server_id}/reboot/preview"`,
-		`strings.ReplaceAll(reqPath, "{server_id}", config.ServerId.ValueString())`,
+		`strings.ReplaceAll(reqPath, "{server_id}", url.PathEscape(config.ServerId.ValueString()))`,
 		`r.client.NewRequest(ctx, http.MethodPost, reqPath, nil)`,
 		`r.client.Do(httpReq)`,
 	} {
@@ -410,11 +432,14 @@ func TestWiredActionValidateConfig_Render(t *testing.T) {
 	}
 }
 
-// TestWiredActionPreflight_ScaffoldedWhenMappingUnresolvable asserts the
-// counterpart: a declared preflight mapping that does not resolve (request
-// body present) keeps the honest scaffold ModifyPlan body even when Invoke is
-// wired.
-func TestWiredActionPreflight_ScaffoldedWhenMappingUnresolvable(t *testing.T) {
+// TestWiredActionPreflight_UnresolvableMappingOmitsModifyPlan asserts the
+// counterpart to the wired preflight render: a declared modify_plan_operation
+// mapping that does not resolve (request body present) must not emit a
+// ModifyPlan method at all. The optional ActionWithModifyPlan interface is
+// implemented only when the mapping resolves — a scaffold ModifyPlan that
+// hard-errors would fail every terraform plan for the action (the framework
+// invokes ModifyPlan during planning).
+func TestWiredActionPreflight_UnresolvableMappingOmitsModifyPlan(t *testing.T) {
 	a := wiredActionIR()
 	a.ModifyPlan = true
 	mp := ir.OperationMappingIR{
@@ -431,8 +456,14 @@ func TestWiredActionPreflight_ScaffoldedWhenMappingUnresolvable(t *testing.T) {
 	}
 	got := buf.String()
 
-	if !strings.Contains(got, "ModifyPlan is not wired to a remote API endpoint") {
-		t.Errorf("unresolvable ModifyPlan mapping must keep the scaffold marker\n--- body ---\n%s", got)
+	if strings.Contains(got, "ActionWithModifyPlan") {
+		t.Errorf("unresolvable ModifyPlan mapping must not implement ActionWithModifyPlan\n--- body ---\n%s", got)
+	}
+	if strings.Contains(got, "func (r *RebootServerAction) ModifyPlan") {
+		t.Errorf("unresolvable ModifyPlan mapping must not emit a ModifyPlan method\n--- body ---\n%s", got)
+	}
+	if strings.Contains(got, "ModifyPlan is not wired to a remote API endpoint") {
+		t.Errorf("unresolvable ModifyPlan mapping must not emit a scaffold marker\n--- body ---\n%s", got)
 	}
 	// Invoke still wires: each method's wiring decision is independent.
 	if !strings.Contains(got, "r.client.NewRequest") {

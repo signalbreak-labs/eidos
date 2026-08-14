@@ -16,7 +16,14 @@ var pathParamRegex = regexp.MustCompile(`\{[^}]*\}`)
 // with a digit; the prefix is idempotent (ToSnakeCase("x2_fa") == "x2_fa")
 // (L-99). DeriveOperationID and NormalizeOperationID inherit this guard because
 // they delegate to ToSnakeCase.
+//
+// A leading sign immediately followed by a digit ("+1", "-1") is preserved as a
+// "plus"/"minus" word so that distinct spec property names like GitHub's
+// reaction-rollup "+1" and "-1" sanitize to distinct attributes ("plus_1" and
+// "minus_1") instead of both collapsing to "x1" and colliding in the generated
+// schema map.
 func ToSnakeCase(s string) string {
+	s = replaceLeadingSign(s)
 	words := splitWords(s)
 	if len(words) == 0 {
 		return ""
@@ -31,6 +38,28 @@ func ToSnakeCase(s string) string {
 		}
 	}
 	return result
+}
+
+// replaceLeadingSign rewrites a leading "+" or "-" that is immediately followed
+// by a digit into the words "plus" / "minus", so a signed-number property name
+// ("+1", "-1") survives sanitization as a distinct, readable identifier instead
+// of being reduced to its digits. Signs not followed by a digit (e.g. "-foo")
+// are left in place so the normal separator handling applies.
+func replaceLeadingSign(s string) string {
+	if len(s) < 2 {
+		return s
+	}
+	switch s[0] {
+	case '+':
+		if s[1] >= '0' && s[1] <= '9' {
+			return "plus" + s[1:]
+		}
+	case '-':
+		if s[1] >= '0' && s[1] <= '9' {
+			return "minus" + s[1:]
+		}
+	}
+	return s
 }
 
 // reservedRootNames are Terraform root attribute/block names that a schema
@@ -51,6 +80,30 @@ func SanitizeAttributeName(name string) string {
 		return snake + "_"
 	}
 	return snake
+}
+
+// ToProviderTypeName sanitizes a free-form string (e.g. a spec title) into a
+// Terraform-valid provider type name: lower-case kebab-case using only letters,
+// digits, and hyphens, with no leading or trailing hyphen. Terraform rejects
+// underscores and dots in provider type names (verified against terraform
+// v1.14.7), so this differs from ToSnakeCase, which would produce an unusable
+// name for multi-word titles (e.g. "Example Cloud API" -> "example_cloud_api"). A
+// leading digit is prefixed with "x" (idempotent), mirroring ToSnakeCase.
+func ToProviderTypeName(s string) string {
+	words := splitWords(s)
+	if len(words) == 0 {
+		return ""
+	}
+	for i, w := range words {
+		words[i] = strings.ToLower(w)
+	}
+	result := strings.Join(words, "-")
+	if result != "" {
+		if r, _ := utf8.DecodeRuneInString(result); unicode.IsDigit(r) {
+			result = "x" + result
+		}
+	}
+	return result
 }
 
 // ToPascalCase sanitizes an identifier into PascalCase. It handles camelCase,

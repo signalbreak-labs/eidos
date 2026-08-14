@@ -231,7 +231,7 @@ func resourceModuleFiles(t *testing.T, p ir.ProviderIR, cfg BuildConfig) []File 
 	files = append(files, ResourceFiles(p.Resources, clientImport)...)
 	files = append(files, ClientFiles(p)...)
 	if AnyResourceWired(p.Resources) {
-		files = append(files, JSONConvertFile())
+		files = append(files, JSONConvertFile(&p))
 	}
 	return files
 }

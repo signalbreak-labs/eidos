@@ -48,7 +48,7 @@ paths:
 	if !strings.Contains(r.Config, "provider:") {
 		t.Errorf("expected config to contain provider section, got:\n%s", r.Config)
 	}
-	if !strings.Contains(r.Config, "name: pet_store") {
+	if !strings.Contains(r.Config, "name: pet-store") {
 		t.Errorf("expected provider name derived from spec title, got:\n%s", r.Config)
 	}
 	// M-54: a clean spec reports valid=true so MCP clients can trust the config.
@@ -92,7 +92,7 @@ func TestHandleGenerateConfig_ObjectSpec(t *testing.T) {
 	if strings.TrimSpace(r.Config) == "" {
 		t.Fatal("expected generated config")
 	}
-	if !strings.Contains(r.Config, "name: pet_store") {
+	if !strings.Contains(r.Config, "name: pet-store") {
 		t.Errorf("expected provider name derived from spec title, got:\n%s", r.Config)
 	}
 	if !strings.Contains(r.Config, "list_pets") {
@@ -129,8 +129,8 @@ paths: {}
 	if !ok {
 		t.Fatalf("expected provider object in JSON config, got: %v", cfg)
 	}
-	if provider["name"] != "pet_store" {
-		t.Errorf("expected provider name pet_store, got %v", provider["name"])
+	if provider["name"] != "pet-store" {
+		t.Errorf("expected provider name pet-store, got %v", provider["name"])
 	}
 }
 
