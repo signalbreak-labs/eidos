@@ -49,8 +49,18 @@ type Config struct {
 	Pagination             *PaginationConfig      `yaml:"pagination,omitempty" json:"pagination,omitempty"`
 	Polymorphism           *PolymorphismConfig    `yaml:"polymorphism,omitempty" json:"polymorphism,omitempty"`
 	GenerateTerraformTests *bool                  `yaml:"generate_terraform_tests,omitempty" json:"generate_terraform_tests,omitempty"`
-	Generation             GenerationConfig       `yaml:"generation,omitempty" json:"generation,omitempty"`
-	Spec                   SpecConfig             `yaml:"spec,omitempty" json:"spec,omitempty"`
+	// UsePutAsCreate is the kill-switch for PUT-as-create inference. When nil
+	// (the field is absent, the auto-generator's natural state) or true, a CRUD
+	// group with no collection POST but an instance PUT+GET+DELETE uses the PUT
+	// as the Create (upsert) — default-on. When false, PUT-as-create is disabled
+	// globally and those groups revert to the legacy scaffold behavior. It is a
+	// *bool so the absent field is distinguishable from an explicit false (the
+	// zero value of a plain bool), which is what makes "unset = on" legible. The
+	// per-resource escape hatch is skip: true, not generate_resource: false
+	// (GenerateResource is opt-in only and silently ignores false).
+	UsePutAsCreate *bool            `yaml:"use_put_as_create,omitempty" json:"use_put_as_create,omitempty"`
+	Generation     GenerationConfig `yaml:"generation,omitempty" json:"generation,omitempty"`
+	Spec           SpecConfig       `yaml:"spec,omitempty" json:"spec,omitempty"`
 
 	// Warnings holds non-fatal validation messages produced by Validate. Warnings
 	// are not serialized back to generator.yaml; they are runtime metadata for

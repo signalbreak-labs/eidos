@@ -100,6 +100,7 @@ eidos generate --spec ./api.yaml --config ./generator.yaml --output ./terraform-
 | `--provider-name` | *(spec title)* | no | Provider name for the starter config when used with `--generate-config`. |
 | `--force` | `false` | no | Overwrite an existing `generator.yaml` when used with `--generate-config`, or overwrite generated provider files in write mode. |
 | `--generate-terraform-tests` | `false` | no | Emit native `.tftest.hcl` suites in the output `tests/` directory. |
+| `--no-use-put-as-create` | `false` | no | With `--generate-config`, record `use_put_as_create: false` (the kill-switch) in the starter config. By default the starter config records `use_put_as_create: true` (PUT-as-create inference on). |
 
 ### Behavior
 
@@ -133,6 +134,7 @@ eidos generate-config --spec ./api.yaml --output ./generator.yaml --provider-nam
 | `--output` | `generator.yaml` | no | Path to write the starter config. |
 | `--provider-name` | `generated` | no | Provider short name used in the config. |
 | `--force` | `false` | no | Overwrite the output file if it already exists. |
+| `--no-use-put-as-create` | `false` | no | Record `use_put_as_create: false` (the kill-switch) in the starter config. By default the starter config records `use_put_as_create: true` so an instance-path PUT with no collection POST is used as the Create (upsert). |
 | `--spec-allow-http` | `false` | no | Permit `http://` spec URLs (https is the default for remote specs). |
 | `--spec-auth-scheme` | *(none)* | no | Authenticate a remote spec fetch: `bearer`, `basic`, `apiKey`, or `oauth2-client-credentials`. Credential *values* come from environment variables (see below). |
 | `--spec-token-env` | *(none)* | no | Environment variable holding the bearer token for `--spec-auth-scheme bearer`. |
@@ -322,6 +324,7 @@ global_timeouts:        TimeoutConfig
 pagination:             PaginationConfig
 polymorphism:           PolymorphismConfig
 generate_terraform_tests: bool
+use_put_as_create:      bool
 generation:             GenerationConfig
 spec:                   SpecConfig
 ```
@@ -329,6 +332,13 @@ spec:                   SpecConfig
 `generate_terraform_tests` is honored via the `eidos generate
 --generate-terraform-tests` flag. The config key is surfaced in the API
 `detected` summary but does not yet control generation output.
+
+`use_put_as_create` is **on by default** for auto-generated providers (see
+[PUT-as-create (upsert) inference](#put-as-create-upsert-inference)). It is a
+tri-state key: absent (or `true`) enables the inference, and `false` is the
+global kill-switch that restores the legacy scaffold behavior. A freshly
+generated starter config records `use_put_as_create: true` so the default is
+self-documenting and round-trips through `eidos generate --config`.
 
 ### `provider`
 
@@ -410,9 +420,9 @@ resource_overrides:
 | `computed_attributes` | []string | Attributes forced to `Computed`. |
 | `sensitive_attributes` | []string | Attributes forced to `Sensitive`. |
 | `write_only_attributes` | []WriteOnlyAttribute | Write-only arguments. |
-| `skip` | bool | Skip this resource entirely. |
+| `skip` | bool | Skip this resource entirely (the per-resource opt-out — drops the resource from generation). |
 | `generate_datasource` | bool | Emit a matching data source. |
-| `generate_resource` | bool | Emit the managed resource. When combined with the per-CRUD operation fields, promotes an operation that inference classified as an action into a wired managed resource. |
+| `generate_resource` | bool | **Opt-in only.** `true` (with the per-CRUD operation fields) promotes an operation that inference classified as an action into a wired managed resource. `false` is silently ignored — it is **not** an opt-out; use `skip: true` to drop a resource. |
 | `create_operation` | string | OpenAPI operationId for Create. |
 | `read_operation` | string | OpenAPI operationId for Read. |
 | `update_operation` | string | OpenAPI operationId for Update (optional). |
@@ -762,6 +772,51 @@ spec:
 | `path` | string | Path or http(s) URL of the OpenAPI spec. |
 | `format` | string | Detected OpenAPI version (`openapi2`, `openapi3`, or `openapi31`) recorded in starter configs; not consumed by generation. |
 | `auth` | SpecAuthConfig | Authentication for a remote spec fetch (same fields as the `--spec-auth-*` CLI flags). |
+
+### PUT-as-create (upsert) inference
+
+Many APIs expose *upsert* resources — a `PUT` on an item path
+(`PUT /alarms/{alarmId}`) with no collection `POST`. Eidos infers a managed
+resource's Create mapping from a collection `POST` by default, so such resources
+would otherwise stay permanently scaffolded. When `use_put_as_create` is on
+(the default), Eidos instead uses the instance-path `PUT` as the resource's
+Create mapping (an upsert) whenever a CRUD group has no collection `POST` but
+its instance path has `PUT` (plus `GET`/`DELETE`). The same `PUT` remains the
+Update mapping — Create and Update both issue the upsert, which is correct.
+A collection `POST` still wins when present; groups missing `GET` or `DELETE`
+stay scaffolded as before.
+
+Because the practitioner must supply the ID in the request URI for a PUT create,
+the inference forces the resource's identifier attribute to **Required**
+(user-settable) so the wired Create body fills the path placeholder with a real
+value rather than a null, Computed id.
+
+When the inference fires, Eidos emits an `Info` diagnostic naming the resource
+and the PUT path, e.g. `using PUT /alarms/{alarmId} as Create (upsert)` — an
+inferred Create is a load-bearing assumption the user should see (fail loud,
+never silently).
+
+**Escape hatches:**
+
+- `use_put_as_create: false` — global kill-switch that restores the legacy
+  scaffold behavior for every resource at once.
+- `skip: true` on the resource (`resource_overrides`) — per-resource opt-out
+  that drops the resource entirely:
+
+  ```yaml
+  resource_overrides:
+    - operation: "PUT /alarms/{alarmId}"
+      skip: true
+  ```
+
+  `generate_resource: false` is **not** an opt-out — `generate_resource` is
+  opt-in only, so `false` is silently ignored. Use `skip: true` to drop a
+  resource.
+
+`eidos generate-config` records `use_put_as_create: true` in the starter
+config by default (so the default is self-documenting and round-trips through
+`eidos generate --config`); pass `--no-use-put-as-create` to record the
+kill-switch (`use_put_as_create: false`) instead.
 
 ## Generated provider layout
 

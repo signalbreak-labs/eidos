@@ -49,6 +49,10 @@ type generateFlags struct {
 	// GenerateTerraformTests emits native .tftest.hcl files in the output.
 	generateTerraformTests bool
 
+	// NoUsePutAsCreate records the PUT-as-create kill-switch in a starter
+	// generator.yaml emitted by --generate-config. Default-on otherwise.
+	noUsePutAsCreate bool
+
 	// remote carries the opt-in remote --spec options (URL fetch + auth).
 	remote remoteSpecFlags
 }
@@ -66,7 +70,7 @@ Terraform provider. Use --dry-run to preview what would be generated.`,
 		},
 	}
 
-	cmd.Flags().StringVar(&flags.spec, "spec", "", "Path to OpenAPI spec file (JSON or YAML), or an http(s) URL to fetch (required)")
+	cmd.Flags().StringVar(&flags.spec, "spec", "", "Path to OpenAPI spec file (JSON or YAML), or an http(s) URL to fetch. Optional when --config points to a generator.yaml with a spec.path; the CLI flag takes precedence")
 	cmd.Flags().StringVar(&flags.output, "output", "", "Output directory for generated provider")
 	cmd.Flags().StringVar(&flags.config, "config", "", "Path to generator.yaml overrides file")
 	cmd.Flags().BoolVar(&flags.dryRun, "dry-run", false, "Run the full pipeline without writing files; print a summary")
@@ -75,10 +79,13 @@ Terraform provider. Use --dry-run to preview what would be generated.`,
 	cmd.Flags().BoolVar(&flags.force, "force", false, "Overwrite an existing generator.yaml when used with --generate-config, or overwrite generated provider files in write mode")
 	cmd.Flags().StringVar(&flags.providerName, "provider-name", "", "Provider name for the starter config when used with --generate-config (defaults to the spec title)")
 	cmd.Flags().BoolVar(&flags.generateTerraformTests, "generate-terraform-tests", false, "Generate native Terraform .tftest.hcl files")
+	cmd.Flags().BoolVar(&flags.noUsePutAsCreate, "no-use-put-as-create", false,
+		"With --generate-config, emit use_put_as_create: false (kill-switch). By default the starter config records use_put_as_create: true, so an instance-path PUT with no collection POST is used as the Create (upsert).")
 	flags.remote.register(cmd)
 
-	mustMarkFlagRequired(cmd, "spec")
-
+	// --spec is NOT marked required: when --config supplies a generator.yaml
+	// with a spec.path, the spec is read from the config. runGenerate fails
+	// loud when neither --spec nor a config spec.path is present.
 	return cmd
 }
 
@@ -94,16 +101,28 @@ func runGenerate(cmd *cobra.Command, flags *generateFlags) error {
 		return err
 	}
 
-	specBytes, contentType, err := loadSpecBytes(flags.spec, flags.remote.options(cfg))
+	// --spec is optional when --config supplies a generator.yaml with a
+	// spec.path; the CLI flag takes precedence (consistent with spec.auth,
+	// which CLI flags also override). Fail loud when neither is set rather
+	// than silently producing nothing.
+	specPath := flags.spec
+	if specPath == "" && cfg != nil {
+		specPath = strings.TrimSpace(cfg.Spec.Path)
+	}
+	if specPath == "" {
+		return fmt.Errorf("--spec is required (or set spec.path in the generator.yaml passed via --config)")
+	}
+
+	specBytes, contentType, err := loadSpecBytes(specPath, flags.remote.options(cfg))
 	if err != nil {
 		return err
 	}
 
 	// The display path is the absolute local path for a file spec, or the URL
 	// itself for a remote spec (filepath.Abs would mangle a URL).
-	specDisplay := flags.spec
-	if !isRemoteSpecURL(flags.spec) {
-		absSpec, aerr := filepath.Abs(flags.spec)
+	specDisplay := specPath
+	if !isRemoteSpecURL(specPath) {
+		absSpec, aerr := filepath.Abs(specPath)
 		if aerr != nil {
 			return fmt.Errorf("failed to resolve spec path: %w", aerr)
 		}
@@ -183,7 +202,7 @@ func runGenerate(cmd *cobra.Command, flags *generateFlags) error {
 		return fmt.Errorf("generation failed: %w", err)
 	}
 
-	return writeGenerateSummary(cmd, flags, provider, files, genDiags)
+	return writeGenerateSummary(cmd, flags, specPath, provider, files, genDiags)
 }
 
 func validateDryRunOutput(path string, dryRun bool) error {
@@ -228,7 +247,10 @@ func handleGenerateConfig(cmd *cobra.Command, flags *generateFlags, specBytes []
 	if flags.dryRun {
 		return false, writeDryRunStarterConfigHint(cmd.OutOrStdout(), outputPath, specDisplay)
 	}
-	convertDiags, err := writeStarterConfigFromSpec(specBytes, specDisplay, outputPath, providerName, flags.force)
+	// PUT-as-create is default-on; --no-use-put-as-create records the kill-switch
+	// in the emitted starter config.
+	usePutAsCreate := !flags.noUsePutAsCreate
+	convertDiags, err := writeStarterConfigFromSpec(specBytes, specDisplay, outputPath, providerName, flags.force, usePutAsCreate)
 	if err != nil {
 		return false, err
 	}
@@ -278,7 +300,7 @@ func starterConfigPath(outputDir string) (string, error) {
 func writeStarterConfigHint(w io.Writer, outputPath, absSpec string) error {
 	var msg bytes.Buffer
 	fmt.Fprintf(&msg, "Wrote starter generator config to %s\n", outputPath)
-	fmt.Fprintf(&msg, "Next: edit %s, then run 'eidos generate --config %s --spec %q'\n", outputPath, outputPath, absSpec)
+	fmt.Fprintf(&msg, "Next: edit %s, then run 'eidos generate --config %s' (spec.path is read from the config; pass --spec %q to override)\n", outputPath, outputPath, absSpec)
 	fmt.Fprint(&msg, "Specify --output <dir> to choose a target directory for the generated provider.\n")
 	_, err := w.Write(msg.Bytes())
 	return err
@@ -289,19 +311,19 @@ func writeStarterConfigHint(w io.Writer, outputPath, absSpec string) error {
 func writeDryRunStarterConfigHint(w io.Writer, outputPath, absSpec string) error {
 	var msg bytes.Buffer
 	fmt.Fprintf(&msg, "Would write starter generator config to %s\n", outputPath)
-	fmt.Fprintf(&msg, "Next: edit %s, then run 'eidos generate --config %s --spec %q'\n", outputPath, outputPath, absSpec)
+	fmt.Fprintf(&msg, "Next: edit %s, then run 'eidos generate --config %s' (spec.path is read from the config; pass --spec %q to override)\n", outputPath, outputPath, absSpec)
 	fmt.Fprint(&msg, "Specify --output <dir> to choose a target directory for the generated provider.\n")
 	_, err := w.Write(msg.Bytes())
 	return err
 }
 
-func writeGenerateSummary(cmd *cobra.Command, flags *generateFlags, provider *ir.ProviderIR, files []generator.FileEntry, genDiags diagnostics.Diagnostics) error {
+func writeGenerateSummary(cmd *cobra.Command, flags *generateFlags, specPath string, provider *ir.ProviderIR, files []generator.FileEntry, genDiags diagnostics.Diagnostics) error {
 	allDiags := genDiags
 	for _, d := range allDiags {
 		printDiagnostic(cmd.ErrOrStderr(), d)
 	}
 
-	summary := generator.NewSummary(provider, flags.spec, flags.config, files, allDiags)
+	summary := generator.NewSummary(provider, specPath, flags.config, files, allDiags)
 	summary.Written = !flags.dryRun
 
 	var output []byte

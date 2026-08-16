@@ -1,0 +1,114 @@
+[
+  {
+    "path": ".github/workflows/release.yml",
+    "reason": "GitHub Actions release workflow"
+  },
+  {
+    "path": ".goreleaser.yml",
+    "reason": "GoReleaser release configuration"
+  },
+  {
+    "path": "GNUmakefile",
+    "reason": "build and test automation"
+  },
+  {
+    "path": "README.md",
+    "reason": "provider overview and usage guide"
+  },
+  {
+    "path": "docs/index.md",
+    "reason": "provider overview and authentication guide"
+  },
+  {
+    "path": "docs/resources/notif_meta_config.md",
+    "reason": "documentation for resource notif_meta_config"
+  },
+  {
+    "path": "examples/resources/notif_meta_config/resource.tf",
+    "reason": "example for resource notif_meta_config"
+  },
+  {
+    "path": "generator.yaml",
+    "reason": "generated generator configuration"
+  },
+  {
+    "path": "go.mod",
+    "reason": "Go module definition"
+  },
+  {
+    "path": "internal/client/client.go",
+    "reason": "generated HTTP client"
+  },
+  {
+    "path": "internal/client/client_test.go",
+    "reason": "generated HTTP client unit tests"
+  },
+  {
+    "path": "internal/client/errors.go",
+    "reason": "typed API error helpers"
+  },
+  {
+    "path": "internal/client/logging.go",
+    "reason": "request/response trace logging"
+  },
+  {
+    "path": "internal/client/logging_test.go",
+    "reason": "trace logging unit tests"
+  },
+  {
+    "path": "internal/client/models.go",
+    "reason": "request/response model structs"
+  },
+  {
+    "path": "internal/client/pagination.go",
+    "reason": "pagination helpers"
+  },
+  {
+    "path": "internal/client/retry.go",
+    "reason": "retry logic with exponential backoff"
+  },
+  {
+    "path": "internal/provider/json_convert.go",
+    "reason": "JSON/model conversion helpers for wired CRUD bodies"
+  },
+  {
+    "path": "internal/provider/provider.go",
+    "reason": "provider schema and registration"
+  },
+  {
+    "path": "internal/provider/provider_test.go",
+    "reason": "provider-level unit tests"
+  },
+  {
+    "path": "internal/provider/resource_notif_meta_config.go",
+    "reason": "resource composite-upsert-api_notif_meta_config"
+  },
+  {
+    "path": "internal/provider/resource_notif_meta_config_acceptance_test.go",
+    "reason": "acceptance tests for resource notif_meta_config"
+  },
+  {
+    "path": "internal/provider/resource_notif_meta_config_remote_test.go",
+    "reason": "coverage tests for resource notif_meta_config remote helpers"
+  },
+  {
+    "path": "internal/provider/resource_notif_meta_config_test.go",
+    "reason": "unit tests for resource notif_meta_config"
+  },
+  {
+    "path": "internal/provider/testing_helpers_test.go",
+    "reason": "shared httptest helpers for coverage tests"
+  },
+  {
+    "path": "internal/provider/validators.go",
+    "reason": "custom schema validators"
+  },
+  {
+    "path": "main.go",
+    "reason": "provider server entrypoint"
+  },
+  {
+    "path": "terraform-registry-manifest.json",
+    "reason": "Terraform Registry manifest"
+  }
+]

@@ -508,14 +508,14 @@ func TestBuildProviderIRWithContentType(t *testing.T) {
 
 // TestGenerateStarterConfig covers the derived and overridden provider names.
 func TestGenerateStarterConfig(t *testing.T) {
-	cfg, _, _, err := GenerateStarterConfig([]byte(coverageSpec), "")
+	cfg, _, _, err := GenerateStarterConfig([]byte(coverageSpec), "", true)
 	if err != nil {
 		t.Fatalf("GenerateStarterConfig error: %v", err)
 	}
 	if cfg.Provider.Name != "cover-store" {
 		t.Errorf("derived provider name = %q, want cover-store", cfg.Provider.Name)
 	}
-	cfg, _, _, err = GenerateStarterConfig([]byte(coverageSpec), "custom")
+	cfg, _, _, err = GenerateStarterConfig([]byte(coverageSpec), "custom", true)
 	if err != nil {
 		t.Fatalf("GenerateStarterConfig override error: %v", err)
 	}

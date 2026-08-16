@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -57,6 +58,54 @@ func TestGenerateCommand_RequiredSpec(t *testing.T) {
 	}
 	if out.Len() == 0 {
 		t.Error("expected error output")
+	}
+}
+
+// TestGenerateCommand_SpecFromConfig verifies that --spec is optional when
+// --config points to a generator.yaml carrying a spec.path: the spec is read
+// from the config and the dry-run succeeds without --spec on the CLI.
+func TestGenerateCommand_SpecFromConfig(t *testing.T) {
+	tmp := t.TempDir()
+	spec := filepath.Join(tmp, "api.yaml")
+	if err := os.WriteFile(spec, []byte("openapi: 3.0.0\ninfo:\n  title: Test API\n  version: 1.0.0\npaths: {}\n"), 0o600); err != nil {
+		t.Fatalf("write spec: %v", err)
+	}
+	cfgPath := filepath.Join(tmp, "generator.yaml")
+	cfg := fmt.Sprintf("provider:\n  name: test-api\n  version: 0.1.0\nspec:\n  path: %q\n  format: openapi3\n", spec)
+	if err := os.WriteFile(cfgPath, []byte(cfg), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	cmd, out := newTestCommand("generate", "--config", cfgPath, "--dry-run")
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("expected dry-run to succeed with spec from config, got: %v\noutput:\n%s", err, out.String())
+	}
+	got := out.String()
+	if !strings.Contains(got, "Eidos dry-run summary") {
+		t.Errorf("expected dry-run summary, got:\n%s", got)
+	}
+	if !strings.Contains(got, spec) {
+		t.Errorf("expected output to mention the config-supplied spec path, got:\n%s", got)
+	}
+}
+
+// TestGenerateCommand_NoSpecNoConfigPathErrors verifies that a --config whose
+// generator.yaml has no spec.path still fails loud when --spec is also absent,
+// rather than silently producing nothing.
+func TestGenerateCommand_NoSpecNoConfigPathErrors(t *testing.T) {
+	tmp := t.TempDir()
+	cfgPath := filepath.Join(tmp, "generator.yaml")
+	// No spec.path section, no --spec on the CLI.
+	if err := os.WriteFile(cfgPath, []byte("provider:\n  name: test-api\n  version: 0.1.0\n"), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	cmd, _ := newTestCommand("generate", "--config", cfgPath, "--dry-run")
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatal("expected error when neither --spec nor config spec.path is set")
+	}
+	if !strings.Contains(err.Error(), "spec") {
+		t.Errorf("expected error to mention spec, got %q", err.Error())
 	}
 }
 

@@ -35,6 +35,8 @@ var goldenCases = []struct {
 	{"ephemeral-resources", "../../test/specs/ephemeral-resources.yaml"},
 	{"provider-functions", "../../test/specs/provider-functions.yaml"},
 	{"swagger-formdata", "../../test/specs/swagger-formdata.yaml"},
+	{"put-as-create", "../../test/specs/put-as-create.yaml"},
+	{"put-as-create-composite", "../../test/specs/put-as-create-composite.yaml"},
 }
 
 // scaffoldMarkers are the honest, unconditional "not wired" messages that
@@ -159,10 +161,12 @@ func TestGoldenFiles(t *testing.T) {
 // wired constructs still passes); raise them deliberately when the corpus is
 // intentionally changed.
 var corpusWiringTargets = map[string]map[string]int{
-	"mycloud":             {"resource": 7, "data_source": 17, "list": 12},
-	"mycloud-pets":        {"resource": 1, "list": 1},
-	"ephemeral-resources": {"ephemeral": 1},
-	"swagger-formdata":    {"resource": 2},
+	"mycloud":                 {"resource": 7, "data_source": 17, "list": 12},
+	"mycloud-pets":            {"resource": 1, "list": 1},
+	"ephemeral-resources":     {"ephemeral": 1},
+	"swagger-formdata":        {"resource": 2},
+	"put-as-create":           {"resource": 1},
+	"put-as-create-composite": {"resource": 1},
 }
 
 // corpusInferenceTargets asserts minimum inferred-construct counts for specs

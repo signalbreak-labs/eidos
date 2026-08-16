@@ -136,8 +136,17 @@ var pathParamRe = regexp.MustCompile(`^\{([^}:]+)(?::[^}]*)?\}$`)
 // InferResourceCRUD analyzes a normalized set of OpenAPI paths and operations
 // and infers Terraform managed resources with their CRUD mappings.
 //
+// When usePutAsCreate is true (the default for auto-generated providers), a
+// CRUD group whose collection path has no POST but whose instance path has a
+// PUT (plus GET/DELETE) uses that PUT as the resource's Create mapping — an
+// upsert. The same PUT remains the Update mapping; Create and Update both issue
+// the upsert, which is correct. Collection POST still wins when present. This
+// surfaces an upsert-capable resource that would otherwise stay permanently
+// scaffolded; the handler emits an Info diagnostic when it fires so the
+// inference is never silent (AGENTS.md "fail loud, never silently").
+//
 // The returned resources are sorted deterministically by resource name.
-func InferResourceCRUD(pathOps map[string]map[HTTPMethod]Operation) []ResourceCRUD {
+func InferResourceCRUD(pathOps map[string]map[HTTPMethod]Operation, usePutAsCreate bool) []ResourceCRUD {
 	parsed := make(map[string][]pathSegment, len(pathOps))
 	prefixKeys := make(map[string]pathKey, len(pathOps))
 	pathKeys := make(map[string]pathKey, len(pathOps))
@@ -164,7 +173,7 @@ func InferResourceCRUD(pathOps map[string]map[HTTPMethod]Operation) []ResourceCR
 	sort.Slice(groupKeys, func(i, j int) bool { return groupKeys[i] < groupKeys[j] })
 	for _, pk := range groupKeys {
 		paths := groups[pk]
-		resources = append(resources, buildResourceCRUD(pk, paths, pathOps, parsed, pathKeys))
+		resources = append(resources, buildResourceCRUD(pk, paths, pathOps, parsed, pathKeys, usePutAsCreate))
 	}
 
 	// Stable sort over already-deterministic input yields fully deterministic
@@ -186,7 +195,7 @@ func InferResourceCRUD(pathOps map[string]map[HTTPMethod]Operation) []ResourceCR
 // resource with an empty model is worse than a wired action, and a resource
 // without a Delete cannot be destroyed by Terraform.
 func HasFullCRUD(path string, method HTTPMethod, pathOps map[string]map[HTTPMethod]Operation) bool {
-	for _, g := range InferResourceCRUD(pathOps) {
+	for _, g := range InferResourceCRUD(pathOps, true) {
 		if g.Create == nil || g.Read == nil || g.Delete == nil {
 			continue
 		}
@@ -251,7 +260,7 @@ func dedupCRUDByName(items []ResourceCRUD) []ResourceCRUD {
 	return out
 }
 
-func buildResourceCRUD(prefixKey pathKey, paths []string, pathOps map[string]map[HTTPMethod]Operation, parsed map[string][]pathSegment, pathKeys map[string]pathKey) ResourceCRUD {
+func buildResourceCRUD(prefixKey pathKey, paths []string, pathOps map[string]map[HTTPMethod]Operation, parsed map[string][]pathSegment, pathKeys map[string]pathKey, usePutAsCreate bool) ResourceCRUD {
 	// The collection path is the prefix itself. If the prefix is not present
 	// as an original path, reconstruct it from the key.
 	collectionPath := string(prefixKey)
@@ -297,6 +306,18 @@ func buildResourceCRUD(prefixKey pathKey, paths []string, pathOps map[string]map
 			resource.Read = cloneOp(ops, MethodGet)
 			resource.Delete = cloneOp(ops, MethodDelete)
 			resource.Update, resource.FullUpdate, resource.PartialUpdate = chooseUpdateOps(ops)
+			// PUT-as-create (upsert): when the collection path has no POST but
+			// the instance path has a PUT, use it as the Create mapping. The same
+			// PUT already became Update above; Create and Update both issue the
+			// upsert, which is correct. Collection POST still wins (Create was set
+			// above from the collection path in that case). Gated on usePutAsCreate
+			// so the kill-switch (use_put_as_create: false) restores the legacy
+			// scaffold behavior where the group stays Create-less.
+			if resource.Create == nil && usePutAsCreate {
+				if put := cloneOp(ops, MethodPut); put != nil {
+					resource.Create = put
+				}
+			}
 		}
 	}
 

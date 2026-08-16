@@ -1,0 +1,86 @@
+openapi: 3.0.1
+info:
+  title: Composite Upsert API
+  version: 1.0.0
+  description: A reference spec exercising composite-identity PUT-as-create (upsert) inference.
+paths:
+  /notification/event/notifMetaConfig/{notifType}/{taskId}:
+    get:
+      operationId: getNotifMeta
+      parameters:
+        - name: notifType
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: taskId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NotifMeta'
+    put:
+      operationId: upsertNotifMeta
+      parameters:
+        - name: notifType
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: taskId
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/NotifMetaInput'
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NotifMeta'
+    delete:
+      operationId: deleteNotifMeta
+      parameters:
+        - name: notifType
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: taskId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '204':
+          description: deleted
+components:
+  schemas:
+    NotifMeta:
+      type: object
+      required: [notifType, taskId, enabled]
+      properties:
+        notifType:
+          type: string
+        taskId:
+          type: string
+        enabled:
+          type: boolean
+    NotifMetaInput:
+      type: object
+      required: [enabled]
+      properties:
+        enabled:
+          type: boolean

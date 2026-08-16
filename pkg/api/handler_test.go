@@ -981,6 +981,227 @@ func TestValidate_CRUDMappingByMethod(t *testing.T) {
 	}
 }
 
+// TestValidate_PutAsCreate exercises the default-on PUT-as-create inference: a
+// CRUD group with an instance PUT+GET+DELETE and no collection POST becomes a
+// wired managed resource whose Create is the PUT (upsert), the identifier
+// attribute is Required, and an Info diagnostic surfaces the inference. The
+// kill-switch (use_put_as_create: false) reverts to legacy behavior: the group
+// is not emitted as a resource and no Info diagnostic is produced.
+func TestValidate_PutAsCreate(t *testing.T) {
+	spec := []byte(`{
+		"openapi": "3.0.1",
+		"info": {"title": "Upsert API", "version": "1.0.0"},
+		"paths": {
+			"/alarms/{alarmId}": {
+				"get": {
+					"operationId": "getAlarm",
+					"parameters": [{"name": "alarmId", "in": "path", "required": true, "schema": {"type": "string"}}],
+					"responses": {"200": {"description": "ok", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Alarm"}}}}}
+				},
+				"put": {
+					"operationId": "upsertAlarm",
+					"parameters": [{"name": "alarmId", "in": "path", "required": true, "schema": {"type": "string"}}],
+					"requestBody": {"content": {"application/json": {"schema": {"$ref": "#/components/schemas/AlarmInput"}}}},
+					"responses": {"200": {"description": "ok", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Alarm"}}}}}
+				},
+				"delete": {
+					"operationId": "deleteAlarm",
+					"parameters": [{"name": "alarmId", "in": "path", "required": true, "schema": {"type": "string"}}],
+					"responses": {"204": {"description": "deleted"}}
+				}
+			}
+		},
+		"components": {
+			"schemas": {
+				"Alarm": {"type": "object", "required": ["id", "name"], "properties": {"id": {"type": "string"}, "name": {"type": "string"}}},
+				"AlarmInput": {"type": "object", "required": ["name"], "properties": {"name": {"type": "string"}}}
+			}
+		}
+	}`)
+
+	t.Run("default-on wires PUT as create", func(t *testing.T) {
+		resp := Validate(spec)
+		if !resp.Valid {
+			t.Fatalf("expected valid response, got diagnostics: %+v", resp.Diagnostics)
+		}
+		if len(resp.IRPreview.Resources) != 1 {
+			t.Fatalf("expected 1 grouped resource, got %d", len(resp.IRPreview.Resources))
+		}
+		r := resp.IRPreview.Resources[0]
+		if r.CRUDMapping.Create.Method != http.MethodPut {
+			t.Errorf("expected PUT create mapping, got %+v", r.CRUDMapping.Create)
+		}
+		if r.CRUDMapping.Create.PathTemplate != "/alarms/{alarmId}" {
+			t.Errorf("expected create path /alarms/{alarmId}, got %q", r.CRUDMapping.Create.PathTemplate)
+		}
+		// The identifier attribute is Required so the wired Create body fills the
+		// path placeholder with a practitioner-supplied value (not a null Computed id).
+		var idAttr *ir.AttributeIR
+		for i := range r.Schema.Attributes {
+			if r.Schema.Attributes[i].Name == "id" {
+				idAttr = &r.Schema.Attributes[i]
+				break
+			}
+		}
+		if idAttr == nil {
+			t.Fatalf("no id attribute in schema: %+v", r.Schema.Attributes)
+		}
+		if !idAttr.Required || idAttr.Computed {
+			t.Errorf("PUT-as-create id must be Required (not Computed): got Required=%v Computed=%v", idAttr.Required, idAttr.Computed)
+		}
+		// An Info diagnostic surfaces the inference (fail-loud, never silent).
+		var info *DiagnosticJSON
+		for i := range resp.Diagnostics {
+			if resp.Diagnostics[i].Severity == diagnostics.Info.String() && strings.Contains(resp.Diagnostics[i].Summary, "using PUT /alarms/{alarmId} as Create") {
+				info = &resp.Diagnostics[i]
+				break
+			}
+		}
+		if info == nil {
+			t.Fatalf("expected an Info diagnostic naming the PUT create path, got: %+v", resp.Diagnostics)
+		}
+		if !strings.Contains(info.Detail, "use_put_as_create: false") || !strings.Contains(info.Detail, "skip: true") {
+			t.Errorf("Info diagnostic detail should name both escape hatches, got: %q", info.Detail)
+		}
+	})
+
+	t.Run("kill-switch reverts to legacy scaffold", func(t *testing.T) {
+		body := []byte(`{
+			"openapi": "3.0.1",
+			"info": {"title": "Upsert API", "version": "1.0.0"},
+			"config": "provider:\n  name: upsert_api\n  version: \"1.0.0\"\nuse_put_as_create: false\n",
+			"paths": {
+				"/alarms/{alarmId}": {
+					"get": {"operationId": "getAlarm", "parameters": [{"name": "alarmId", "in": "path", "required": true, "schema": {"type": "string"}}], "responses": {"200": {"description": "ok"}}},
+					"put": {"operationId": "upsertAlarm", "parameters": [{"name": "alarmId", "in": "path", "required": true, "schema": {"type": "string"}}], "responses": {"200": {"description": "ok"}}},
+					"delete": {"operationId": "deleteAlarm", "parameters": [{"name": "alarmId", "in": "path", "required": true, "schema": {"type": "string"}}], "responses": {"204": {"description": "deleted"}}}
+				}
+			}
+		}`)
+		resp := Validate(body)
+		if !resp.Valid {
+			t.Fatalf("expected valid response, got diagnostics: %+v", resp.Diagnostics)
+		}
+		// With the kill-switch the group has no Create, so buildGroupedResources
+		// skips it; the per-operation pass classifies the PUT/DELETE as actions and
+		// the GET as a data source (legacy behavior). No managed resource is emitted.
+		if len(resp.IRPreview.Resources) != 0 {
+			t.Fatalf("expected 0 resources with kill-switch, got %d: %+v", len(resp.IRPreview.Resources), resp.IRPreview.Resources)
+		}
+		for _, d := range resp.Diagnostics {
+			if d.Severity == diagnostics.Info.String() && strings.Contains(d.Summary, "using PUT") {
+				t.Errorf("expected no PUT-as-create Info diagnostic with kill-switch, got: %+v", d)
+			}
+		}
+	})
+
+	t.Run("skip:true drops the resource (per-resource opt-out)", func(t *testing.T) {
+		body := []byte(`{
+			"openapi": "3.0.1",
+			"info": {"title": "Upsert API", "version": "1.0.0"},
+			"config": "provider:\n  name: upsert_api\n  version: \"1.0.0\"\nresource_overrides:\n  - operation: \"PUT /alarms/{alarmId}\"\n    skip: true\n",
+			"paths": {
+				"/alarms/{alarmId}": {
+					"get": {"operationId": "getAlarm", "parameters": [{"name": "alarmId", "in": "path", "required": true, "schema": {"type": "string"}}], "responses": {"200": {"description": "ok"}}},
+					"put": {"operationId": "upsertAlarm", "parameters": [{"name": "alarmId", "in": "path", "required": true, "schema": {"type": "string"}}], "responses": {"200": {"description": "ok"}}},
+					"delete": {"operationId": "deleteAlarm", "parameters": [{"name": "alarmId", "in": "path", "required": true, "schema": {"type": "string"}}], "responses": {"204": {"description": "deleted"}}}
+				}
+			}
+		}`)
+		resp := Validate(body)
+		if !resp.Valid {
+			t.Fatalf("expected valid response, got diagnostics: %+v", resp.Diagnostics)
+		}
+		// skip:true is the honest per-resource opt-out: the PUT-as-create resource
+		// is dropped entirely (no managed resource remains).
+		for _, r := range resp.IRPreview.Resources {
+			if r.CRUDMapping.Create.Method == http.MethodPut {
+				t.Errorf("skip:true should drop the PUT-as-create resource, found: %+v", r.CRUDMapping.Create)
+			}
+		}
+		// The Info diagnostic is emitted after overrides, so a skipped resource
+		// must not surface one — otherwise the hint it carries ("set skip: true")
+		// would advise an action the practitioner already took.
+		for _, d := range resp.Diagnostics {
+			if d.Severity == diagnostics.Info.String() && strings.Contains(d.Summary, "using PUT") {
+				t.Errorf("skip:true should suppress the PUT-as-create Info diagnostic for the dropped resource, got: %+v", d)
+			}
+		}
+	})
+
+	t.Run("generate_resource:false is a no-op (not an opt-out)", func(t *testing.T) {
+		body := []byte(`{
+			"openapi": "3.0.1",
+			"info": {"title": "Upsert API", "version": "1.0.0"},
+			"config": "provider:\n  name: upsert_api\n  version: \"1.0.0\"\nresource_overrides:\n  - operation: \"PUT /alarms/{alarmId}\"\n    generate_resource: false\n",
+			"paths": {
+				"/alarms/{alarmId}": {
+					"get": {"operationId": "getAlarm", "parameters": [{"name": "alarmId", "in": "path", "required": true, "schema": {"type": "string"}}], "responses": {"200": {"description": "ok"}}},
+					"put": {"operationId": "upsertAlarm", "parameters": [{"name": "alarmId", "in": "path", "required": true, "schema": {"type": "string"}}], "responses": {"200": {"description": "ok"}}},
+					"delete": {"operationId": "deleteAlarm", "parameters": [{"name": "alarmId", "in": "path", "required": true, "schema": {"type": "string"}}], "responses": {"204": {"description": "deleted"}}}
+				}
+			}
+		}`)
+		resp := Validate(body)
+		if !resp.Valid {
+			t.Fatalf("expected valid response, got diagnostics: %+v", resp.Diagnostics)
+		}
+		// generate_resource is opt-in only: false is silently ignored, so the
+		// PUT-as-create resource is still wired (regression guard for the opt-out
+		// correction — use skip:true to drop a resource).
+		var found bool
+		for _, r := range resp.IRPreview.Resources {
+			if r.CRUDMapping.Create.Method == http.MethodPut && r.CRUDMapping.Create.PathTemplate == "/alarms/{alarmId}" {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("generate_resource:false must NOT drop the resource (it is opt-in only); expected the PUT-as-create resource to remain wired, got: %+v", resp.IRPreview.Resources)
+		}
+	})
+
+	// Composite-identity PUT-as-create: an instance path with multiple path
+	// parameters (e.g. /notifMetaConfig/{notifType}/{taskId}) and no collection
+	// POST. Every path-parameter identifier must be Required so the wired Create
+	// body fills each placeholder with a practitioner-supplied value; a single
+	// forced id would leave the other slot null (dishonest body). This mirrors the
+	// Gigamon /notification/event/notifMetaConfig/{notifType}/{taskId} case the
+	// plan's verification step 2 expects to wire.
+	t.Run("composite-id wires every path-param identifier as Required", func(t *testing.T) {
+		spec := []byte(`{"openapi": "3.0.1", "info": {"title": "Composite Upsert API", "version": "1.0.0"}, "paths": {"/notification/event/notifMetaConfig/{notifType}/{taskId}": {"get": {"operationId": "getNotifMeta", "parameters": [{"name": "notifType", "in": "path", "required": true, "schema": {"type": "string"}}, {"name": "taskId", "in": "path", "required": true, "schema": {"type": "string"}}], "responses": {"200": {"description": "ok", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/NotifMeta"}}}}}}, "put": {"operationId": "upsertNotifMeta", "parameters": [{"name": "notifType", "in": "path", "required": true, "schema": {"type": "string"}}, {"name": "taskId", "in": "path", "required": true, "schema": {"type": "string"}}], "requestBody": {"content": {"application/json": {"schema": {"$ref": "#/components/schemas/NotifMetaInput"}}}}, "responses": {"200": {"description": "ok", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/NotifMeta"}}}}}}, "delete": {"operationId": "deleteNotifMeta", "parameters": [{"name": "notifType", "in": "path", "required": true, "schema": {"type": "string"}}, {"name": "taskId", "in": "path", "required": true, "schema": {"type": "string"}}], "responses": {"204": {"description": "deleted"}}}}}, "components": {"schemas": {"NotifMeta": {"type": "object", "required": ["notifType", "taskId", "enabled"], "properties": {"notifType": {"type": "string"}, "taskId": {"type": "string"}, "enabled": {"type": "boolean"}}}, "NotifMetaInput": {"type": "object", "required": ["enabled"], "properties": {"enabled": {"type": "boolean"}}}}}}`)
+		resp := Validate(spec)
+		if !resp.Valid {
+			t.Fatalf("expected valid response, got diagnostics: %+v", resp.Diagnostics)
+		}
+		if len(resp.IRPreview.Resources) != 1 {
+			t.Fatalf("expected 1 grouped resource, got %d: %+v", len(resp.IRPreview.Resources), resp.IRPreview.Resources)
+		}
+		r := resp.IRPreview.Resources[0]
+		if r.CRUDMapping.Create.Method != http.MethodPut {
+			t.Errorf("expected PUT create mapping, got %+v", r.CRUDMapping.Create)
+		}
+		if r.CRUDMapping.Create.PathTemplate != "/notification/event/notifMetaConfig/{notifType}/{taskId}" {
+			t.Errorf("expected composite create path, got %q", r.CRUDMapping.Create.PathTemplate)
+		}
+		// Both composite path-param identifiers must be Required.
+		want := map[string]bool{"notif_type": true, "task_id": true}
+		for _, a := range r.Schema.Attributes {
+			if _, ok := want[a.Name]; ok {
+				if !a.Required || a.Computed {
+					t.Errorf("composite id attr %s must be Required (not Computed): got Required=%v Computed=%v", a.Name, a.Required, a.Computed)
+				}
+				want[a.Name] = false // mark seen
+			}
+		}
+		for name, unseen := range want {
+			if unseen {
+				t.Errorf("expected a Required %q identifier attribute, not found in schema", name)
+			}
+		}
+	})
+}
+
 func TestValidate_DetectedSummaryOmitsEmptyOptInFields(t *testing.T) {
 	body := []byte(`{
 		"openapi": "3.0.1",
@@ -1113,7 +1334,7 @@ paths: {}
 
 	for _, tt := range cases {
 		t.Run(tt.name, func(t *testing.T) {
-			cfg, version, diags, err := GenerateStarterConfig([]byte(tt.spec), "")
+			cfg, version, diags, err := GenerateStarterConfig([]byte(tt.spec), "", true)
 			if err != nil {
 				t.Fatalf("GenerateStarterConfig error: %v", err)
 			}
@@ -1138,7 +1359,7 @@ func TestGenerateStarterConfig_VersionDiagnosticsOnError(t *testing.T) {
   version: "1.0"
 paths: {}
 `)
-	_, version, diags, err := GenerateStarterConfig(spec, "")
+	_, version, diags, err := GenerateStarterConfig(spec, "", true)
 	if err == nil {
 		t.Fatal("expected error for missing version")
 	}

@@ -657,7 +657,16 @@ func pathPlaceholders(template string) []string {
 // honest scaffold. The value is spec-derived and deterministic.
 func resolvePathSubstitution(r ir.ResourceIR, placeholder string, noIDFallback bool, pathParams []ir.ParamIR) (pathSubstitution, bool) {
 	for _, attr := range r.Schema.Attributes {
-		if attr.Name != placeholder {
+		// A schema attribute whose Terraform name matches the placeholder wins.
+		// For a composite path (noIDFallback, multiple dynamic placeholders) the
+		// resource-id fallback is suppressed, so a placeholder whose spec name is
+		// camelCase (e.g. {notifType}) would never match the snake_case attribute
+		// name (notif_type) and the whole resource would stay an honest scaffold
+		// even though the response echoes the identifier. Also accept a match
+		// against the attribute's WireName (the original spec field name) in that
+		// case — this is only reached for composite paths, so simple-id paths keep
+		// their existing name-match-then-id-fallback behavior byte-identical.
+		if attr.Name != placeholder && (!noIDFallback || attr.WireName != placeholder) {
 			continue
 		}
 		if !schema.IsPrimitiveSchema(attr.Schema) {
