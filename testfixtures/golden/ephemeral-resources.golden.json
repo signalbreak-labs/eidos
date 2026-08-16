@@ -40,8 +40,16 @@
     "reason": "authentication middleware"
   },
   {
+    "path": "internal/client/auth_test.go",
+    "reason": "authentication middleware unit tests"
+  },
+  {
     "path": "internal/client/client.go",
     "reason": "generated HTTP client"
+  },
+  {
+    "path": "internal/client/client_test.go",
+    "reason": "generated HTTP client unit tests"
   },
   {
     "path": "internal/client/errors.go",
@@ -50,6 +58,10 @@
   {
     "path": "internal/client/logging.go",
     "reason": "request/response trace logging"
+  },
+  {
+    "path": "internal/client/logging_test.go",
+    "reason": "trace logging unit tests"
   },
   {
     "path": "internal/client/models.go",
@@ -68,6 +80,10 @@
     "reason": "ephemeral resource token-api_issue_credentials"
   },
   {
+    "path": "internal/provider/ephemeral_issue_credentials_remote_test.go",
+    "reason": "coverage tests for ephemeral resource issue_credentials remote helper"
+  },
+  {
     "path": "internal/provider/json_convert.go",
     "reason": "JSON/model conversion helpers for wired CRUD bodies"
   },
@@ -78,6 +94,10 @@
   {
     "path": "internal/provider/provider_test.go",
     "reason": "provider-level unit tests"
+  },
+  {
+    "path": "internal/provider/testing_helpers_test.go",
+    "reason": "shared httptest helpers for coverage tests"
   },
   {
     "path": "internal/provider/validators.go",

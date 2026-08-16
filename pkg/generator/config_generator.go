@@ -154,7 +154,7 @@ func convertResources(resources []ir.ResourceIR) []config.ResourceOverride {
 		forceNew := extractForceNewAttributes(r.Schema)
 		sensitive := mergeSensitiveAttrs(r.SensitiveAttrs, extractSensitiveAttributes(r.Schema))
 
-		out = append(out, config.ResourceOverride{
+		ro := config.ResourceOverride{
 			Schema:              schemaName,
 			Operation:           r.SourceOperation,
 			ResourceName:        r.Name,
@@ -165,7 +165,23 @@ func convertResources(resources []ir.ResourceIR) []config.ResourceOverride {
 			ComputedAttributes:  computed,
 			SensitiveAttributes: sensitive,
 			WriteOnlyAttributes: writeOnly,
-		})
+		}
+		// Override-created resources (promoted from a resource_override with
+		// generate_resource/create_operation/...) are not reproducible from CRUD
+		// inference alone. Re-emit generate_resource plus the CRUD operation ids
+		// so a normalized generator.yaml round-trips instead of silently dropping
+		// the resource on regeneration (G8). Inferred resources stay bare; the
+		// grouping pass reproduces them without these fields.
+		if r.OverrideCreated {
+			ro.GenerateResource = boolPtr(true)
+			ro.CreateOperation = r.CRUDMapping.Create.OperationID
+			ro.ReadOperation = r.CRUDMapping.Read.OperationID
+			if r.CRUDMapping.Update != nil {
+				ro.UpdateOperation = r.CRUDMapping.Update.OperationID
+			}
+			ro.DeleteOperation = r.CRUDMapping.Delete.OperationID
+		}
+		out = append(out, ro)
 	}
 	return out
 }
@@ -543,15 +559,35 @@ func extractWriteOnlyAttributes(schema ir.ObjectSchemaIR) []config.WriteOnlyAttr
 // flag to every attribute whose name matches, so a single "name" entry
 // correctly covers every same-named computed attribute regardless of nesting
 // level. Path qualification here would break that global-match semantics.
+//
+// A leaf name that is Required anywhere is excluded: setAttributeFlag clears
+// Required when it applies "computed", so emitting such a name would downgrade
+// a required create-body field to read-only and make the resource uncreatable.
+// This happens when a nested computed attribute shares a leaf name with a
+// top-level create-body field (e.g. SpaceTraders ships: the create body sends
+// waypointSymbol, the read response carries nav.waypointSymbol; both normalize
+// to "waypoint_symbol"). The schema inference already marks the nested
+// attribute Computed, so omitting it from the override changes nothing for the
+// nested attribute while preserving the writable top-level field.
 func extractComputedAttributes(schema ir.ObjectSchemaIR) []string {
+	required := make(map[string]struct{})
+	walkObjectSchema(schema, func(attr ir.AttributeIR) {
+		if attr.Required {
+			required[attr.Name] = struct{}{}
+		}
+	})
 	var attrs []string
 	seen := make(map[string]struct{})
 	walkObjectSchema(schema, func(attr ir.AttributeIR) {
-		if attr.Computed || attr.Schema.Computed {
-			if _, ok := seen[attr.Name]; !ok {
-				attrs = append(attrs, attr.Name)
-				seen[attr.Name] = struct{}{}
-			}
+		if !attr.Computed && !attr.Schema.Computed {
+			return
+		}
+		if _, isRequired := required[attr.Name]; isRequired {
+			return
+		}
+		if _, ok := seen[attr.Name]; !ok {
+			attrs = append(attrs, attr.Name)
+			seen[attr.Name] = struct{}{}
 		}
 	})
 	return attrs

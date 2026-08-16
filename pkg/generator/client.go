@@ -27,10 +27,12 @@ func ClientFiles(p ir.ProviderIR) []File {
 		retryGoFile(cfg),
 		paginationGoFile(cfg),
 		loggingGoFile(cfg),
+		clientTestGoFile(cfg),
+		loggingTestGoFile(cfg),
 	}
 	// Only generate auth middleware when the provider declares security schemes.
 	if len(p.SecurityIR.Schemes) > 0 {
-		files = append(files, authGoFile(cfg))
+		files = append(files, authGoFile(cfg), authTestGoFile(cfg))
 	}
 	return files
 }

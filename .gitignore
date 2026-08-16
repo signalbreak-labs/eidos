@@ -38,3 +38,6 @@ go.work.sum
 # Claude planning artifacts
 .claude/plan.md
 .claude/plans/
+
+# Local scratch / live-provider testing (never commit)
+.tmp/

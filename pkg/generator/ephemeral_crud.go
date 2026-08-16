@@ -346,10 +346,16 @@ func scaffoldEphemeralOpenBody(modelName string) []ast.Stmt {
 // after the response decode so server-assigned identifiers are what Renew/
 // Close use. The local model variable is named `config` to avoid colliding
 // with the `data` map declared by decodeAndApplyStmts.
-func wiredEphemeralOpenBody(er ir.EphemeralResourceIR, wiring ephemeralWiringPlan, modelName string) []ast.Stmt {
-	plan := wiring.open
-	summary := fmt.Sprintf("Error opening ephemeral resource %s", ephemeralResourceTypeName(er))
-	stmts := make([]ast.Stmt, 0, 20)
+//
+// The HTTP exchange (client guard, request path, send, decode) lives in the
+// extracted openRemote helper so it is unit-testable without constructing a
+// tfsdk.Config, whose Schema is built from an internal fwschema type that
+// generated code cannot instantiate. The framework Open body reads the config,
+// delegates to openRemote, then stashes the lifecycle parameters in ephemeral
+// private state and stores the result — both of which touch resp.Private/
+// resp.Result, surfaces with no analog in the helper's resp.Diagnostics.
+func wiredEphemeralOpenBody(wiring ephemeralWiringPlan, modelName string) []ast.Stmt {
+	stmts := make([]ast.Stmt, 0, 12)
 	stmts = append(stmts,
 		astgen.VarDecl("config", modelName, nil),
 		astgen.ExprStmt(astgen.Call(
@@ -364,16 +370,53 @@ func wiredEphemeralOpenBody(er ir.EphemeralResourceIR, wiring ephemeralWiringPla
 			astgen.Call(astgen.Selector(astgen.Selector(astgen.Ident("resp"), "Diagnostics"), "HasError")),
 			astgen.Return(),
 		),
-		clientGuardStmt("e"),
+		astgen.ExprStmt(astgen.Call(
+			astgen.Selector(astgen.Ident("e"), "openRemote"),
+			astgen.Ident("ctx"),
+			astgen.UnaryPtr(astgen.Ident("config")),
+			astgen.Ident("resp"),
+		)),
+		astgen.If(
+			astgen.Call(astgen.Selector(astgen.Selector(astgen.Ident("resp"), "Diagnostics"), "HasError")),
+			astgen.Return(),
+		),
 	)
-	stmts = append(stmts, requestPathStmts(plan, "config")...)
-	// An ephemeral Open has no state to drop on a 404; a non-success status is
-	// surfaced as an error by the generic non-success branch.
-	stmts = append(stmts, sendRequestStmts(plan, "e", summary, "config", nil, nil)...)
-	stmts = append(stmts, decodeAndApplyStmts(summary, "config", plan.responseEnvelope)...)
 	stmts = append(stmts, privateParamStashStmts(wiring.privateParams)...)
 	stmts = append(stmts, resultSetStmt("config"))
 	return stmts
+}
+
+// wiredEphemeralOpenHelperBody returns the body of openRemote: the client
+// guard, request path, HTTP exchange, and response decode. It writes
+// diagnostics to resp.Diagnostics and mutates *config, so the framework Open
+// method can call it and then stash lifecycle parameters and store the result
+// on success. An ephemeral Open has no state to drop on a 404; a non-success
+// status is surfaced as an error by the generic non-success branch.
+func wiredEphemeralOpenHelperBody(er ir.EphemeralResourceIR, plan crudOperationPlan) []ast.Stmt {
+	summary := fmt.Sprintf("Error opening ephemeral resource %s", ephemeralResourceTypeName(er))
+	stmts := make([]ast.Stmt, 0, 16)
+	stmts = append(stmts, clientGuardStmt("e"))
+	stmts = append(stmts, requestPathStmts(plan, "config")...)
+	stmts = append(stmts, sendRequestStmts(plan, "e", summary, "config", nil, nil)...)
+	stmts = append(stmts, decodeAndApplyStmts(summary, "config", plan.responseEnvelope, "")...)
+	return stmts
+}
+
+// wiredEphemeralOpenHelperDecl emits the openRemote method declaration wired
+// to the generated API client. Emitted only for wired ephemeral resources,
+// alongside Open, in the same file so the e.client.NewRequest marker stays put
+// (preserving the assertHonestScaffolds golden invariant).
+func wiredEphemeralOpenHelperDecl(er ir.EphemeralResourceIR, plan crudOperationPlan, modelName, structName string) *ast.FuncDecl {
+	return astgen.MethodDecl(
+		"openRemote", "e", astgen.StarExpr(astgen.Ident(structName)),
+		astgen.Params(
+			astgen.Field("ctx", astgen.QualExpr("context", "Context"), ""),
+			astgen.Field("config", astgen.StarExpr(astgen.Ident(modelName)), ""),
+			astgen.Field("resp", astgen.StarExpr(astgen.QualExpr("ephemeral", "OpenResponse")), ""),
+		),
+		astgen.Results(),
+		astgen.Block(wiredEphemeralOpenHelperBody(er, plan)...),
+	)
 }
 
 // privateParamKey returns the ephemeral private-state key under which Open

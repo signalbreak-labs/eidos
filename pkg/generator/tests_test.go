@@ -475,6 +475,8 @@ func TestTestFiles(t *testing.T) {
 		"internal/provider/resource_pet_test.go",
 		"internal/provider/resource_pet_acceptance_test.go",
 		"internal/provider/data_source_pets_test.go",
+		"internal/provider/testing_helpers_test.go",
+		"internal/provider/resource_pet_remote_test.go",
 	}
 	if len(files) != len(wantPaths) {
 		t.Fatalf("TestFiles() returned %d files, want %d", len(files), len(wantPaths))

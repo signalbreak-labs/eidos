@@ -29,15 +29,17 @@ type CreateTaskAction struct {
 
 // CreateTaskActionModel describes the action configuration shape.
 type CreateTaskActionModel struct {
-	Body         types.String `tfsdk:"body"`
-	HtmlUrl      types.String `tfsdk:"html_url"`
-	Id           types.Int64  `tfsdk:"id"`
-	Number       types.Int64  `tfsdk:"number"`
-	Organization types.String `tfsdk:"organization"`
-	Project      types.String `tfsdk:"project"`
-	State        types.String `tfsdk:"state"`
-	TaskNumber   types.Int64  `tfsdk:"task_number"`
-	Title        types.String `tfsdk:"title"`
+	Body             types.String `tfsdk:"body"`
+	BodyOrganization types.String `tfsdk:"body_organization" json:"organization"`
+	BodyProject      types.String `tfsdk:"body_project" json:"project"`
+	HtmlUrl          types.String `tfsdk:"html_url"`
+	Id               types.Int64  `tfsdk:"id"`
+	Number           types.Int64  `tfsdk:"number"`
+	Organization     types.String `tfsdk:"organization"`
+	Project          types.String `tfsdk:"project"`
+	State            types.String `tfsdk:"state"`
+	TaskNumber       types.Int64  `tfsdk:"task_number"`
+	Title            types.String `tfsdk:"title"`
 }
 
 // NewCreateTaskAction returns a new instance of the generated action.
@@ -52,7 +54,7 @@ func (r *CreateTaskAction) Metadata(_ context.Context, req action.MetadataReques
 
 // Schema returns the action schema.
 func (r *CreateTaskAction) Schema(_ context.Context, _ action.SchemaRequest, resp *action.SchemaResponse) {
-	resp.Schema = schema.Schema{Description: "Create an task", Attributes: map[string]schema.Attribute{"body": schema.StringAttribute{Optional: true}, "html_url": schema.StringAttribute{Optional: true}, "id": schema.Int64Attribute{Optional: true}, "number": schema.Int64Attribute{Optional: true}, "organization": schema.StringAttribute{Required: true}, "project": schema.StringAttribute{Required: true}, "state": schema.StringAttribute{Optional: true}, "task_number": schema.Int64Attribute{Optional: true}, "title": schema.StringAttribute{Optional: true}}}
+	resp.Schema = schema.Schema{Description: "Create an task", Attributes: map[string]schema.Attribute{"body": schema.StringAttribute{Optional: true}, "body_organization": schema.StringAttribute{Optional: true}, "body_project": schema.StringAttribute{Optional: true}, "html_url": schema.StringAttribute{Optional: true}, "id": schema.Int64Attribute{Optional: true}, "number": schema.Int64Attribute{Optional: true}, "organization": schema.StringAttribute{Required: true}, "project": schema.StringAttribute{Required: true}, "state": schema.StringAttribute{Optional: true}, "task_number": schema.Int64Attribute{Optional: true}, "title": schema.StringAttribute{Optional: true}}}
 }
 
 // Invoke executes the action against the remote API.
@@ -62,6 +64,11 @@ func (r *CreateTaskAction) Invoke(ctx context.Context, req action.InvokeRequest,
 	if resp.Diagnostics.HasError() {
 		return
 	}
+	r.invokeRemote(ctx, &config, resp)
+}
+
+// invokeRemote performs the invoke HTTP exchange and surfaces any error via diagnostics. Extracted from Invoke so the request/response logic is unit-testable without a tfsdk.Config.
+func (r *CreateTaskAction) invokeRemote(ctx context.Context, config *CreateTaskActionModel, resp *action.InvokeResponse) {
 	if r.client == nil {
 		resp.Diagnostics.AddError("Client Not Configured", "The API client was not set on the resource. The provider Configure method must run before resource operations; this is a bug in the generated provider.")
 		return

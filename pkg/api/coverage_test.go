@@ -377,8 +377,9 @@ func TestOAuth2FlowAndTokenURL(t *testing.T) {
 	}
 }
 
-// TestGroupIsResource covers the true case, the nil-op rejection, and the
-// classified-as-action rejection.
+// TestGroupIsResource covers the true case, the function-keyword rejection
+// (the /convert/.../rules case that motivated groupEmitsFullCRUDResource), and
+// the classified-as-action rejection via an x-terraform-* extension.
 func TestGroupIsResource(t *testing.T) {
 	mkOp := func(id string) *transformer.Operation {
 		return &transformer.Operation{OperationID: id}
@@ -390,13 +391,6 @@ func TestGroupIsResource(t *testing.T) {
 		Read:           mkOp("getPet"),
 		Delete:         mkOp("deletePet"),
 	}
-	spec := &parser.Spec{Paths: map[string]*parser.PathItem{
-		"/pets": {Post: &parser.Operation{OperationID: "createPet", Extensions: map[string]any{}}},
-		"/pets/{id}": {
-			Get:    &parser.Operation{OperationID: "getPet"},
-			Delete: &parser.Operation{OperationID: "deletePet"},
-		},
-	}}
 	// pathOps must contain the instance path so the collection POST classifies
 	// as a managed-resource Create (IsCRUDCreatePath) rather than an action.
 	pathOps := map[string]map[transformer.HTTPMethod]transformer.Operation{
@@ -408,19 +402,36 @@ func TestGroupIsResource(t *testing.T) {
 			transformer.MethodDelete: {Method: transformer.MethodDelete, Path: "/pets/{id}", OperationID: "deletePet"},
 		},
 	}
-	if !groupIsResource(spec, g, pathOps) {
+	if !groupIsResource(g, pathOps) {
 		t.Error("clean CRUD group should classify as a resource")
 	}
-	// An operation missing from the spec rejects the group.
-	if groupIsResource(spec, transformer.ResourceCRUD{
-		CollectionPath: "/pets", InstancePath: "/missing/{id}",
-		Create: mkOp("createPet"), Read: mkOp("getPet"), Delete: mkOp("deletePet"),
-	}, pathOps) {
-		t.Error("group with a missing operation path should not classify as a resource")
+	// A group whose instance GET is reclassified as a provider function by a
+	// path keyword (e.g. "convert") is rejected: the POST/DELETE must become
+	// actions rather than an empty, fully-scaffolded managed resource (the
+	// /convert/.../rules case the groupEmitsFullCRUDResource gate fixes).
+	convertPathOps := map[string]map[transformer.HTTPMethod]transformer.Operation{
+		"/convert/rules": {transformer.MethodPost: {Method: transformer.MethodPost, Path: "/convert/rules", OperationID: "postRules"}},
+		"/convert/rules/{id}": {
+			transformer.MethodGet:    {Method: transformer.MethodGet, Path: "/convert/rules/{id}", OperationID: "getRule"},
+			transformer.MethodDelete: {Method: transformer.MethodDelete, Path: "/convert/rules/{id}", OperationID: "deleteRule"},
+		},
 	}
-	// An operation carrying x-terraform-action classifies as an action.
-	spec.Paths["/pets"].Post.Extensions["x-terraform-action"] = true
-	if groupIsResource(spec, g, pathOps) {
+	convertGroup := transformer.ResourceCRUD{
+		CollectionPath: "/convert/rules",
+		InstancePath:   "/convert/rules/{id}",
+		Create:         mkOp("postRules"),
+		Read:           mkOp("getRule"),
+		Delete:         mkOp("deleteRule"),
+	}
+	if groupIsResource(convertGroup, convertPathOps) {
+		t.Error("group whose instance GET is a provider function (convert keyword) should not classify as a resource")
+	}
+	// An operation carrying x-terraform-action classifies as an action, so the
+	// group is rejected. The extension rides on the transformer Operation that
+	// groupIsResource reconstructs the parser operation from.
+	actionGroup := g
+	actionGroup.Create = &transformer.Operation{OperationID: "createPet", Extensions: map[string]any{"x-terraform-action": true}}
+	if groupIsResource(actionGroup, pathOps) {
 		t.Error("group with an action-classified operation should not classify as a resource")
 	}
 }

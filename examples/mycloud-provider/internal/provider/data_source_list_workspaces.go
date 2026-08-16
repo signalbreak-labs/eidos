@@ -1,6 +1,7 @@
 package provider
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -52,6 +53,15 @@ func (d *ListWorkspacesDataSource) Read(ctx context.Context, req datasource.Read
 	if resp.Diagnostics.HasError() {
 		return
 	}
+	d.readListRemote(ctx, &config, resp)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+	resp.Diagnostics.Append(resp.State.Set(ctx, &config)...)
+}
+
+// readListRemote performs the paginated read HTTP exchange and decodes the response array into config. Extracted from Read so the request/response logic is unit-testable without a tfsdk.Config.
+func (d *ListWorkspacesDataSource) readListRemote(ctx context.Context, config *ListWorkspacesDataSourceModel, resp *datasource.ReadResponse) {
 	if d.client == nil {
 		resp.Diagnostics.AddError("Client Not Configured", "The API client was not set on the resource. The provider Configure method must run before resource operations; this is a bug in the generated provider.")
 		return
@@ -83,7 +93,9 @@ func (d *ListWorkspacesDataSource) Read(ctx context.Context, req datasource.Read
 	items := []any{}
 	for _, page := range pages {
 		pageItems := []any{}
-		if err := json.Unmarshal(page, &pageItems); err != nil {
+		dec := json.NewDecoder(bytes.NewReader(page))
+		dec.UseNumber()
+		if err := dec.Decode(&pageItems); err != nil {
 			resp.Diagnostics.AddError("Error reading mycloud_list_workspaces", fmt.Sprintf("Could not decode list page: %s", err))
 			return
 		}
@@ -93,7 +105,6 @@ func (d *ListWorkspacesDataSource) Read(ctx context.Context, req datasource.Read
 		resp.Diagnostics.AddError("Error reading mycloud_list_workspaces", fmt.Sprintf("Could not map response to state: %s", err))
 		return
 	}
-	resp.Diagnostics.Append(resp.State.Set(ctx, &config)...)
 }
 
 // Configure stores the API client supplied by the provider.

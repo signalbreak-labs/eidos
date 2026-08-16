@@ -52,8 +52,16 @@
     "reason": "authentication middleware"
   },
   {
+    "path": "internal/client/auth_test.go",
+    "reason": "authentication middleware unit tests"
+  },
+  {
     "path": "internal/client/client.go",
     "reason": "generated HTTP client"
+  },
+  {
+    "path": "internal/client/client_test.go",
+    "reason": "generated HTTP client unit tests"
   },
   {
     "path": "internal/client/errors.go",
@@ -62,6 +70,10 @@
   {
     "path": "internal/client/logging.go",
     "reason": "request/response trace logging"
+  },
+  {
+    "path": "internal/client/logging_test.go",
+    "reason": "trace logging unit tests"
   },
   {
     "path": "internal/client/models.go",
@@ -80,6 +92,10 @@
     "reason": "data source mycloud-pets_list_pets"
   },
   {
+    "path": "internal/provider/data_source_list_pets_remote_test.go",
+    "reason": "coverage tests for data source list_pets remote helpers"
+  },
+  {
     "path": "internal/provider/data_source_list_pets_test.go",
     "reason": "unit tests for data source list_pets"
   },
@@ -90,6 +106,10 @@
   {
     "path": "internal/provider/list_list_pets.go",
     "reason": "list resource mycloud-pets_list_pets"
+  },
+  {
+    "path": "internal/provider/list_list_pets_remote_test.go",
+    "reason": "coverage tests for list resource list_pets remote helper"
   },
   {
     "path": "internal/provider/provider.go",
@@ -108,8 +128,16 @@
     "reason": "acceptance tests for resource pet"
   },
   {
+    "path": "internal/provider/resource_pet_remote_test.go",
+    "reason": "coverage tests for resource pet remote helpers"
+  },
+  {
     "path": "internal/provider/resource_pet_test.go",
     "reason": "unit tests for resource pet"
+  },
+  {
+    "path": "internal/provider/testing_helpers_test.go",
+    "reason": "shared httptest helpers for coverage tests"
   },
   {
     "path": "internal/provider/validators.go",

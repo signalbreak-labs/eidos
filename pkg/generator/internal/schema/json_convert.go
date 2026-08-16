@@ -38,7 +38,10 @@ var wireNames = map[string]map[string]string{
 // silently dropped.
 func modelToJSONMap(model any) (map[string]any, error) {
 	v := reflect.ValueOf(model)
-	if v.Kind() == reflect.Pointer {
+	// Strip every layer of indirection so callers may pass a value, a pointer,
+	// or a pointer-to-pointer (the extracted *Remote helpers receive the model
+	// as a pointer parameter and the framework glue addresses it once more).
+	for v.Kind() == reflect.Pointer {
 		v = v.Elem()
 	}
 	if v.Kind() != reflect.Struct {
@@ -79,7 +82,8 @@ func modelToJSONMap(model any) (map[string]any, error) {
 // not return keep their current values.
 func applyJSONToModel(model any, data map[string]any) error {
 	v := reflect.ValueOf(model)
-	if v.Kind() == reflect.Pointer {
+	// Strip every layer of indirection; see modelToJSONMap for the rationale.
+	for v.Kind() == reflect.Pointer {
 		v = v.Elem()
 	}
 	if v.Kind() != reflect.Struct {

@@ -64,6 +64,15 @@ func (d *GetPullRequestDataSource) Read(ctx context.Context, req datasource.Read
 	if resp.Diagnostics.HasError() {
 		return
 	}
+	d.readRemote(ctx, &config, resp)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+	resp.Diagnostics.Append(resp.State.Set(ctx, &config)...)
+}
+
+// readRemote performs the read HTTP exchange and decodes the response into config. Extracted from Read so the request/response logic is unit-testable without a tfsdk.Config.
+func (d *GetPullRequestDataSource) readRemote(ctx context.Context, config *GetPullRequestDataSourceModel, resp *datasource.ReadResponse) {
 	if d.client == nil {
 		resp.Diagnostics.AddError("Client Not Configured", "The API client was not set on the resource. The provider Configure method must run before resource operations; this is a bug in the generated provider.")
 		return
@@ -108,7 +117,6 @@ func (d *GetPullRequestDataSource) Read(ctx context.Context, req datasource.Read
 		resp.Diagnostics.AddError("Error reading mycloud_get_pull_request", fmt.Sprintf("Could not map response to state: %s", err))
 		return
 	}
-	resp.Diagnostics.Append(resp.State.Set(ctx, &config)...)
 }
 
 // Configure stores the API client supplied by the provider.

@@ -13,15 +13,20 @@ Update an task
 
 ```terraform
 action "mycloud_update_task" "example" {
-  body = "example"
-  html_url = "example"
-  id = 1
-  number = 1
-  organization = "example"
-  project = "example"
-  state = "example"
-  task_number = 1
-  title = "example"
+  config {
+    body = "example"
+    body_organization = "example"
+    body_project = "example"
+    body_task_number = 1
+    html_url = "example"
+    id = 1
+    number = 1
+    organization = "example"
+    project = "example"
+    state = "example"
+    task_number = 1
+    title = "example"
+  }
 }
 
 ```
@@ -33,6 +38,9 @@ action "mycloud_update_task" "example" {
 The following arguments are supported:
 
 * `body` (String, optional)
+* `body_organization` (String, optional)
+* `body_project` (String, optional)
+* `body_task_number` (Number, optional)
 * `html_url` (String, optional)
 * `id` (Number, optional)
 * `number` (Number, optional)

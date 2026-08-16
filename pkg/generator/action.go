@@ -178,16 +178,15 @@ func generateActionFile(a ir.ActionIR, clientImport string) *ast.File {
 
 	// Invoke method. Wired actions call the invoke endpoint and surface any
 	// error via Diagnostics; actions without a resolvable bodiless invoke
-	// mapping keep the honest scaffold Invoke body.
+	// mapping keep the honest scaffold Invoke body. The extracted invokeRemote
+	// helper is emitted alongside Invoke so the request/response logic is
+	// unit-testable without a tfsdk.Config.
 	if wiring.invoke != nil {
 		f.AddComment("Invoke executes the action against the remote API.")
 	} else {
 		f.AddComment("Invoke executes the action against the remote API.", "The generated Invoke method is intentionally stubbed; the remote API is not wired.")
 	}
-	invokeBody := scaffoldActionInvokeBody(modelName)
-	if wiring.invoke != nil {
-		invokeBody = wiredActionInvokeBody(a, *wiring.invoke, modelName)
-	}
+	invokeBody, invokeHelperComment, invokeHelperDecl := actionInvokePlan(a, wiring, modelName, structName)
 	f.AddDecl(astgen.MethodDecl(
 		"Invoke", "r", astgen.StarExpr(astgen.Ident(structName)),
 		astgen.Params(
@@ -198,6 +197,10 @@ func generateActionFile(a ir.ActionIR, clientImport string) *ast.File {
 		astgen.Results(),
 		astgen.Block(invokeBody...),
 	))
+	if invokeHelperDecl != nil {
+		f.AddComment(invokeHelperComment)
+		f.AddDecl(invokeHelperDecl)
+	}
 
 	// ModifyPlan method. Wired when the action declares a resolvable
 	// modify_plan_operation mapping: the body calls the preflight endpoint and
@@ -301,6 +304,20 @@ func generateActionFile(a ir.ActionIR, clientImport string) *ast.File {
 	}
 
 	return f.AST()
+}
+
+// actionInvokePlan selects the Invoke body and the extracted invokeRemote
+// helper declaration for an action. An unwired action (no resolvable invoke
+// mapping) gets the honest scaffold body and no helper. Factoring this out of
+// generateActionFile keeps that function's cognitive complexity bounded.
+func actionInvokePlan(a ir.ActionIR, wiring actionWiringPlan, modelName, structName string) (invokeBody []ast.Stmt, helperComment string, helperDecl *ast.FuncDecl) {
+	invokeBody = scaffoldActionInvokeBody(modelName)
+	if wiring.invoke == nil {
+		return invokeBody, "", nil
+	}
+	return wiredActionInvokeBody(a, modelName),
+		"invokeRemote performs the invoke HTTP exchange and surfaces any error via diagnostics. Extracted from Invoke so the request/response logic is unit-testable without a tfsdk.Config.",
+		wiredActionInvokeHelperDecl(a, *wiring.invoke, modelName, structName)
 }
 
 // actionModelFields returns the model struct fields for an action's config

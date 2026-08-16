@@ -132,6 +132,14 @@ func TestWiredListDataSource_None_Render(t *testing.T) {
 		// Accumulation wraps the array as {"items": items} for the model.
 		`items := []any{}`,
 		`pageItems := []any{}`,
+		// Pages decode with a json.Decoder + UseNumber so numeric item fields
+		// arrive as json.Number (not float64); applyJSONToModel rejects float64
+		// for Int64/Number attributes, which would break list reads against any
+		// API whose items carry a number. Regression guard for the list-decode
+		// UseNumber fix.
+		`dec := json.NewDecoder(bytes.NewReader(page))`,
+		`dec.UseNumber()`,
+		`dec.Decode(&pageItems)`,
 		`items = append(items, pageItems...)`,
 		`applyJSONToModel(&config, map[string]any{"items": items})`,
 		`resp.State.Set(ctx, &config)`,
@@ -147,6 +155,11 @@ func TestWiredListDataSource_None_Render(t *testing.T) {
 		if !strings.Contains(got, want) {
 			t.Errorf("generated list body missing %q\n--- body ---\n%s", want, got)
 		}
+	}
+	// Regression guard: the list path must not decode pages with json.Unmarshal,
+	// which turns every JSON number into float64 and breaks numeric attributes.
+	if strings.Contains(got, "json.Unmarshal(page") {
+		t.Errorf("generated list body must decode pages with UseNumber, but contains json.Unmarshal(page)\n--- body ---\n%s", got)
 	}
 }
 

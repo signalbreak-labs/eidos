@@ -148,13 +148,37 @@ func generateResourceFile(r ir.ResourceIR, clientImport string) (*ast.File, erro
 		)),
 	))
 
+	// IdentitySchema method. A managed resource paired with a list resource
+	// (shared type name) carries the list resource's identity schema so
+	// terraform query can type the identities the list streams. Without this
+	// method terraform query fails with "Identity schema not found for resource
+	// type". Only emitted when the resource has identity attributes, so the
+	// common case (no paired list resource) is unaffected.
+	if resourceHasIdentity(r) {
+		f.AddComment("IdentitySchema returns the resource identity schema shared with the paired list resource.")
+		f.AddDecl(astgen.MethodDecl(
+			"IdentitySchema", "r", astgen.StarExpr(astgen.Ident(structName)),
+			astgen.Params(
+				astgen.Field("_", astgen.QualExpr("context", "Context"), ""),
+				astgen.Field("_", astgen.QualExpr("resource", "IdentitySchemaRequest"), ""),
+				astgen.Field("resp", astgen.StarExpr(astgen.QualExpr("resource", "IdentitySchemaResponse")), ""),
+			),
+			astgen.Results(),
+			astgen.Block(astgen.AssignStmt(
+				[]ast.Expr{astgen.Selector(astgen.Ident("resp"), "IdentitySchema")},
+				[]ast.Expr{astgen.CompositeLit(astgen.QualExpr("identityschema", "Schema"), resourceIdentitySchemaValues(r)...)},
+				token.ASSIGN,
+			)),
+		))
+	}
+
 	// Create method. Wired resources call the create endpoint and store the API
 	// response as state; resources without a complete CRUD mapping keep the
 	// honest scaffold body.
 	f.AddComment("Create provisions the remote resource and stores the resulting state.")
 	createBody := scaffoldCreateBody(r, modelName)
 	if wiring.wired {
-		createBody = wiredCreateBody(r, wiring, modelName)
+		createBody = wiredCreateBody(r, modelName)
 	}
 	f.AddDecl(astgen.MethodDecl(
 		"Create", "r", astgen.StarExpr(astgen.Ident(structName)),
@@ -166,12 +190,16 @@ func generateResourceFile(r ir.ResourceIR, clientImport string) (*ast.File, erro
 		astgen.Results(),
 		astgen.Block(createBody...),
 	))
+	if wiring.wired {
+		f.AddComment("createRemote performs the create HTTP exchange and decodes the response into plan. Extracted from Create so the request/response logic is unit-testable without a tfsdk.Plan.")
+		f.AddDecl(wiredCreateHelperDecl(r, wiring, modelName, structName))
+	}
 
 	// Read method.
 	f.AddComment("Read refreshes the Terraform state with the latest remote values.")
 	readBody := scaffoldReadBody(modelName)
 	if wiring.wired {
-		readBody = wiredReadBody(r, wiring, modelName)
+		readBody = wiredReadBody(r, modelName)
 	}
 	f.AddDecl(astgen.MethodDecl(
 		"Read", "r", astgen.StarExpr(astgen.Ident(structName)),
@@ -183,13 +211,17 @@ func generateResourceFile(r ir.ResourceIR, clientImport string) (*ast.File, erro
 		astgen.Results(),
 		astgen.Block(readBody...),
 	))
+	if wiring.wired {
+		f.AddComment("readRemote performs the read HTTP exchange and decodes the response into state, returning removed=true when the API reports 404. Extracted from Read so the request/response logic is unit-testable without a tfsdk.State.")
+		f.AddDecl(wiredReadHelperDecl(r, wiring, modelName, structName))
+	}
 
 	// Update method. When the API exposes no update operation the method keeps
 	// its honest scaffold body even on an otherwise wired resource.
 	f.AddComment("Update modifies the remote resource to match the desired plan.")
 	updateBody := scaffoldUpdateBody(r, modelName)
 	if wiring.wired && wiring.update {
-		updateBody = wiredUpdateBody(r, wiring, modelName)
+		updateBody = wiredUpdateBody(r, modelName)
 	}
 	f.AddDecl(astgen.MethodDecl(
 		"Update", "r", astgen.StarExpr(astgen.Ident(structName)),
@@ -201,6 +233,10 @@ func generateResourceFile(r ir.ResourceIR, clientImport string) (*ast.File, erro
 		astgen.Results(),
 		astgen.Block(updateBody...),
 	))
+	if wiring.wired && wiring.update {
+		f.AddComment("updateRemote performs the update HTTP exchange and decodes the response into plan. Extracted from Update so the request/response logic is unit-testable without a tfsdk.Plan.")
+		f.AddDecl(wiredUpdateHelperDecl(r, wiring, modelName, structName))
+	}
 
 	// Delete method. Wired resources call the delete endpoint, treating an HTTP
 	// 404 as already deleted; resources without a complete CRUD mapping keep
@@ -208,7 +244,7 @@ func generateResourceFile(r ir.ResourceIR, clientImport string) (*ast.File, erro
 	f.AddComment("Delete destroys the remote resource.")
 	deleteBody := scaffoldDeleteBody(modelName)
 	if wiring.wired {
-		deleteBody = wiredDeleteBody(r, wiring, modelName)
+		deleteBody = wiredDeleteBody(modelName)
 	}
 	f.AddDecl(astgen.MethodDecl(
 		"Delete", "r", astgen.StarExpr(astgen.Ident(structName)),
@@ -220,6 +256,10 @@ func generateResourceFile(r ir.ResourceIR, clientImport string) (*ast.File, erro
 		astgen.Results(),
 		astgen.Block(deleteBody...),
 	))
+	if wiring.wired {
+		f.AddComment("deleteRemote performs the delete HTTP exchange, treating a 404 as already deleted. Extracted from Delete so the request/response logic is unit-testable without a tfsdk.State.")
+		f.AddDecl(wiredDeleteHelperDecl(r, wiring, modelName, structName))
+	}
 
 	// Configure method. Wired resources implement ResourceWithConfigure to
 	// receive the API client constructed by the provider's Configure method.
@@ -275,6 +315,9 @@ func resourceAssertSpecs(r ir.ResourceIR, wiring resourceWiringPlan, structName 
 		)
 	}
 	specs := []*ast.ValueSpec{specFor("Resource")}
+	if resourceHasIdentity(r) {
+		specs = append(specs, specFor("ResourceWithIdentity"))
+	}
 	if r.Importable {
 		specs = append(specs, specFor("ResourceWithImportState"))
 	}
@@ -295,6 +338,16 @@ func registerResourceImports(f *astgen.File, r ir.ResourceIR, wiring resourceWir
 	f.AddImport("context", "")
 	f.AddImport("github.com/hashicorp/terraform-plugin-framework/resource", "resource")
 	f.AddImport("github.com/hashicorp/terraform-plugin-framework/resource/schema", "schema")
+	if resourceHasIdentity(r) {
+		f.AddImport("github.com/hashicorp/terraform-plugin-framework/resource/identityschema", "identityschema")
+	}
+	// Wired CRUD bodies populate resp.Identity via path.Root after Create/Read/
+	// Update so the framework does not reject the response with "Missing Resource
+	// Identity After Create/Read". Only needed when the resource has identity and
+	// is wired (a non-wired resource keeps its scaffold body and never sets it).
+	if resourceHasIdentity(r) && wiring.wired {
+		f.AddImport("github.com/hashicorp/terraform-plugin-framework/path", "path")
+	}
 	// The model struct references types.* for every attribute and block field.
 	// Auto-inferred resources with an empty schema (no attributes or blocks)
 	// produce an empty model and must not import types, or the import is unused
@@ -303,44 +356,7 @@ func registerResourceImports(f *astgen.File, r ir.ResourceIR, wiring resourceWir
 		f.AddImport("github.com/hashicorp/terraform-plugin-framework/types", "types")
 	}
 	if wiring.wired {
-		// Wired CRUD bodies build and send HTTP requests through the generated
-		// client. encoding/json is always imported because every wired Read (and
-		// the create/update response decode) uses json.NewDecoder to decode the
-		// response body. bytes is only imported when a wired create/update sends
-		// a JSON request body (bytes.NewReader); a form-encoded body
-		// (url.Values + strings.NewReader, used when the operation carries
-		// formData parameters) imports net/url instead. A resource with a JSON
-		// create and a form update imports both bytes and net/url.
-		f.AddImport(clientImport, "client")
-		f.AddImports("encoding/json", "fmt", "io", "net/http")
-		// bytes wraps the encoded payload as the request body reader for JSON
-		// (bytes.NewReader) and XML (bytes.NewReader), and holds the multipart
-		// body buffer (bytes.Buffer). A form-encoded body uses strings.NewReader
-		// instead (net/url), so bytes is gated on JSON/XML/multipart.
-		if wiring.needsJSONBody || wiring.needsXMLBody || wiring.needsMultipartBody {
-			f.AddImport("bytes", "")
-		}
-		if wiring.needsFormBody || wiring.needsURL {
-			f.AddImport("net/url", "")
-		}
-		// multipart/form-data bodies are built with mime/multipart.NewWriter;
-		// a binary formData part reads the upload from a file path via os.Open.
-		if wiring.needsMultipartBody {
-			f.AddImport("mime/multipart", "")
-		}
-		if wiring.needsMultipartFile {
-			f.AddImport("os", "")
-			// filepath.Base derives the upload filename from the configured path
-			// for the multipart Content-Disposition, so the request does not
-			// leak the full local filesystem path as the part filename (A2).
-			f.AddImport("path/filepath", "")
-		}
-		if wiring.needsStrings {
-			f.AddImport("strings", "")
-		}
-		if wiring.needsStrconv {
-			f.AddImport("strconv", "")
-		}
+		registerWiredResourceImports(f, wiring, clientImport)
 	}
 	if objectSchemaNeedsValidators(r.Schema) {
 		f.AddImport("github.com/hashicorp/terraform-plugin-framework/schema/validator", "validator")
@@ -376,6 +392,47 @@ func registerResourceImports(f *astgen.File, r ir.ResourceIR, wiring resourceWir
 // resourceModelName returns the generated model struct name for a resource.
 func resourceModelName(r ir.ResourceIR) string {
 	return naming.PascalCase(r.Name) + "ResourceModel"
+}
+
+// registerWiredResourceImports adds the imports a wired CRUD body needs to build
+// and send HTTP requests through the generated client. encoding/json is always
+// imported because every wired Read (and the create/update response decode) uses
+// json.NewDecoder to decode the response body. bytes is only imported when a
+// wired create/update sends a JSON request body (bytes.NewReader); a form-encoded
+// body (url.Values + strings.NewReader, used when the operation carries formData
+// parameters) imports net/url instead. A resource with a JSON create and a form
+// update imports both bytes and net/url.
+func registerWiredResourceImports(f *astgen.File, wiring resourceWiringPlan, clientImport string) {
+	f.AddImport(clientImport, "client")
+	f.AddImports("encoding/json", "fmt", "io", "net/http")
+	// bytes wraps the encoded payload as the request body reader for JSON
+	// (bytes.NewReader) and XML (bytes.NewReader), and holds the multipart
+	// body buffer (bytes.Buffer). A form-encoded body uses strings.NewReader
+	// instead (net/url), so bytes is gated on JSON/XML/multipart.
+	if wiring.needsJSONBody || wiring.needsXMLBody || wiring.needsMultipartBody {
+		f.AddImport("bytes", "")
+	}
+	if wiring.needsFormBody || wiring.needsURL {
+		f.AddImport("net/url", "")
+	}
+	// multipart/form-data bodies are built with mime/multipart.NewWriter;
+	// a binary formData part reads the upload from a file path via os.Open.
+	if wiring.needsMultipartBody {
+		f.AddImport("mime/multipart", "")
+	}
+	if wiring.needsMultipartFile {
+		f.AddImport("os", "")
+		// filepath.Base derives the upload filename from the configured path
+		// for the multipart Content-Disposition, so the request does not
+		// leak the full local filesystem path as the part filename (A2).
+		f.AddImport("path/filepath", "")
+	}
+	if wiring.needsStrings {
+		f.AddImport("strings", "")
+	}
+	if wiring.needsStrconv {
+		f.AddImport("strconv", "")
+	}
 }
 
 // blockModelFieldType returns the Terraform Plugin Framework model field type for
@@ -543,6 +600,57 @@ func updateIDPreservation(r ir.ResourceIR) ast.Stmt {
 
 // resourceSchemaValues builds the []ast.Expr key/value elements for
 // resource/schema.Schema{...}.
+// resourceHasIdentity reports whether the resource carries a resource
+// identity schema (the schema shared with its paired list resource). The
+// generator only emits the IdentitySchema method and the ResourceWithIdentity
+// assertion when this is true, so resources without a paired list resource
+// are unaffected.
+func resourceHasIdentity(r ir.ResourceIR) bool {
+	return r.IdentitySchema != nil && len(r.IdentitySchema.Attributes) > 0
+}
+
+// resourceIdentitySchemaValues builds the identityschema.Schema composite
+// literal elements for the resource's identity schema. Identity schemas only
+// hold primitive (and list-of-primitive) attributes; the identity derivation
+// (pkg/api) only ever produces primitive identity attributes from instance
+// path parameters or the item "id", so each attribute maps to the matching
+// identityschema primitive attribute type. Every identity attribute is
+// RequiredForImport: importing a resource by its identity requires the fields
+// that uniquely identify it.
+func resourceIdentitySchemaValues(r ir.ResourceIR) []ast.Expr {
+	attrs := r.IdentitySchema.Attributes
+	attrElems := make([]ast.Expr, 0, len(attrs))
+	for _, attr := range attrs {
+		attrElems = append(attrElems, astgen.KeyValueExpr(
+			astgen.Lit(attr.Name),
+			resourceIdentityAttributeExpr(attr),
+		))
+	}
+	return []ast.Expr{astgen.KeyValue("Attributes", astgen.CompositeLit(
+		astgen.MapType(astgen.Ident("string"), astgen.QualExpr("identityschema", "Attribute")),
+		attrElems...,
+	))}
+}
+
+// resourceIdentityAttributeExpr returns an identityschema attribute composite
+// literal for a primitive identity attribute. Non-primitive types fall back to
+// StringAttribute; identity derivation only produces primitives, so this is a
+// defensive default rather than an expected path.
+func resourceIdentityAttributeExpr(attr ir.AttributeIR) ast.Expr {
+	var attrType ast.Expr
+	switch attr.Schema.Type {
+	case ir.TypeInt:
+		attrType = astgen.QualExpr("identityschema", "Int64Attribute")
+	case ir.TypeFloat:
+		attrType = astgen.QualExpr("identityschema", "Float64Attribute")
+	case ir.TypeBool:
+		attrType = astgen.QualExpr("identityschema", "BoolAttribute")
+	default:
+		attrType = astgen.QualExpr("identityschema", "StringAttribute")
+	}
+	return astgen.CompositeLit(attrType, astgen.KeyValue("RequiredForImport", astgen.Ident("true")))
+}
+
 func resourceSchemaValues(r ir.ResourceIR) []ast.Expr {
 	elems := []ast.Expr{}
 	if v := litOrOmit(r.Description); v != nil {

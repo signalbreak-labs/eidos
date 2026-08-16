@@ -304,8 +304,16 @@
     "reason": "authentication middleware"
   },
   {
+    "path": "internal/client/auth_test.go",
+    "reason": "authentication middleware unit tests"
+  },
+  {
     "path": "internal/client/client.go",
     "reason": "generated HTTP client"
+  },
+  {
+    "path": "internal/client/client_test.go",
+    "reason": "generated HTTP client unit tests"
   },
   {
     "path": "internal/client/errors.go",
@@ -314,6 +322,10 @@
   {
     "path": "internal/client/logging.go",
     "reason": "request/response trace logging"
+  },
+  {
+    "path": "internal/client/logging_test.go",
+    "reason": "trace logging unit tests"
   },
   {
     "path": "internal/client/models.go",
@@ -332,20 +344,40 @@
     "reason": "action mycloud_create_pull_request"
   },
   {
+    "path": "internal/provider/action_create_pull_request_remote_test.go",
+    "reason": "coverage tests for action create_pull_request remote helper"
+  },
+  {
     "path": "internal/provider/action_create_task.go",
     "reason": "action mycloud_create_task"
+  },
+  {
+    "path": "internal/provider/action_create_task_remote_test.go",
+    "reason": "coverage tests for action create_task remote helper"
   },
   {
     "path": "internal/provider/action_update_pull_request.go",
     "reason": "action mycloud_update_pull_request"
   },
   {
+    "path": "internal/provider/action_update_pull_request_remote_test.go",
+    "reason": "coverage tests for action update_pull_request remote helper"
+  },
+  {
     "path": "internal/provider/action_update_task.go",
     "reason": "action mycloud_update_task"
   },
   {
+    "path": "internal/provider/action_update_task_remote_test.go",
+    "reason": "coverage tests for action update_task remote helper"
+  },
+  {
     "path": "internal/provider/data_source_get_branch.go",
     "reason": "data source mycloud_get_branch"
+  },
+  {
+    "path": "internal/provider/data_source_get_branch_remote_test.go",
+    "reason": "coverage tests for data source get_branch remote helpers"
   },
   {
     "path": "internal/provider/data_source_get_branch_test.go",
@@ -356,12 +388,20 @@
     "reason": "data source mycloud_get_commit"
   },
   {
+    "path": "internal/provider/data_source_get_commit_remote_test.go",
+    "reason": "coverage tests for data source get_commit remote helpers"
+  },
+  {
     "path": "internal/provider/data_source_get_commit_test.go",
     "reason": "unit tests for data source get_commit"
   },
   {
     "path": "internal/provider/data_source_get_member.go",
     "reason": "data source mycloud_get_member"
+  },
+  {
+    "path": "internal/provider/data_source_get_member_remote_test.go",
+    "reason": "coverage tests for data source get_member remote helpers"
   },
   {
     "path": "internal/provider/data_source_get_member_test.go",
@@ -372,12 +412,20 @@
     "reason": "data source mycloud_get_pull_request"
   },
   {
+    "path": "internal/provider/data_source_get_pull_request_remote_test.go",
+    "reason": "coverage tests for data source get_pull_request remote helpers"
+  },
+  {
     "path": "internal/provider/data_source_get_pull_request_test.go",
     "reason": "unit tests for data source get_pull_request"
   },
   {
     "path": "internal/provider/data_source_get_task.go",
     "reason": "data source mycloud_get_task"
+  },
+  {
+    "path": "internal/provider/data_source_get_task_remote_test.go",
+    "reason": "coverage tests for data source get_task remote helpers"
   },
   {
     "path": "internal/provider/data_source_get_task_test.go",
@@ -388,12 +436,20 @@
     "reason": "data source mycloud_list_branches"
   },
   {
+    "path": "internal/provider/data_source_list_branches_remote_test.go",
+    "reason": "coverage tests for data source list_branches remote helpers"
+  },
+  {
     "path": "internal/provider/data_source_list_branches_test.go",
     "reason": "unit tests for data source list_branches"
   },
   {
     "path": "internal/provider/data_source_list_commits.go",
     "reason": "data source mycloud_list_commits"
+  },
+  {
+    "path": "internal/provider/data_source_list_commits_remote_test.go",
+    "reason": "coverage tests for data source list_commits remote helpers"
   },
   {
     "path": "internal/provider/data_source_list_commits_test.go",
@@ -404,12 +460,20 @@
     "reason": "data source mycloud_list_configs"
   },
   {
+    "path": "internal/provider/data_source_list_configs_remote_test.go",
+    "reason": "coverage tests for data source list_configs remote helpers"
+  },
+  {
     "path": "internal/provider/data_source_list_configs_test.go",
     "reason": "unit tests for data source list_configs"
   },
   {
     "path": "internal/provider/data_source_list_instances.go",
     "reason": "data source mycloud_list_instances"
+  },
+  {
+    "path": "internal/provider/data_source_list_instances_remote_test.go",
+    "reason": "coverage tests for data source list_instances remote helpers"
   },
   {
     "path": "internal/provider/data_source_list_instances_test.go",
@@ -420,12 +484,20 @@
     "reason": "data source mycloud_list_members"
   },
   {
+    "path": "internal/provider/data_source_list_members_remote_test.go",
+    "reason": "coverage tests for data source list_members remote helpers"
+  },
+  {
     "path": "internal/provider/data_source_list_members_test.go",
     "reason": "unit tests for data source list_members"
   },
   {
     "path": "internal/provider/data_source_list_networks.go",
     "reason": "data source mycloud_list_networks"
+  },
+  {
+    "path": "internal/provider/data_source_list_networks_remote_test.go",
+    "reason": "coverage tests for data source list_networks remote helpers"
   },
   {
     "path": "internal/provider/data_source_list_networks_test.go",
@@ -436,12 +508,20 @@
     "reason": "data source mycloud_list_projects_for_organization"
   },
   {
+    "path": "internal/provider/data_source_list_projects_for_organization_remote_test.go",
+    "reason": "coverage tests for data source list_projects_for_organization remote helpers"
+  },
+  {
     "path": "internal/provider/data_source_list_projects_for_organization_test.go",
     "reason": "unit tests for data source list_projects_for_organization"
   },
   {
     "path": "internal/provider/data_source_list_pull_requests.go",
     "reason": "data source mycloud_list_pull_requests"
+  },
+  {
+    "path": "internal/provider/data_source_list_pull_requests_remote_test.go",
+    "reason": "coverage tests for data source list_pull_requests remote helpers"
   },
   {
     "path": "internal/provider/data_source_list_pull_requests_test.go",
@@ -452,12 +532,20 @@
     "reason": "data source mycloud_list_secrets"
   },
   {
+    "path": "internal/provider/data_source_list_secrets_remote_test.go",
+    "reason": "coverage tests for data source list_secrets remote helpers"
+  },
+  {
     "path": "internal/provider/data_source_list_secrets_test.go",
     "reason": "unit tests for data source list_secrets"
   },
   {
     "path": "internal/provider/data_source_list_stacks.go",
     "reason": "data source mycloud_list_stacks"
+  },
+  {
+    "path": "internal/provider/data_source_list_stacks_remote_test.go",
+    "reason": "coverage tests for data source list_stacks remote helpers"
   },
   {
     "path": "internal/provider/data_source_list_stacks_test.go",
@@ -468,12 +556,20 @@
     "reason": "data source mycloud_list_tasks"
   },
   {
+    "path": "internal/provider/data_source_list_tasks_remote_test.go",
+    "reason": "coverage tests for data source list_tasks remote helpers"
+  },
+  {
     "path": "internal/provider/data_source_list_tasks_test.go",
     "reason": "unit tests for data source list_tasks"
   },
   {
     "path": "internal/provider/data_source_list_workspaces.go",
     "reason": "data source mycloud_list_workspaces"
+  },
+  {
+    "path": "internal/provider/data_source_list_workspaces_remote_test.go",
+    "reason": "coverage tests for data source list_workspaces remote helpers"
   },
   {
     "path": "internal/provider/data_source_list_workspaces_test.go",
@@ -488,48 +584,96 @@
     "reason": "list resource mycloud_list_branches"
   },
   {
+    "path": "internal/provider/list_list_branches_remote_test.go",
+    "reason": "coverage tests for list resource list_branches remote helper"
+  },
+  {
     "path": "internal/provider/list_list_commits.go",
     "reason": "list resource mycloud_list_commits"
+  },
+  {
+    "path": "internal/provider/list_list_commits_remote_test.go",
+    "reason": "coverage tests for list resource list_commits remote helper"
   },
   {
     "path": "internal/provider/list_list_configs.go",
     "reason": "list resource mycloud_list_configs"
   },
   {
+    "path": "internal/provider/list_list_configs_remote_test.go",
+    "reason": "coverage tests for list resource list_configs remote helper"
+  },
+  {
     "path": "internal/provider/list_list_instances.go",
     "reason": "list resource mycloud_list_instances"
+  },
+  {
+    "path": "internal/provider/list_list_instances_remote_test.go",
+    "reason": "coverage tests for list resource list_instances remote helper"
   },
   {
     "path": "internal/provider/list_list_members.go",
     "reason": "list resource mycloud_list_members"
   },
   {
+    "path": "internal/provider/list_list_members_remote_test.go",
+    "reason": "coverage tests for list resource list_members remote helper"
+  },
+  {
     "path": "internal/provider/list_list_networks.go",
     "reason": "list resource mycloud_list_networks"
+  },
+  {
+    "path": "internal/provider/list_list_networks_remote_test.go",
+    "reason": "coverage tests for list resource list_networks remote helper"
   },
   {
     "path": "internal/provider/list_list_projects_for_organization.go",
     "reason": "list resource mycloud_list_projects_for_organization"
   },
   {
+    "path": "internal/provider/list_list_projects_for_organization_remote_test.go",
+    "reason": "coverage tests for list resource list_projects_for_organization remote helper"
+  },
+  {
     "path": "internal/provider/list_list_pull_requests.go",
     "reason": "list resource mycloud_list_pull_requests"
+  },
+  {
+    "path": "internal/provider/list_list_pull_requests_remote_test.go",
+    "reason": "coverage tests for list resource list_pull_requests remote helper"
   },
   {
     "path": "internal/provider/list_list_secrets.go",
     "reason": "list resource mycloud_list_secrets"
   },
   {
+    "path": "internal/provider/list_list_secrets_remote_test.go",
+    "reason": "coverage tests for list resource list_secrets remote helper"
+  },
+  {
     "path": "internal/provider/list_list_stacks.go",
     "reason": "list resource mycloud_list_stacks"
+  },
+  {
+    "path": "internal/provider/list_list_stacks_remote_test.go",
+    "reason": "coverage tests for list resource list_stacks remote helper"
   },
   {
     "path": "internal/provider/list_list_tasks.go",
     "reason": "list resource mycloud_list_tasks"
   },
   {
+    "path": "internal/provider/list_list_tasks_remote_test.go",
+    "reason": "coverage tests for list resource list_tasks remote helper"
+  },
+  {
     "path": "internal/provider/list_list_workspaces.go",
     "reason": "list resource mycloud_list_workspaces"
+  },
+  {
+    "path": "internal/provider/list_list_workspaces_remote_test.go",
+    "reason": "coverage tests for list resource list_workspaces remote helper"
   },
   {
     "path": "internal/provider/provider.go",
@@ -548,6 +692,10 @@
     "reason": "acceptance tests for resource config"
   },
   {
+    "path": "internal/provider/resource_config_remote_test.go",
+    "reason": "coverage tests for resource config remote helpers"
+  },
+  {
     "path": "internal/provider/resource_config_test.go",
     "reason": "unit tests for resource config"
   },
@@ -558,6 +706,10 @@
   {
     "path": "internal/provider/resource_instance_acceptance_test.go",
     "reason": "acceptance tests for resource instance"
+  },
+  {
+    "path": "internal/provider/resource_instance_remote_test.go",
+    "reason": "coverage tests for resource instance remote helpers"
   },
   {
     "path": "internal/provider/resource_instance_test.go",
@@ -572,6 +724,10 @@
     "reason": "acceptance tests for resource network"
   },
   {
+    "path": "internal/provider/resource_network_remote_test.go",
+    "reason": "coverage tests for resource network remote helpers"
+  },
+  {
     "path": "internal/provider/resource_network_test.go",
     "reason": "unit tests for resource network"
   },
@@ -582,6 +738,10 @@
   {
     "path": "internal/provider/resource_project_acceptance_test.go",
     "reason": "acceptance tests for resource project"
+  },
+  {
+    "path": "internal/provider/resource_project_remote_test.go",
+    "reason": "coverage tests for resource project remote helpers"
   },
   {
     "path": "internal/provider/resource_project_test.go",
@@ -596,6 +756,10 @@
     "reason": "acceptance tests for resource secret"
   },
   {
+    "path": "internal/provider/resource_secret_remote_test.go",
+    "reason": "coverage tests for resource secret remote helpers"
+  },
+  {
     "path": "internal/provider/resource_secret_test.go",
     "reason": "unit tests for resource secret"
   },
@@ -606,6 +770,10 @@
   {
     "path": "internal/provider/resource_stack_acceptance_test.go",
     "reason": "acceptance tests for resource stack"
+  },
+  {
+    "path": "internal/provider/resource_stack_remote_test.go",
+    "reason": "coverage tests for resource stack remote helpers"
   },
   {
     "path": "internal/provider/resource_stack_test.go",
@@ -620,8 +788,16 @@
     "reason": "acceptance tests for resource workspace"
   },
   {
+    "path": "internal/provider/resource_workspace_remote_test.go",
+    "reason": "coverage tests for resource workspace remote helpers"
+  },
+  {
     "path": "internal/provider/resource_workspace_test.go",
     "reason": "unit tests for resource workspace"
+  },
+  {
+    "path": "internal/provider/testing_helpers_test.go",
+    "reason": "shared httptest helpers for coverage tests"
   },
   {
     "path": "internal/provider/validators.go",

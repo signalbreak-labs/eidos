@@ -118,6 +118,14 @@ type crudOperationPlan struct {
 	// unwraps the decoded response by this key before applying it to the model,
 	// keeping the schema and the response consistent (E1).
 	responseEnvelope string
+	// responseInnerPath is the property name to navigate into AFTER the response
+	// envelope is unwrapped, before applying the body to the model. It handles
+	// create/update responses that nest the created/updated resource under a
+	// named property alongside side-effect objects (e.g. SpaceTraders
+	// purchase-ship {data:{ship:{...},transaction:{...},agent:{...}}}; after
+	// unwrapping "data" the ship is still nested under "ship"). Empty when the
+	// response applies directly after the envelope unwrap.
+	responseInnerPath string
 }
 
 // paramSubstitution describes one query, header, or cookie parameter and the
@@ -444,6 +452,7 @@ func planOperation(r ir.ResourceIR, op ir.OperationMappingIR) (crudOperationPlan
 	planned.headerParams = headerParams
 	planned.cookieParams = cookieParams
 	planned.responseEnvelope = op.ResponseEnvelope
+	planned.responseInnerPath = op.ResponseInnerPath
 
 	// Per-operation security (REMAINING_GAPS §1). See applySecurityRequirements.
 	applySecurityRequirements(&planned, op.SecurityRequirements)
@@ -1210,7 +1219,7 @@ func sortedErrorCodes(m map[int]string) []int {
 
 // decodeAndApplyStmts emits the statements decoding a JSON response body and
 // applying it to the named model variable.
-func decodeAndApplyStmts(summary, modelVar, envelope string) []ast.Stmt {
+func decodeAndApplyStmts(summary, modelVar, envelope, innerPath string) []ast.Stmt {
 	stmts := []ast.Stmt{
 		astgen.DeclStmt(astgen.VarDeclGen(astgen.VarSpec(
 			"data",
@@ -1268,6 +1277,40 @@ func decodeAndApplyStmts(summary, modelVar, envelope string) []ast.Stmt {
 			),
 		})
 	}
+	// A create/update response may nest the resource under a named property
+	// alongside side-effect objects (e.g. SpaceTraders purchase-ship
+	// {data:{ship:{...},transaction:{...},agent:{...}}} unwraps "data" to
+	// {ship, transaction, agent}). Navigate into the inner property before
+	// applying the body to the model so the resource's fields (and identifier)
+	// resolve. The assertion is fail-safe: a response that does not carry the
+	// nested object leaves data untouched and applyJSONToModel finds no matching
+	// fields, surfacing the same clear "did not contain an identifier" error as
+	// before rather than silently tracking the wrong shape.
+	if innerPath != "" {
+		stmts = append(stmts, &ast.IfStmt{
+			Init: astgen.Assign(
+				[]ast.Expr{astgen.Ident("inner"), astgen.Ident("ok")},
+				[]ast.Expr{astgen.IndexExpr(astgen.Ident("data"), astgen.Lit(innerPath))},
+			),
+			Cond: astgen.Ident("ok"),
+			Body: astgen.Block(
+				&ast.IfStmt{
+					Init: astgen.Assign(
+						[]ast.Expr{astgen.Ident("im"), astgen.Ident("ok")},
+						[]ast.Expr{astgen.TypeAssertExpr(astgen.Ident("inner"), astgen.MapType(astgen.Ident("string"), astgen.Ident("any")))},
+					),
+					Cond: astgen.Ident("ok"),
+					Body: astgen.Block(
+						astgen.AssignStmt(
+							[]ast.Expr{astgen.Ident("data")},
+							[]ast.Expr{astgen.Ident("im")},
+							token.ASSIGN,
+						),
+					),
+				},
+			),
+		})
+	}
 	stmts = append(stmts,
 		astgen.AssignStmt(
 			[]ast.Expr{astgen.Ident("err")},
@@ -1293,6 +1336,74 @@ func stateSetStmt(modelVar string) ast.Stmt {
 			astgen.UnaryPtr(astgen.Ident(modelVar)),
 		)),
 	))
+}
+
+// identitySetStmts emits statements that populate resp.Identity from the model
+// after a wired Create/Read/Update, so a managed resource that implements
+// ResourceWithIdentity (paired with a list resource for terraform query) returns
+// the identity data the framework requires. Without it the framework rejects the
+// response with "Missing Resource Identity After Create/Read". Each identity
+// attribute is sourced from the model field whose wire name matches the identity
+// attribute's wire name (falling back to the attribute name), so the identity
+// reflects the resource's actual identifier as decoded from the response. The
+// identity is immutable, so Read/Update re-derive it from the same model field.
+// Returns nil when the resource has no identity schema, so inferred resources
+// without identity are unaffected.
+func identitySetStmts(r ir.ResourceIR, summary, modelVar string) []ast.Stmt {
+	if !resourceHasIdentity(r) {
+		return nil
+	}
+	var stmts []ast.Stmt
+	for _, idAttr := range r.IdentitySchema.Attributes {
+		field := identityModelField(r, idAttr)
+		if field == "" {
+			// No model field carries this identity value. Fail loud at runtime
+			// rather than silently returning a null identity the framework
+			// rejects with an opaque "no resource identity data" error.
+			stmts = append(stmts,
+				addErrorStmt(summary, astgen.Lit(fmt.Sprintf(
+					"No model attribute matches identity attribute %q, so the resource identity cannot be set.", idAttr.Name))),
+				astgen.Return(),
+			)
+			return stmts
+		}
+		stmts = append(stmts, astgen.ExprStmt(astgen.Call(
+			astgen.Selector(astgen.Selector(astgen.Ident("resp"), "Diagnostics"), "Append"),
+			astgen.Ellipsis(astgen.Call(
+				astgen.Selector(astgen.Selector(astgen.Ident("resp"), "Identity"), "SetAttribute"),
+				astgen.Ident("ctx"),
+				astgen.Call(astgen.QualExpr("path", "Root"), astgen.Lit(idAttr.Name)),
+				astgen.Selector(astgen.Ident(modelVar), field),
+			)),
+		)))
+	}
+	return stmts
+}
+
+// identityModelField returns the Go model field name carrying the value for an
+// identity attribute, matched by wire name (the JSON property name the identity
+// was derived from) and falling back to the sanitized attribute name. Returns
+// "" when no model attribute matches, which identitySetStmts surfaces as a
+// runtime diagnostic.
+func identityModelField(r ir.ResourceIR, idAttr ir.AttributeIR) string {
+	match := func(want string) string {
+		if want == "" {
+			return ""
+		}
+		for _, attr := range r.Schema.Attributes {
+			if schema.SkipAttrForModel(attr) {
+				continue
+			}
+			if attr.WireName == want || attr.Name == want {
+				return naming.GoFieldName(attr.Name)
+			}
+		}
+		return ""
+	}
+	if field := match(idAttr.WireName); field != "" {
+		return field
+	}
+	return match(idAttr.Name)
 }
 
 // requestBodyStmts returns the statements that build a wired create/update
@@ -1492,12 +1603,15 @@ func xmlBodyStmts(op crudOperationPlan, summary, modelVar string) ([]ast.Stmt, a
 	return stmts, body
 }
 
-// wiredCreateBody returns the Create body wired to the generated API client:
-// it posts the planned attributes to the create endpoint and stores the API
-// response as Terraform state.
-func wiredCreateBody(r ir.ResourceIR, plan resourceWiringPlan, modelName string) []ast.Stmt {
+// wiredCreateBody returns the framework Create body: it reads the plan, then
+// delegates the HTTP exchange to createRemote (which writes diagnostics to the
+// same resp), and finally populates the resource identity and stores state.
+// The HTTP logic lives in a separate method so it is unit-testable without
+// constructing a tfsdk.Plan, whose Schema is built from an internal
+// fwschema type that generated code cannot instantiate.
+func wiredCreateBody(r ir.ResourceIR, modelName string) []ast.Stmt {
 	summary := fmt.Sprintf("Error creating %s", resourceTypeName(r))
-	stmts := make([]ast.Stmt, 0, 24)
+	stmts := make([]ast.Stmt, 0, 12)
 	stmts = append(stmts,
 		astgen.VarDecl("plan", modelName, nil),
 		astgen.ExprStmt(astgen.Call(
@@ -1512,16 +1626,52 @@ func wiredCreateBody(r ir.ResourceIR, plan resourceWiringPlan, modelName string)
 			astgen.Call(astgen.Selector(astgen.Selector(astgen.Ident("resp"), "Diagnostics"), "HasError")),
 			astgen.Return(),
 		),
+		astgen.ExprStmt(astgen.Call(
+			astgen.Selector(astgen.Ident("r"), "createRemote"),
+			astgen.Ident("ctx"),
+			astgen.UnaryPtr(astgen.Ident("plan")),
+			astgen.Ident("resp"),
+		)),
+		astgen.If(
+			astgen.Call(astgen.Selector(astgen.Selector(astgen.Ident("resp"), "Diagnostics"), "HasError")),
+			astgen.Return(),
+		),
 	)
+	stmts = append(stmts, identitySetStmts(r, summary, "plan")...)
+	stmts = append(stmts, stateSetStmt("plan"))
+	return stmts
+}
+
+// wiredCreateHelperBody returns the body of createRemote: the client guard,
+// request body, request path, HTTP exchange, response decode, and identifier
+// fallback. It writes diagnostics to resp.Diagnostics and mutates *plan, so the
+// framework Create method can call it and then set state/identity on success.
+func wiredCreateHelperBody(r ir.ResourceIR, plan resourceWiringPlan) []ast.Stmt {
+	summary := fmt.Sprintf("Error creating %s", resourceTypeName(r))
 	bodyStmts, bodyExpr := requestBodyStmts(plan.create, summary, "plan")
+	stmts := make([]ast.Stmt, 0, 16)
 	stmts = append(stmts, clientGuardStmt("r"))
 	stmts = append(stmts, bodyStmts...)
 	stmts = append(stmts, requestPathStmts(plan.create, "plan")...)
 	stmts = append(stmts, sendRequestStmts(plan.create, "r", summary, "plan", bodyExpr, nil)...)
-	stmts = append(stmts, decodeAndApplyStmts(summary, "plan", plan.create.responseEnvelope)...)
+	stmts = append(stmts, decodeAndApplyStmts(summary, "plan", plan.create.responseEnvelope, plan.create.responseInnerPath)...)
 	stmts = append(stmts, createIDFallbackStmts(r, "plan", summary)...)
-	stmts = append(stmts, stateSetStmt("plan"))
 	return stmts
+}
+
+// wiredCreateHelperDecl emits the createRemote method declaration wired to the
+// generated API client. Emitted only for wired resources, alongside Create.
+func wiredCreateHelperDecl(r ir.ResourceIR, plan resourceWiringPlan, modelName, structName string) *ast.FuncDecl {
+	return astgen.MethodDecl(
+		"createRemote", "r", astgen.StarExpr(astgen.Ident(structName)),
+		astgen.Params(
+			astgen.Field("ctx", astgen.QualExpr("context", "Context"), ""),
+			astgen.Field("plan", astgen.StarExpr(astgen.Ident(modelName)), ""),
+			astgen.Field("resp", astgen.StarExpr(astgen.QualExpr("resource", "CreateResponse")), ""),
+		),
+		astgen.Results(),
+		astgen.Block(wiredCreateHelperBody(r, plan)...),
+	)
 }
 
 // createIDFallbackStmts emits the identifier-resolution fallback for a wired
@@ -1569,10 +1719,15 @@ func createIDFallbackStmts(r ir.ResourceIR, modelVar, summary string) []ast.Stmt
 	)}
 }
 
-// state when the API reports it is gone.
-func wiredReadBody(r ir.ResourceIR, plan resourceWiringPlan, modelName string) []ast.Stmt {
+// wiredReadBody returns the framework Read body: it reads the state, delegates
+// the HTTP exchange to readRemote (which reports whether the remote resource is
+// gone so the framework can drop it from state), and on success renews the
+// identity and stores state.
+func wiredReadBody(r ir.ResourceIR, modelName string) []ast.Stmt {
 	summary := fmt.Sprintf("Error reading %s", resourceTypeName(r))
-	stmts := make([]ast.Stmt, 0, 20)
+	stmts := make([]ast.Stmt, 0, 12)
+	// readRemote returns removed=true when the API reports 404, so the framework
+	// removes the resource from state rather than treating "gone" as an error.
 	stmts = append(stmts,
 		astgen.VarDecl("state", modelName, nil),
 		astgen.ExprStmt(astgen.Call(
@@ -1587,25 +1742,76 @@ func wiredReadBody(r ir.ResourceIR, plan resourceWiringPlan, modelName string) [
 			astgen.Call(astgen.Selector(astgen.Selector(astgen.Ident("resp"), "Diagnostics"), "HasError")),
 			astgen.Return(),
 		),
-		clientGuardStmt("r"),
+		astgen.If(
+			astgen.Call(
+				astgen.Selector(astgen.Ident("r"), "readRemote"),
+				astgen.Ident("ctx"),
+				astgen.UnaryPtr(astgen.Ident("state")),
+				astgen.Ident("resp"),
+			),
+			astgen.Block(
+				astgen.ExprStmt(astgen.Call(
+					astgen.Selector(astgen.Selector(astgen.Ident("resp"), "State"), "RemoveResource"),
+					astgen.Ident("ctx"),
+				)),
+				astgen.Return(),
+			),
+		),
+		astgen.If(
+			astgen.Call(astgen.Selector(astgen.Selector(astgen.Ident("resp"), "Diagnostics"), "HasError")),
+			astgen.Return(),
+		),
 	)
-	stmts = append(stmts, requestPathStmts(plan.read, "state")...)
-	stmts = append(stmts, sendRequestStmts(plan.read, "r", summary, "state", nil, []ast.Stmt{
-		astgen.ExprStmt(astgen.Call(
-			astgen.Selector(astgen.Selector(astgen.Ident("resp"), "State"), "RemoveResource"),
-			astgen.Ident("ctx"),
-		)),
-		astgen.Return(),
-	})...)
-	stmts = append(stmts, decodeAndApplyStmts(summary, "state", plan.read.responseEnvelope)...)
+	stmts = append(stmts, identitySetStmts(r, summary, "state")...)
 	stmts = append(stmts, stateSetStmt("state"))
 	return stmts
 }
 
-// wiredUpdateBody returns the Update body wired to the generated API client:
-// it sends the planned attributes to the update endpoint and stores the API
-// response as Terraform state.
-func wiredUpdateBody(r ir.ResourceIR, plan resourceWiringPlan, modelName string) []ast.Stmt {
+// wiredReadHelperBody returns the body of readRemote: the client guard, request
+// path, and HTTP exchange. A 404 sets the named return removed=true (signaling
+// the framework to drop the resource); any other non-success writes a
+// diagnostic. On success the response is decoded into *state.
+func wiredReadHelperBody(r ir.ResourceIR, plan resourceWiringPlan) []ast.Stmt {
+	summary := fmt.Sprintf("Error reading %s", resourceTypeName(r))
+	stmts := make([]ast.Stmt, 0, 12)
+	stmts = append(stmts, clientGuardStmt("r"))
+	stmts = append(stmts, requestPathStmts(plan.read, "state")...)
+	stmts = append(stmts, sendRequestStmts(plan.read, "r", summary, "state", nil, []ast.Stmt{
+		astgen.AssignStmt(
+			[]ast.Expr{astgen.Ident("removed")},
+			[]ast.Expr{astgen.Ident("true")},
+			token.ASSIGN,
+		),
+		astgen.Return(),
+	})...)
+	stmts = append(stmts, decodeAndApplyStmts(summary, "state", plan.read.responseEnvelope, "")...)
+	// Naked return yields removed=false on the happy path (the 404 branch above
+	// sets removed=true and returns early). Required because readRemote declares
+	// a named bool result.
+	stmts = append(stmts, astgen.Return())
+	return stmts
+}
+
+// wiredReadHelperDecl emits the readRemote method declaration wired to the
+// generated API client. Emitted only for wired resources, alongside Read.
+func wiredReadHelperDecl(r ir.ResourceIR, plan resourceWiringPlan, modelName, structName string) *ast.FuncDecl {
+	return astgen.MethodDecl(
+		"readRemote", "r", astgen.StarExpr(astgen.Ident(structName)),
+		astgen.Params(
+			astgen.Field("ctx", astgen.QualExpr("context", "Context"), ""),
+			astgen.Field("state", astgen.StarExpr(astgen.Ident(modelName)), ""),
+			astgen.Field("resp", astgen.StarExpr(astgen.QualExpr("resource", "ReadResponse")), ""),
+		),
+		astgen.Results(astgen.Field("removed", astgen.Ident("bool"), "")),
+		astgen.Block(wiredReadHelperBody(r, plan)...),
+	)
+}
+
+// wiredUpdateBody returns the framework Update body: it reads the plan and
+// prior state, carries over the identifier and computed values the plan leaves
+// unknown, then delegates the HTTP exchange to updateRemote, and on success
+// renews the identity and stores state.
+func wiredUpdateBody(r ir.ResourceIR, modelName string) []ast.Stmt {
 	summary := fmt.Sprintf("Error updating %s", resourceTypeName(r))
 	stmts := []ast.Stmt{
 		astgen.VarDecl("plan", modelName, nil),
@@ -1635,27 +1841,66 @@ func wiredUpdateBody(r ir.ResourceIR, plan resourceWiringPlan, modelName string)
 		stmts = append(stmts, preserve)
 	}
 	// Preserve computed state values (e.g. an optimistic-concurrency version)
-	// that the plan leaves unknown so the Update request body carries them (G20).
-	stmts = append(stmts, astgen.ExprStmt(astgen.Call(
-		astgen.Ident("preserveStateIntoPlan"),
-		astgen.UnaryPtr(astgen.Ident("plan")),
-		astgen.UnaryPtr(astgen.Ident("state")),
-	)))
-	bodyStmts, bodyExpr := requestBodyStmts(plan.updateOp, summary, "plan")
-	stmts = append(stmts, clientGuardStmt("r"))
-	stmts = append(stmts, bodyStmts...)
-	stmts = append(stmts, requestPathStmts(plan.updateOp, "plan")...)
-	stmts = append(stmts, sendRequestStmts(plan.updateOp, "r", summary, "plan", bodyExpr, nil)...)
-	stmts = append(stmts, decodeAndApplyStmts(summary, "plan", plan.updateOp.responseEnvelope)...)
+	// that the plan leaves unknown so the Update request body carries them (G20),
+	// then delegate the HTTP exchange to updateRemote and on success store state.
+	stmts = append(stmts,
+		astgen.ExprStmt(astgen.Call(
+			astgen.Ident("preserveStateIntoPlan"),
+			astgen.UnaryPtr(astgen.Ident("plan")),
+			astgen.UnaryPtr(astgen.Ident("state")),
+		)),
+		astgen.ExprStmt(astgen.Call(
+			astgen.Selector(astgen.Ident("r"), "updateRemote"),
+			astgen.Ident("ctx"),
+			astgen.UnaryPtr(astgen.Ident("plan")),
+			astgen.Ident("resp"),
+		)),
+		astgen.If(
+			astgen.Call(astgen.Selector(astgen.Selector(astgen.Ident("resp"), "Diagnostics"), "HasError")),
+			astgen.Return(),
+		),
+	)
+	stmts = append(stmts, identitySetStmts(r, summary, "plan")...)
 	stmts = append(stmts, stateSetStmt("plan"))
 	return stmts
 }
 
-// wiredDeleteBody returns the Delete body wired to the generated API client:
-// it deletes the remote resource, treating an HTTP 404 as already deleted.
-func wiredDeleteBody(r ir.ResourceIR, plan resourceWiringPlan, modelName string) []ast.Stmt {
-	summary := fmt.Sprintf("Error deleting %s", resourceTypeName(r))
+// wiredUpdateHelperBody returns the body of updateRemote: the client guard,
+// request body, request path, HTTP exchange, and response decode. It writes
+// diagnostics to resp.Diagnostics and mutates *plan, so the framework Update
+// method can call it and then set state/identity on success.
+func wiredUpdateHelperBody(r ir.ResourceIR, plan resourceWiringPlan) []ast.Stmt {
+	summary := fmt.Sprintf("Error updating %s", resourceTypeName(r))
+	bodyStmts, bodyExpr := requestBodyStmts(plan.updateOp, summary, "plan")
 	stmts := make([]ast.Stmt, 0, 16)
+	stmts = append(stmts, clientGuardStmt("r"))
+	stmts = append(stmts, bodyStmts...)
+	stmts = append(stmts, requestPathStmts(plan.updateOp, "plan")...)
+	stmts = append(stmts, sendRequestStmts(plan.updateOp, "r", summary, "plan", bodyExpr, nil)...)
+	stmts = append(stmts, decodeAndApplyStmts(summary, "plan", plan.updateOp.responseEnvelope, plan.updateOp.responseInnerPath)...)
+	return stmts
+}
+
+// wiredUpdateHelperDecl emits the updateRemote method declaration wired to the
+// generated API client. Emitted only for wired resources with an update op.
+func wiredUpdateHelperDecl(r ir.ResourceIR, plan resourceWiringPlan, modelName, structName string) *ast.FuncDecl {
+	return astgen.MethodDecl(
+		"updateRemote", "r", astgen.StarExpr(astgen.Ident(structName)),
+		astgen.Params(
+			astgen.Field("ctx", astgen.QualExpr("context", "Context"), ""),
+			astgen.Field("plan", astgen.StarExpr(astgen.Ident(modelName)), ""),
+			astgen.Field("resp", astgen.StarExpr(astgen.QualExpr("resource", "UpdateResponse")), ""),
+		),
+		astgen.Results(),
+		astgen.Block(wiredUpdateHelperBody(r, plan)...),
+	)
+}
+
+// wiredDeleteBody returns the framework Delete body: it reads the state, then
+// delegates the HTTP exchange to deleteRemote (which treats a 404 as already
+// deleted and reports other errors via diagnostics).
+func wiredDeleteBody(modelName string) []ast.Stmt {
+	stmts := make([]ast.Stmt, 0, 8)
 	stmts = append(stmts,
 		astgen.VarDecl("state", modelName, nil),
 		astgen.ExprStmt(astgen.Call(
@@ -1670,13 +1915,43 @@ func wiredDeleteBody(r ir.ResourceIR, plan resourceWiringPlan, modelName string)
 			astgen.Call(astgen.Selector(astgen.Selector(astgen.Ident("resp"), "Diagnostics"), "HasError")),
 			astgen.Return(),
 		),
-		clientGuardStmt("r"),
+		astgen.ExprStmt(astgen.Call(
+			astgen.Selector(astgen.Ident("r"), "deleteRemote"),
+			astgen.Ident("ctx"),
+			astgen.UnaryPtr(astgen.Ident("state")),
+			astgen.Ident("resp"),
+		)),
 	)
+	return stmts
+}
+
+// wiredDeleteHelperBody returns the body of deleteRemote: the client guard,
+// request path, and HTTP exchange. A 404 returns silently (the resource is
+// already gone); any other non-success writes a diagnostic.
+func wiredDeleteHelperBody(r ir.ResourceIR, plan resourceWiringPlan) []ast.Stmt {
+	summary := fmt.Sprintf("Error deleting %s", resourceTypeName(r))
+	stmts := make([]ast.Stmt, 0, 8)
+	stmts = append(stmts, clientGuardStmt("r"))
 	stmts = append(stmts, requestPathStmts(plan.delete, "state")...)
 	stmts = append(stmts, sendRequestStmts(plan.delete, "r", summary, "state", nil, []ast.Stmt{
 		astgen.Return(),
 	})...)
 	return stmts
+}
+
+// wiredDeleteHelperDecl emits the deleteRemote method declaration wired to the
+// generated API client. Emitted only for wired resources, alongside Delete.
+func wiredDeleteHelperDecl(r ir.ResourceIR, plan resourceWiringPlan, modelName, structName string) *ast.FuncDecl {
+	return astgen.MethodDecl(
+		"deleteRemote", "r", astgen.StarExpr(astgen.Ident(structName)),
+		astgen.Params(
+			astgen.Field("ctx", astgen.QualExpr("context", "Context"), ""),
+			astgen.Field("state", astgen.StarExpr(astgen.Ident(modelName)), ""),
+			astgen.Field("resp", astgen.StarExpr(astgen.QualExpr("resource", "DeleteResponse")), ""),
+		),
+		astgen.Results(),
+		astgen.Block(wiredDeleteHelperBody(r, plan)...),
+	)
 }
 
 // resourceConfigureDecl returns the Configure method implementing

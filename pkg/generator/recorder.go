@@ -200,6 +200,14 @@ func CollectFromProviderIR(provider *ir.ProviderIR, opts CollectOptions) []FileE
 
 		rec.Record("internal/provider/validators.go", "custom schema validators")
 
+		// The shared coverage-test helpers file is emitted once when at least
+		// one resource produces a coverage test file (wired and non-binary
+		// upload). This mirrors TestFiles so record and write modes name the
+		// same set of files.
+		if opts.IncludeTests && (anyResourceCoverageEligible(provider.Resources) || anyDataSourceCoverageEligible(provider.DataSources) || anyActionCoverageEligible(provider.Actions) || anyEphemeralCoverageEligible(provider.EphemeralResources) || anyListCoverageEligible(provider.ListResources)) {
+			rec.Record("internal/provider/testing_helpers_test.go", "shared httptest helpers for coverage tests")
+		}
+
 		if AnyResourceWired(provider.Resources) || AnyDataSourceWired(provider.DataSources) || AnyEphemeralWired(provider.EphemeralResources) || AnyActionSendsBody(provider.Actions) {
 			rec.Record("internal/provider/json_convert.go", "JSON/model conversion helpers for wired CRUD bodies")
 		}
@@ -234,6 +242,10 @@ func collectResourceFiles(rec *Recorder, res ir.ResourceIR, opts CollectOptions)
 		// write modes stay in lockstep.
 		if planResourceWiring(res).wired && !resourceCreateHasBinaryUpload(res) {
 			rec.Record(fmt.Sprintf("internal/provider/resource_%s_acceptance_test.go", name), fmt.Sprintf("acceptance tests for resource %s", res.Name))
+			// Coverage tests exercise the extracted *Remote helpers directly
+			// against an httptest mock under the same eligibility gate as the
+			// acceptance test, so record and write modes stay in lockstep.
+			rec.Record(fmt.Sprintf("internal/provider/resource_%s_remote_test.go", name), fmt.Sprintf("coverage tests for resource %s remote helpers", res.Name))
 		}
 	}
 	if opts.IncludeDocs {
@@ -249,6 +261,13 @@ func collectDataSourceFiles(rec *Recorder, ds ir.DataSourceIR, opts CollectOptio
 	rec.Record(fmt.Sprintf("internal/provider/data_source_%s.go", name), fmt.Sprintf("data source %s", displayName(ds.Name, ds.FullName)))
 	if opts.IncludeTests {
 		rec.Record(fmt.Sprintf("internal/provider/data_source_%s_test.go", name), fmt.Sprintf("unit tests for data source %s", ds.Name))
+		// Coverage tests exercise the extracted readRemote/readListRemote helpers
+		// directly against an httptest mock under the same eligibility gate as
+		// TestFiles (wired data sources), so record and write modes stay in
+		// lockstep.
+		if planDataSourceWiring(ds).wired {
+			rec.Record(fmt.Sprintf("internal/provider/data_source_%s_remote_test.go", name), fmt.Sprintf("coverage tests for data source %s remote helpers", ds.Name))
+		}
 	}
 	if opts.IncludeDocs {
 		rec.Record(fmt.Sprintf("docs/data-sources/%s.md", name), fmt.Sprintf("documentation for data source %s", ds.Name))
@@ -261,6 +280,15 @@ func collectDataSourceFiles(rec *Recorder, ds ir.DataSourceIR, opts CollectOptio
 func collectActionFiles(rec *Recorder, act ir.ActionIR, opts CollectOptions) {
 	name := fileName(act.Name)
 	rec.Record(fmt.Sprintf("internal/provider/action_%s.go", name), fmt.Sprintf("action %s", displayName(act.Name, act.FullName)))
+	if opts.IncludeTests {
+		// Coverage tests exercise the extracted invokeRemote helper directly
+		// against an httptest mock under the same eligibility gate as
+		// TestFiles (wired actions), so record and write modes stay in
+		// lockstep.
+		if planActionWiring(act).wired {
+			rec.Record(fmt.Sprintf("internal/provider/action_%s_remote_test.go", name), fmt.Sprintf("coverage tests for action %s remote helper", act.Name))
+		}
+	}
 	if opts.IncludeDocs {
 		rec.Record(fmt.Sprintf("docs/actions/%s.md", name), fmt.Sprintf("documentation for action %s", act.Name))
 	}
@@ -272,6 +300,15 @@ func collectActionFiles(rec *Recorder, act ir.ActionIR, opts CollectOptions) {
 func collectEphemeralResourceFiles(rec *Recorder, er ir.EphemeralResourceIR, opts CollectOptions) {
 	name := fileName(er.Name)
 	rec.Record(fmt.Sprintf("internal/provider/ephemeral_%s.go", name), fmt.Sprintf("ephemeral resource %s", displayName(er.Name, er.FullName)))
+	if opts.IncludeTests {
+		// Coverage tests exercise the extracted openRemote helper directly
+		// against an httptest mock under the same eligibility gate as
+		// TestFiles (wired ephemeral resources), so record and write modes
+		// stay in lockstep.
+		if planEphemeralWiring(er).wired {
+			rec.Record(fmt.Sprintf("internal/provider/ephemeral_%s_remote_test.go", name), fmt.Sprintf("coverage tests for ephemeral resource %s remote helper", er.Name))
+		}
+	}
 	if opts.IncludeDocs {
 		rec.Record(fmt.Sprintf("docs/ephemeral-resources/%s.md", name), fmt.Sprintf("documentation for ephemeral resource %s", er.Name))
 	}
@@ -283,6 +320,15 @@ func collectEphemeralResourceFiles(rec *Recorder, er ir.EphemeralResourceIR, opt
 func collectListResourceFiles(rec *Recorder, lr ir.ListResourceIR, opts CollectOptions) {
 	name := fileName(lr.Name)
 	rec.Record(fmt.Sprintf("internal/provider/list_%s.go", name), fmt.Sprintf("list resource %s", displayName(lr.Name, lr.FullName)))
+	if opts.IncludeTests {
+		// Coverage tests exercise the extracted listRemote helper directly
+		// against an httptest mock under the same eligibility gate as
+		// TestFiles (wired list resources), so record and write modes stay in
+		// lockstep.
+		if planListResourceWiring(lr).wired {
+			rec.Record(fmt.Sprintf("internal/provider/list_%s_remote_test.go", name), fmt.Sprintf("coverage tests for list resource %s remote helper", lr.Name))
+		}
+	}
 	if opts.IncludeDocs {
 		rec.Record(fmt.Sprintf("docs/list-resources/%s.md", name), fmt.Sprintf("documentation for list resource %s", lr.Name))
 	}
@@ -299,9 +345,10 @@ func collectFunctionFiles(rec *Recorder, fn ir.FunctionIR, opts CollectOptions) 
 // collectClientFiles records the internal/client package file set. It must
 // match ClientFiles (client.go) exactly so dry-run output names the same files
 // write mode creates: client.go, models.go, errors.go, retry.go, pagination.go,
-// and logging.go unconditionally, plus auth.go only when the provider declares
-// security schemes. Previously record mode invented auth.go for auth-less APIs
-// and omitted errors.go, pagination.go, and logging.go (H-13).
+// logging.go, client_test.go, and logging_test.go unconditionally, plus auth.go
+// and auth_test.go only when the provider declares security schemes. Previously
+// record mode invented auth.go for auth-less APIs and omitted errors.go,
+// pagination.go, and logging.go (H-13).
 func collectClientFiles(rec *Recorder, provider *ir.ProviderIR, _ CollectOptions) {
 	rec.Record("internal/client/client.go", "generated HTTP client")
 	rec.Record("internal/client/models.go", "request/response model structs")
@@ -309,8 +356,11 @@ func collectClientFiles(rec *Recorder, provider *ir.ProviderIR, _ CollectOptions
 	rec.Record("internal/client/retry.go", "retry logic with exponential backoff")
 	rec.Record("internal/client/pagination.go", "pagination helpers")
 	rec.Record("internal/client/logging.go", "request/response trace logging")
+	rec.Record("internal/client/client_test.go", "generated HTTP client unit tests")
+	rec.Record("internal/client/logging_test.go", "trace logging unit tests")
 	if provider != nil && len(provider.SecurityIR.Schemes) > 0 {
 		rec.Record("internal/client/auth.go", "authentication middleware")
+		rec.Record("internal/client/auth_test.go", "authentication middleware unit tests")
 	}
 }
 
@@ -334,6 +384,70 @@ func collectRootFiles(rec *Recorder, provider *ir.ProviderIR, opts CollectOption
 	if opts.IncludeConfig {
 		rec.Record("generator.yaml", "generated generator configuration")
 	}
+}
+
+// anyResourceCoverageEligible reports whether at least one resource would
+// produce a coverage test file (wired and not a binary file-upload create). It
+// mirrors the gate in ResourceCoverageTestFiles so the shared helpers file is
+// recorded exactly when it is emitted.
+func anyResourceCoverageEligible(resources []ir.ResourceIR) bool {
+	for _, res := range resources {
+		if planResourceWiring(res).wired && !resourceCreateHasBinaryUpload(res) {
+			return true
+		}
+	}
+	return false
+}
+
+// anyDataSourceCoverageEligible reports whether at least one data source would
+// produce a coverage test file (wired). It mirrors the gate in
+// DataSourceCoverageTestFiles so the shared helpers file is recorded exactly
+// when it is emitted.
+func anyDataSourceCoverageEligible(dataSources []ir.DataSourceIR) bool {
+	for _, ds := range dataSources {
+		if planDataSourceWiring(ds).wired {
+			return true
+		}
+	}
+	return false
+}
+
+// anyActionCoverageEligible reports whether at least one action would produce a
+// coverage test file (wired). It mirrors the gate in ActionCoverageTestFiles so
+// the shared helpers file is recorded exactly when it is emitted.
+func anyActionCoverageEligible(actions []ir.ActionIR) bool {
+	for _, a := range actions {
+		if planActionWiring(a).wired {
+			return true
+		}
+	}
+	return false
+}
+
+// anyEphemeralCoverageEligible reports whether at least one ephemeral resource
+// would produce a coverage test file (wired). It mirrors the gate in
+// EphemeralCoverageTestFiles so the shared helpers file is recorded exactly
+// when it is emitted.
+func anyEphemeralCoverageEligible(ers []ir.EphemeralResourceIR) bool {
+	for _, er := range ers {
+		if planEphemeralWiring(er).wired {
+			return true
+		}
+	}
+	return false
+}
+
+// anyListCoverageEligible reports whether at least one list resource would
+// produce a coverage test file (wired). It mirrors the gate in
+// ListCoverageTestFiles so the shared helpers file is recorded exactly when it
+// is emitted.
+func anyListCoverageEligible(lrs []ir.ListResourceIR) bool {
+	for _, lr := range lrs {
+		if planListResourceWiring(lr).wired {
+			return true
+		}
+	}
+	return false
 }
 
 // fileName converts an IR construct name into a safe file name segment. It

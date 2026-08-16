@@ -1,10 +1,12 @@
 package transformer
 
 import (
+	"fmt"
 	"sort"
 	"strings"
 	"unicode"
 
+	"github.com/signalbreak-labs/eidos/pkg/diagnostics"
 	"github.com/signalbreak-labs/eidos/pkg/ir"
 )
 
@@ -143,8 +145,34 @@ func toHumanName(s string) string {
 // each parameter becomes a Required (path or required param) or Optional
 // attribute, and request-body properties become Optional write inputs.
 // Duplicate normalized names (e.g. "fooBar" and "foo_bar") are deduplicated
-// first-wins, parameters taking precedence.
+// first-wins, parameters taking precedence. Diagnostics are discarded; callers
+// that need fail-loud collision warnings (the generate pipeline) use
+// ObjectSchemaFromOperationWithDiagnostics instead.
 func ObjectSchemaFromOperation(op Operation) ir.ObjectSchemaIR {
+	return ObjectSchemaFromOperationWithDiagnostics(op, nil)
+}
+
+// ObjectSchemaFromOperationWithDiagnostics is ObjectSchemaFromOperation that
+// appends fail-loud diagnostics to diags (a nil diags is allowed and simply
+// suppresses emission). The only diagnostic it emits today is the path/body
+// name collision described below.
+//
+// A request-body property whose sanitized Terraform name collides with a
+// path-parameter's sanitized name represents a DISTINCT API field, not a
+// duplicate: the path parameter identifies the resource acted on while the
+// body property is a separate request input. The canonical case is
+// SpaceTraders transfer-cargo, whose path /my/ships/{shipSymbol}/transfer names
+// the source ship while the request body's required "shipSymbol" names the
+// target ship. First-wins dedup would silently drop the body property, making
+// the action unusable (the API rejects the missing required field) and
+// violating fail-loud. Instead, the colliding body attribute is disambiguated
+// with a "body_" prefix so both remain configurable; its WireName keeps the
+// original property name so the request body key is correct. A Warning is
+// emitted so the disambiguation is never silent. Path parameters deliberately
+// carry no WireName here: they are substituted into the URL path, and emitting
+// them into the request body under their wire name would collide with (and, by
+// map-key overwrite, clobber) the body's same-named field.
+func ObjectSchemaFromOperationWithDiagnostics(op Operation, diags *diagnostics.Diagnostics) ir.ObjectSchemaIR {
 	if len(op.Parameters) == 0 && op.RequestSchema == nil {
 		return ir.ObjectSchemaIR{}
 	}
@@ -156,6 +184,7 @@ func ObjectSchemaFromOperation(op Operation) ir.ObjectSchemaIR {
 	// (L-100).
 	var attrs []ir.AttributeIR
 	seen := make(map[string]struct{})
+	pathNames := make(map[string]struct{})
 	add := func(a ir.AttributeIR) {
 		if _, dup := seen[a.Name]; dup {
 			return
@@ -164,9 +193,11 @@ func ObjectSchemaFromOperation(op Operation) ir.ObjectSchemaIR {
 		attrs = append(attrs, a)
 	}
 	for _, p := range op.Parameters {
+		name := SanitizeAttributeName(p.Name)
+		pathNames[name] = struct{}{}
 		schema := ir.SchemaIR{Type: mapParamType(p.Type)}
 		add(ir.AttributeIR{
-			Name:     SanitizeAttributeName(p.Name),
+			Name:     name,
 			Schema:   schema,
 			Required: p.Required,
 			Optional: !p.Required,
@@ -175,6 +206,31 @@ func ObjectSchemaFromOperation(op Operation) ir.ObjectSchemaIR {
 
 	if op.RequestSchema != nil {
 		for _, a := range requestBodyAttributes(*op.RequestSchema) {
+			if _, isPath := pathNames[a.Name]; isPath {
+				// Path/body name collision: disambiguate the body attribute so it
+				// is not dropped, preserving its WireName for the request body
+				// key. See the function doc comment for the rationale.
+				orig := a.Name
+				a.Name = "body_" + orig
+				for i := 2; ; i++ {
+					if _, dup := seen[a.Name]; !dup {
+						break
+					}
+					a.Name = fmt.Sprintf("body_%s_%d", orig, i)
+				}
+				if diags != nil {
+					*diags = append(*diags, diagnostics.Diagnostic{
+						Severity: diagnostics.Warning,
+						Summary:  "request-body property collides with a path parameter name",
+						Detail: fmt.Sprintf(
+							"operation %q has a path parameter and a request-body property that both normalize to %q. "+
+								"They are distinct API fields, so the body attribute is disambiguated as %q "+
+								"(wire name %q preserved for the request body). Set both in the action config: "+
+								"the bare attribute for the path parameter and the body_-prefixed attribute for the request body.",
+							op.OperationID, orig, a.Name, a.WireName),
+					})
+				}
+			}
 			add(a)
 		}
 	}
@@ -195,8 +251,17 @@ func requestBodyAttributes(spec SchemaSpec) []ir.AttributeIR {
 		}
 		attrs := make([]ir.AttributeIR, 0, len(spec.Properties))
 		for name, prop := range spec.Properties {
+			// WireName carries the original OpenAPI property name (commonly
+			// camelCase, e.g. "waypointSymbol") so the generated model field
+			// gets a `json:"waypointSymbol"` tag and modelToJSONMap emits the
+			// API's wire name as the request-body key. Without it the body key
+			// falls back to the snake_case Terraform attribute name and
+			// multi-word fields are reported "undefined"/Required by the API
+			// (422). Single-word names where snake_case == wire name are
+			// unaffected, which is why symbol/units/produce happened to work.
 			attrs = append(attrs, ir.AttributeIR{
 				Name:     SanitizeAttributeName(name),
+				WireName: name,
 				Schema:   schemaIRFromSpec(prop),
 				Required: required[name],
 				Optional: !required[name],

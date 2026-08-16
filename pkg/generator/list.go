@@ -276,6 +276,15 @@ func generateListResourceFile(lr ir.ListResourceIR, clientImport string) *ast.Fi
 	// keep the honest scaffold body.
 	f.AddComment("List streams matching resource instances for terraform query.")
 	f.AddDecl(listMethodDecl(lr, wiring, structName, modelName, wired))
+	// listRemote helper. Wired list resources extract the HTTP/pagination
+	// exchange into a method on the receiver so it is unit-testable without a
+	// list.ListRequest (whose identity schema type is built from an internal
+	// fwschema type generated code cannot instantiate). Emitted in the same file
+	// as List so the l.client.NewRequest marker stays put.
+	if wired {
+		f.AddComment("listRemote fetches and decodes the collection pages, returning the items and any diagnostics for the List iterator to surface.")
+		f.AddDecl(wiredListHelperDecl(lr, wiring, modelName, structName))
+	}
 
 	// Configure method. Wired list resources implement ListResourceWithConfigure
 	// to receive the API client constructed by the provider's Configure method.
@@ -285,11 +294,11 @@ func generateListResourceFile(lr ir.ListResourceIR, clientImport string) *ast.Fi
 	}
 
 	f.AddImport("context", "")
-	if !wired {
-		// Only the scaffold List body references diag (the fatal error
-		// diagnostic); the wired body reports through ListResult.Diagnostics.
-		f.AddImport("github.com/hashicorp/terraform-plugin-framework/diag", "diag")
-	}
+	// diag is referenced by both List bodies: the scaffold surfaces a fatal
+	// error diagnostic through the results stream, and the wired listRemote
+	// helper returns a diag.Diagnostics value the framework closure surfaces as
+	// a single error ListResult.
+	f.AddImport("github.com/hashicorp/terraform-plugin-framework/diag", "diag")
 	f.AddImport("github.com/hashicorp/terraform-plugin-framework/list", "list")
 	f.AddImport("github.com/hashicorp/terraform-plugin-framework/list/schema", "listschema")
 	f.AddImport("github.com/hashicorp/terraform-plugin-framework/resource", "resource")

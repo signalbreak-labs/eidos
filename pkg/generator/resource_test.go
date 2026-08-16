@@ -61,6 +61,100 @@ func TestResourceFile_Render(t *testing.T) {
 	}
 }
 
+// TestResourceFile_NoIdentitySchemaByDefault confirms a resource with no
+// paired list resource (no IdentitySchema) emits neither the IdentitySchema
+// method nor the ResourceWithIdentity assertion, so the common case is
+// unaffected and the identityschema import is not pulled in.
+func TestResourceFile_NoIdentitySchemaByDefault(t *testing.T) {
+	r := sampleResourceIR()
+	file := ResourceFile(r, testClientImport)
+	var buf bytes.Buffer
+	if err := file.Render(&buf); err != nil {
+		t.Fatalf("Render() error = %v", err)
+	}
+	got := buf.String()
+	for _, unwanted := range []string{
+		"func (r *PetResource) IdentitySchema",
+		"resource.ResourceWithIdentity",
+		`"github.com/hashicorp/terraform-plugin-framework/resource/identityschema"`,
+	} {
+		if strings.Contains(got, unwanted) {
+			t.Errorf("resource without identity should not emit %q\ncontent:\n%s", unwanted, got)
+		}
+	}
+}
+
+// TestResourceFile_IdentitySchema verifies that a resource carrying an
+// IdentitySchema (paired with a list resource) emits the IdentitySchema method
+// returning an identityschema.Schema, the ResourceWithIdentity assertion, and
+// the identityschema import. Each primitive identity attribute maps to the
+// matching identityschema attribute type and is RequiredForImport.
+func TestResourceFile_IdentitySchema(t *testing.T) {
+	r := sampleResourceIR()
+	identity := ir.ObjectSchemaIR{
+		Attributes: []ir.AttributeIR{
+			{Name: "ship_symbol", WireName: "symbol", Computed: true, Schema: ir.SchemaIR{Type: ir.TypeString}},
+			{Name: "count", Computed: true, Schema: ir.SchemaIR{Type: ir.TypeInt}},
+			{Name: "ratio", Computed: true, Schema: ir.SchemaIR{Type: ir.TypeFloat}},
+			{Name: "active", Computed: true, Schema: ir.SchemaIR{Type: ir.TypeBool}},
+		},
+	}
+	r.IdentitySchema = &identity
+
+	file := ResourceFile(r, testClientImport)
+	var buf bytes.Buffer
+	if err := file.Render(&buf); err != nil {
+		t.Fatalf("Render() error = %v", err)
+	}
+	got := buf.String()
+
+	wantSubstrings := []string{
+		"func (r *PetResource) IdentitySchema",
+		"resource.ResourceWithIdentity",
+		`"github.com/hashicorp/terraform-plugin-framework/resource/identityschema"`,
+		`identityschema.Schema{Attributes: map[string]identityschema.Attribute{"ship_symbol": identityschema.StringAttribute{RequiredForImport: true}, "count": identityschema.Int64Attribute{RequiredForImport: true}, "ratio": identityschema.Float64Attribute{RequiredForImport: true}, "active": identityschema.BoolAttribute{RequiredForImport: true}}}`,
+	}
+	for _, want := range wantSubstrings {
+		if !strings.Contains(got, want) {
+			t.Errorf("generated resource file missing %q\ncontent:\n%s", want, got)
+		}
+	}
+}
+
+// TestResourceFile_IdentitySchema_Compiles generates a full provider module
+// whose managed resource carries an identity schema and compiles it, proving
+// the IdentitySchema method, the ResourceWithIdentity assertion, and the
+// identityschema import are syntactically valid against the plugin framework.
+func TestResourceFile_IdentitySchema_Compiles(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping network-bound compile test in -short mode")
+	}
+	p := sampleProviderWithResourceIR()
+	identity := ir.ObjectSchemaIR{
+		Attributes: []ir.AttributeIR{
+			{Name: "ship_symbol", WireName: "symbol", Computed: true, Schema: ir.SchemaIR{Type: ir.TypeString}},
+			{Name: "count", Computed: true, Schema: ir.SchemaIR{Type: ir.TypeInt}},
+		},
+	}
+	p.Resources[0].IdentitySchema = &identity
+
+	tmp := generateResourceModule(t, p)
+
+	ctx, cancel := contextWithTimeout(t, 5*time.Minute)
+	defer cancel()
+
+	tidyCmd := exec.CommandContext(ctx, "go", "mod", "tidy")
+	tidyCmd.Dir = tmp
+	if out, err := tidyCmd.CombinedOutput(); err != nil {
+		t.Fatalf("go mod tidy failed: %v\n%s", err, out)
+	}
+	buildCmd := exec.CommandContext(ctx, "go", "build", "./...")
+	buildCmd.Dir = tmp
+	if out, err := buildCmd.CombinedOutput(); err != nil {
+		t.Fatalf("go build ./... failed for identity-enabled resource: %v\n%s", err, out)
+	}
+}
+
 // TestResourceFile_SchemaValidation generates a minimal provider module with
 // one managed resource and runs the Terraform plugin-framework schema
 // validation to confirm the generated resource.go compiles and its schema is

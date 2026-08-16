@@ -58,6 +58,15 @@ func (r *NetworkResource) Create(ctx context.Context, req resource.CreateRequest
 	if resp.Diagnostics.HasError() {
 		return
 	}
+	r.createRemote(ctx, &plan, resp)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
+}
+
+// createRemote performs the create HTTP exchange and decodes the response into plan. Extracted from Create so the request/response logic is unit-testable without a tfsdk.Plan.
+func (r *NetworkResource) createRemote(ctx context.Context, plan *NetworkResourceModel, resp *resource.CreateResponse) {
 	if r.client == nil {
 		resp.Diagnostics.AddError("Client Not Configured", "The API client was not set on the resource. The provider Configure method must run before resource operations; this is a bug in the generated provider.")
 		return
@@ -116,7 +125,6 @@ func (r *NetworkResource) Create(ctx context.Context, req resource.CreateRequest
 			return
 		}
 	}
-	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 }
 
 // Read refreshes the Terraform state with the latest remote values.
@@ -126,6 +134,18 @@ func (r *NetworkResource) Read(ctx context.Context, req resource.ReadRequest, re
 	if resp.Diagnostics.HasError() {
 		return
 	}
+	if r.readRemote(ctx, &state, resp) {
+		resp.State.RemoveResource(ctx)
+		return
+	}
+	if resp.Diagnostics.HasError() {
+		return
+	}
+	resp.Diagnostics.Append(resp.State.Set(ctx, &state)...)
+}
+
+// readRemote performs the read HTTP exchange and decodes the response into state, returning removed=true when the API reports 404. Extracted from Read so the request/response logic is unit-testable without a tfsdk.State.
+func (r *NetworkResource) readRemote(ctx context.Context, state *NetworkResourceModel, resp *resource.ReadResponse) (removed bool) {
 	if r.client == nil {
 		resp.Diagnostics.AddError("Client Not Configured", "The API client was not set on the resource. The provider Configure method must run before resource operations; this is a bug in the generated provider.")
 		return
@@ -145,7 +165,7 @@ func (r *NetworkResource) Read(ctx context.Context, req resource.ReadRequest, re
 	}
 	defer httpResp.Body.Close()
 	if httpResp.StatusCode == http.StatusNotFound {
-		resp.State.RemoveResource(ctx)
+		removed = true
 		return
 	}
 	if !(httpResp.StatusCode == 200) {
@@ -169,7 +189,7 @@ func (r *NetworkResource) Read(ctx context.Context, req resource.ReadRequest, re
 		resp.Diagnostics.AddError("Error reading mycloud_network", fmt.Sprintf("Could not map response to state: %s", err))
 		return
 	}
-	resp.Diagnostics.Append(resp.State.Set(ctx, &state)...)
+	return
 }
 
 // Update modifies the remote resource to match the desired plan.
@@ -187,6 +207,15 @@ func (r *NetworkResource) Update(ctx context.Context, req resource.UpdateRequest
 		}
 	}
 	preserveStateIntoPlan(&plan, &state)
+	r.updateRemote(ctx, &plan, resp)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
+}
+
+// updateRemote performs the update HTTP exchange and decodes the response into plan. Extracted from Update so the request/response logic is unit-testable without a tfsdk.Plan.
+func (r *NetworkResource) updateRemote(ctx context.Context, plan *NetworkResourceModel, resp *resource.UpdateResponse) {
 	if r.client == nil {
 		resp.Diagnostics.AddError("Client Not Configured", "The API client was not set on the resource. The provider Configure method must run before resource operations; this is a bug in the generated provider.")
 		return
@@ -237,7 +266,6 @@ func (r *NetworkResource) Update(ctx context.Context, req resource.UpdateRequest
 		resp.Diagnostics.AddError("Error updating mycloud_network", fmt.Sprintf("Could not map response to state: %s", err))
 		return
 	}
-	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 }
 
 // Delete destroys the remote resource.
@@ -247,6 +275,11 @@ func (r *NetworkResource) Delete(ctx context.Context, req resource.DeleteRequest
 	if resp.Diagnostics.HasError() {
 		return
 	}
+	r.deleteRemote(ctx, &state, resp)
+}
+
+// deleteRemote performs the delete HTTP exchange, treating a 404 as already deleted. Extracted from Delete so the request/response logic is unit-testable without a tfsdk.State.
+func (r *NetworkResource) deleteRemote(ctx context.Context, state *NetworkResourceModel, resp *resource.DeleteResponse) {
 	if r.client == nil {
 		resp.Diagnostics.AddError("Client Not Configured", "The API client was not set on the resource. The provider Configure method must run before resource operations; this is a bug in the generated provider.")
 		return

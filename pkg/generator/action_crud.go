@@ -242,21 +242,19 @@ func scaffoldActionInvokeBody(modelName string) []ast.Stmt {
 	}
 }
 
-// wiredActionInvokeBody returns the Invoke body wired to the generated API
-// client: it reads the practitioner-supplied config attributes, issues the
-// invoke request, and surfaces any error via Diagnostics. A body-bearing
-// action (plan.bodyEncoding == bodyJSON) encodes the config model as the JSON
-// request body via modelToJSONMap + json.Marshal + bytes.NewReader, so the
-// essential body-bearing actions (register, navigate, purchase, sell, refuel,
-// deliver, install) send their payloads instead of staying scaffolded. An
-// action has no result surface, so — unlike resource/data-source/ephemeral
-// bodies — there is no response to decode and no state/result to set; the
-// Invoke succeeds by completing the request without a non-success status. The
-// local model variable is named `config`, matching the scaffold body and
-// avoiding collision with any future decode helper's `data` map.
-func wiredActionInvokeBody(a ir.ActionIR, plan crudOperationPlan, modelName string) []ast.Stmt {
-	summary := fmt.Sprintf("Error invoking %s", actionTypeName(a))
-	stmts := make([]ast.Stmt, 0, 16)
+// wiredActionInvokeBody returns the framework Invoke body wired to the
+// generated API client: it reads the practitioner-supplied config attributes,
+// streams a progress update when progress_messages is set, then delegates the
+// HTTP exchange to invokeRemote (which writes diagnostics to the same resp).
+// The HTTP logic lives in a separate method so it is unit-testable without
+// constructing a tfsdk.Config, whose Schema is built from an internal
+// fwschema type that generated code cannot instantiate. An action has no
+// result surface, so there is no response to decode and no state/result to
+// set; the Invoke succeeds by completing the request without a non-success
+// status. The local model variable is named `config`, matching the scaffold
+// body and avoiding collision with the helper's internal `data` map.
+func wiredActionInvokeBody(a ir.ActionIR, modelName string) []ast.Stmt {
+	stmts := make([]ast.Stmt, 0, 12)
 	stmts = append(stmts,
 		astgen.VarDecl("config", modelName, nil),
 		astgen.ExprStmt(astgen.Call(
@@ -271,12 +269,13 @@ func wiredActionInvokeBody(a ir.ActionIR, plan crudOperationPlan, modelName stri
 			astgen.Call(astgen.Selector(astgen.Selector(astgen.Ident("resp"), "Diagnostics"), "HasError")),
 			astgen.Return(),
 		),
-		clientGuardStmt("r"),
 	)
 	// progress_messages: true streams a progress update to the practitioner
 	// before the request is issued. The framework's InvokeResponse carries
 	// SendProgress, which takes an InvokeProgressEvent; the action package is
 	// already imported by the generated action file, so no new import is needed.
+	// SendProgress stays framework-side because it touches resp.SendProgress,
+	// which has no analog in the extracted helper's resp.Diagnostics surface.
 	if a.ProgressMessages {
 		stmts = append(stmts, astgen.ExprStmt(astgen.Call(
 			astgen.Selector(astgen.Ident("resp"), "SendProgress"),
@@ -286,6 +285,28 @@ func wiredActionInvokeBody(a ir.ActionIR, plan crudOperationPlan, modelName stri
 			),
 		)))
 	}
+	stmts = append(stmts, astgen.ExprStmt(astgen.Call(
+		astgen.Selector(astgen.Ident("r"), "invokeRemote"),
+		astgen.Ident("ctx"),
+		astgen.UnaryPtr(astgen.Ident("config")),
+		astgen.Ident("resp"),
+	)))
+	return stmts
+}
+
+// wiredActionInvokeHelperBody returns the body of invokeRemote: the client
+// guard, request path, optional JSON request body, and HTTP exchange. It
+// writes diagnostics to resp.Diagnostics. A body-bearing action
+// (plan.bodyEncoding == bodyJSON) encodes the config model as the JSON request
+// body via modelToJSONMap + json.Marshal + bytes.NewReader, so the essential
+// body-bearing actions (register, navigate, purchase, sell, refuel, deliver,
+// install) send their payloads. An action has no state to drop on a 404; a
+// non-success status is surfaced as an error by the generic non-success
+// branch, and there is no response body to decode.
+func wiredActionInvokeHelperBody(a ir.ActionIR, plan crudOperationPlan) []ast.Stmt {
+	summary := fmt.Sprintf("Error invoking %s", actionTypeName(a))
+	stmts := make([]ast.Stmt, 0, 16)
+	stmts = append(stmts, clientGuardStmt("r"))
 	stmts = append(stmts, requestPathStmts(plan, "config")...)
 	// A body-bearing action encodes the config model as the JSON request body;
 	// a bodiless action passes nil (sendRequestStmts sets no Content-Type).
@@ -295,12 +316,25 @@ func wiredActionInvokeBody(a ir.ActionIR, plan crudOperationPlan, modelName stri
 		stmts = append(stmts, bodyStmts...)
 		body = bodyExpr
 	}
-	// An action has no state to drop on a 404; a non-success status is surfaced
-	// as an error by the generic non-success branch. There is no response body
-	// to decode and no result surface to populate, so the Invoke completes by
-	// issuing the request and returning on success.
 	stmts = append(stmts, sendRequestStmts(plan, "r", summary, "config", body, nil)...)
 	return stmts
+}
+
+// wiredActionInvokeHelperDecl emits the invokeRemote method declaration wired
+// to the generated API client. Emitted only for wired actions, alongside
+// Invoke, in the same file so the r.client.NewRequest marker stays put
+// (preserving the assertHonestScaffolds golden invariant).
+func wiredActionInvokeHelperDecl(a ir.ActionIR, plan crudOperationPlan, modelName, structName string) *ast.FuncDecl {
+	return astgen.MethodDecl(
+		"invokeRemote", "r", astgen.StarExpr(astgen.Ident(structName)),
+		astgen.Params(
+			astgen.Field("ctx", astgen.QualExpr("context", "Context"), ""),
+			astgen.Field("config", astgen.StarExpr(astgen.Ident(modelName)), ""),
+			astgen.Field("resp", astgen.StarExpr(astgen.QualExpr("action", "InvokeResponse")), ""),
+		),
+		astgen.Results(),
+		astgen.Block(wiredActionInvokeHelperBody(a, plan)...),
+	)
 }
 
 // wiredActionPreflightBody returns the ModifyPlan or ValidateConfig body wired

@@ -2204,6 +2204,117 @@ func TestInferListResources_PromotesCollectionGet(t *testing.T) {
 	}
 }
 
+// TestMatchItemProperty locks in the heuristic that resolves an instance path
+// parameter name to the item object property that holds its value. The path
+// parameter and the item identifier commonly differ (SpaceTraders
+// {shipSymbol} ↔ item "symbol"), and identity extraction must probe the item's
+// actual JSON key.
+func TestMatchItemProperty(t *testing.T) {
+	props := map[string]transformer.SchemaSpec{
+		"symbol":        {Type: "string"},
+		"registration":  {Type: "object"},
+		"factionSymbol": {Type: "string"},
+	}
+	tests := []struct {
+		name  string
+		param string
+		want  string
+	}{
+		{"last camelCase word matches item property", "shipSymbol", "symbol"},
+		{"exact match wins", "symbol", "symbol"},
+		{"no match falls back to param name", "missingThing", "missingThing"},
+		{"single word matches id", "id", "id"}, // id not in props → fallback to "id"
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := matchItemProperty(tc.param, props)
+			if got != tc.want {
+				t.Errorf("matchItemProperty(%q) = %q, want %q", tc.param, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestPairListResourceIdentities verifies the pairing pass copies a list
+// resource's identity schema onto the managed resource that shares its type
+// name, and skips list resources with no matching managed resource (they are
+// not registered by the generator anyway, G12).
+func TestPairListResourceIdentities(t *testing.T) {
+	identity := ir.ObjectSchemaIR{
+		Attributes: []ir.AttributeIR{
+			{Name: "ship_symbol", WireName: "symbol", Computed: true, Schema: ir.SchemaIR{Type: ir.TypeString}},
+		},
+	}
+	provider := &ir.ProviderIR{
+		Resources: []ir.ResourceIR{
+			{Name: "get_my_ships", TypeName: "space-traders-api_get_my_ships"},
+		},
+		ListResources: []ir.ListResourceIR{
+			{
+				Name:           "get_my_ships",
+				TypeName:       "space-traders-api_get_my_ships",
+				IdentitySchema: identity,
+			},
+			// Unpaired list resource: no managed resource of this type name.
+			{
+				Name:           "get_systems",
+				TypeName:       "space-traders-api_get_systems",
+				IdentitySchema: identity,
+			},
+		},
+	}
+
+	pairListResourceIdentities(provider)
+
+	if provider.Resources[0].IdentitySchema == nil {
+		t.Fatalf("expected managed resource to receive the paired list resource's identity schema")
+	}
+	got := provider.Resources[0].IdentitySchema
+	if len(got.Attributes) != 1 || got.Attributes[0].Name != "ship_symbol" || got.Attributes[0].WireName != "symbol" {
+		t.Errorf("IdentitySchema = %+v, want one ship_symbol attribute with WireName symbol", got)
+	}
+}
+
+// TestListResourceIdentity_DerivesItemWireName confirms that a list resource
+// promoted from a CRUD group carries, on its identity attribute, the wire name
+// of the item object's identifier property (e.g. {shipSymbol} → item "symbol"),
+// so the wired List body probes the item's actual JSON key.
+func TestListResourceIdentity_DerivesItemWireName(t *testing.T) {
+	body := []byte(`{
+		"openapi": "3.0.1",
+		"info": {"title": "Ship API", "version": "1.0.0"},
+		"paths": {
+			"/my/ships": {
+				"get": {
+					"operationId": "get-my-ships",
+					"responses": {"200": {"description": "ok", "content": {"application/json": {"schema": {"type": "array", "items": {"type": "object", "properties": {"symbol": {"type": "string"}}}}}}}}
+				}
+			},
+			"/my/ships/{shipSymbol}": {
+				"get": {"operationId": "get-my-ship", "responses": {"200": {"description": "ok"}}}
+			}
+		}
+	}`)
+	resp := Validate(body)
+	if !resp.Valid {
+		t.Fatalf("expected valid response, got diagnostics: %+v", resp.Diagnostics)
+	}
+	if len(resp.IRPreview.ListResources) != 1 {
+		t.Fatalf("expected 1 list resource, got %d", len(resp.IRPreview.ListResources))
+	}
+	lr := resp.IRPreview.ListResources[0]
+	if len(lr.IdentitySchema.Attributes) != 1 {
+		t.Fatalf("expected 1 identity attribute, got %+v", lr.IdentitySchema.Attributes)
+	}
+	attr := lr.IdentitySchema.Attributes[0]
+	if attr.Name != "ship_symbol" {
+		t.Errorf("identity attribute name = %q, want \"ship_symbol\"", attr.Name)
+	}
+	if attr.WireName != "symbol" {
+		t.Errorf("identity attribute wire name = %q, want \"symbol\" (item JSON key)", attr.WireName)
+	}
+}
+
 // TestFunctionFromOperation_InfersSignature locks in the G function-signature
 // inference: arguments come from the operation's parameters and the return
 // type from the response schema (flat object of primitives here).
@@ -2714,3 +2825,80 @@ func TestValidate_ConstructOrderDeterministic(t *testing.T) {
 		}
 	}
 }
+
+// TestDetectResponseInnerPath locks in the nested-create-response detection:
+// a create/update response that wraps the resource under a named property (whose
+// $ref matches the read response $ref) alongside side-effect objects resolves to
+// that property name; a response that already is the resource, an ambiguous
+// (zero or multiple) $ref match, or a missing $ref resolves to "" so the
+// generator applies the body as-is and surfaces a clear diagnostic (fail-loud).
+func TestDetectResponseInnerPath(t *testing.T) {
+	ship := func() transformer.SchemaSpec {
+		return transformer.SchemaSpec{Type: "object", RefName: "Ship", Properties: map[string]transformer.SchemaSpec{
+			"symbol": {Type: "string"},
+		}}
+	}
+	read := &transformer.Operation{ResponseSchema: ptr(ship())}
+
+	t.Run("nested resource resolved", func(t *testing.T) {
+		create := &transformer.Operation{ResponseSchema: &transformer.SchemaSpec{
+			Type: "object",
+			Properties: map[string]transformer.SchemaSpec{
+				"ship":        {RefName: "Ship"},
+				"agent":       {RefName: "Agent"},
+				"transaction": {RefName: "ShipyardTransaction"},
+			},
+		}}
+		if got := detectResponseInnerPath(create, read); got != "ship" {
+			t.Fatalf("detectResponseInnerPath = %q, want %q", got, "ship")
+		}
+	})
+
+	t.Run("response is the resource directly -> empty", func(t *testing.T) {
+		create := &transformer.Operation{ResponseSchema: ptr(ship())}
+		if got := detectResponseInnerPath(create, read); got != "" {
+			t.Fatalf("detectResponseInnerPath = %q, want empty (create IS the resource)", got)
+		}
+	})
+
+	t.Run("no read refname -> empty", func(t *testing.T) {
+		readNoRef := &transformer.Operation{ResponseSchema: &transformer.SchemaSpec{Type: "object", Properties: map[string]transformer.SchemaSpec{"symbol": {Type: "string"}}}}
+		create := &transformer.Operation{ResponseSchema: &transformer.SchemaSpec{Type: "object", Properties: map[string]transformer.SchemaSpec{"ship": {RefName: "Ship"}}}}
+		if got := detectResponseInnerPath(create, readNoRef); got != "" {
+			t.Fatalf("detectResponseInnerPath = %q, want empty (no read RefName to match)", got)
+		}
+	})
+
+	t.Run("no matching property -> empty", func(t *testing.T) {
+		create := &transformer.Operation{ResponseSchema: &transformer.SchemaSpec{Type: "object", Properties: map[string]transformer.SchemaSpec{
+			"agent":       {RefName: "Agent"},
+			"transaction": {RefName: "ShipyardTransaction"},
+		}}}
+		if got := detectResponseInnerPath(create, read); got != "" {
+			t.Fatalf("detectResponseInnerPath = %q, want empty (no property refs Ship)", got)
+		}
+	})
+
+	t.Run("ambiguous multiple matches -> empty", func(t *testing.T) {
+		create := &transformer.Operation{ResponseSchema: &transformer.SchemaSpec{Type: "object", Properties: map[string]transformer.SchemaSpec{
+			"ship":  {RefName: "Ship"},
+			"ship2": {RefName: "Ship"},
+		}}}
+		if got := detectResponseInnerPath(create, read); got != "" {
+			t.Fatalf("detectResponseInnerPath = %q, want empty (ambiguous)", got)
+		}
+	})
+
+	t.Run("nil operations -> empty", func(t *testing.T) {
+		if got := detectResponseInnerPath(nil, read); got != "" {
+			t.Fatalf("detectResponseInnerPath(nil, read) = %q, want empty", got)
+		}
+		if got := detectResponseInnerPath(&transformer.Operation{}, nil); got != "" {
+			t.Fatalf("detectResponseInnerPath(create, nil) = %q, want empty", got)
+		}
+	})
+}
+
+// ptr is a small helper returning the address of its argument, used to build
+// *transformer.SchemaSpec values in tests.
+func ptr[T any](v T) *T { return &v }
