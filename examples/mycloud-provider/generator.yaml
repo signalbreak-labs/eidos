@@ -45,7 +45,6 @@ resource_overrides:
         - spec
         - ip_address
         - ports
-        - name
         - port
         - protocol
         - selector

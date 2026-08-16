@@ -30,16 +30,19 @@ type UpdatePullRequestAction struct {
 
 // UpdatePullRequestActionModel describes the action configuration shape.
 type UpdatePullRequestActionModel struct {
-	Body         types.String `tfsdk:"body"`
-	HtmlUrl      types.String `tfsdk:"html_url"`
-	Id           types.Int64  `tfsdk:"id"`
-	Merged       types.Bool   `tfsdk:"merged"`
-	Number       types.Int64  `tfsdk:"number"`
-	Organization types.String `tfsdk:"organization"`
-	Project      types.String `tfsdk:"project"`
-	PullNumber   types.Int64  `tfsdk:"pull_number"`
-	State        types.String `tfsdk:"state"`
-	Title        types.String `tfsdk:"title"`
+	Body             types.String `tfsdk:"body"`
+	BodyOrganization types.String `tfsdk:"body_organization" json:"organization"`
+	BodyProject      types.String `tfsdk:"body_project" json:"project"`
+	BodyPullNumber   types.Int64  `tfsdk:"body_pull_number" json:"pull_number"`
+	HtmlUrl          types.String `tfsdk:"html_url"`
+	Id               types.Int64  `tfsdk:"id"`
+	Merged           types.Bool   `tfsdk:"merged"`
+	Number           types.Int64  `tfsdk:"number"`
+	Organization     types.String `tfsdk:"organization"`
+	Project          types.String `tfsdk:"project"`
+	PullNumber       types.Int64  `tfsdk:"pull_number"`
+	State            types.String `tfsdk:"state"`
+	Title            types.String `tfsdk:"title"`
 }
 
 // NewUpdatePullRequestAction returns a new instance of the generated action.
@@ -54,7 +57,7 @@ func (r *UpdatePullRequestAction) Metadata(_ context.Context, req action.Metadat
 
 // Schema returns the action schema.
 func (r *UpdatePullRequestAction) Schema(_ context.Context, _ action.SchemaRequest, resp *action.SchemaResponse) {
-	resp.Schema = schema.Schema{Description: "Update a pull request", Attributes: map[string]schema.Attribute{"body": schema.StringAttribute{Optional: true}, "html_url": schema.StringAttribute{Optional: true}, "id": schema.Int64Attribute{Optional: true}, "merged": schema.BoolAttribute{Optional: true}, "number": schema.Int64Attribute{Optional: true}, "organization": schema.StringAttribute{Required: true}, "project": schema.StringAttribute{Required: true}, "pull_number": schema.Int64Attribute{Required: true}, "state": schema.StringAttribute{Optional: true}, "title": schema.StringAttribute{Optional: true}}}
+	resp.Schema = schema.Schema{Description: "Update a pull request", Attributes: map[string]schema.Attribute{"body": schema.StringAttribute{Optional: true}, "body_organization": schema.StringAttribute{Optional: true}, "body_project": schema.StringAttribute{Optional: true}, "body_pull_number": schema.Int64Attribute{Optional: true}, "html_url": schema.StringAttribute{Optional: true}, "id": schema.Int64Attribute{Optional: true}, "merged": schema.BoolAttribute{Optional: true}, "number": schema.Int64Attribute{Optional: true}, "organization": schema.StringAttribute{Required: true}, "project": schema.StringAttribute{Required: true}, "pull_number": schema.Int64Attribute{Required: true}, "state": schema.StringAttribute{Optional: true}, "title": schema.StringAttribute{Optional: true}}}
 }
 
 // Invoke executes the action against the remote API.
@@ -64,6 +67,11 @@ func (r *UpdatePullRequestAction) Invoke(ctx context.Context, req action.InvokeR
 	if resp.Diagnostics.HasError() {
 		return
 	}
+	r.invokeRemote(ctx, &config, resp)
+}
+
+// invokeRemote performs the invoke HTTP exchange and surfaces any error via diagnostics. Extracted from Invoke so the request/response logic is unit-testable without a tfsdk.Config.
+func (r *UpdatePullRequestAction) invokeRemote(ctx context.Context, config *UpdatePullRequestActionModel, resp *action.InvokeResponse) {
 	if r.client == nil {
 		resp.Diagnostics.AddError("Client Not Configured", "The API client was not set on the resource. The provider Configure method must run before resource operations; this is a bug in the generated provider.")
 		return

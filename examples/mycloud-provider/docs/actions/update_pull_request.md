@@ -13,16 +13,21 @@ Update a pull request
 
 ```terraform
 action "mycloud_update_pull_request" "example" {
-  body = "example"
-  html_url = "example"
-  id = 1
-  merged = true
-  number = 1
-  organization = "example"
-  project = "example"
-  pull_number = 1
-  state = "example"
-  title = "example"
+  config {
+    body = "example"
+    body_organization = "example"
+    body_project = "example"
+    body_pull_number = 1
+    html_url = "example"
+    id = 1
+    merged = true
+    number = 1
+    organization = "example"
+    project = "example"
+    pull_number = 1
+    state = "example"
+    title = "example"
+  }
 }
 
 ```
@@ -34,6 +39,9 @@ action "mycloud_update_pull_request" "example" {
 The following arguments are supported:
 
 * `body` (String, optional)
+* `body_organization` (String, optional)
+* `body_project` (String, optional)
+* `body_pull_number` (Number, optional)
 * `html_url` (String, optional)
 * `id` (Number, optional)
 * `merged` (Bool, optional)
