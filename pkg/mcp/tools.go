@@ -95,12 +95,13 @@ func InspectTool() *sdkmcp.Tool {
 }
 
 // HandleInspect implements eidos/inspect.
-func HandleInspect(ctx context.Context, _ *sdkmcp.CallToolRequest, args InspectArgs) (*sdkmcp.CallToolResult, InspectResult, error) {
-	defer recoverTool("eidos/inspect")
+func HandleInspect(ctx context.Context, _ *sdkmcp.CallToolRequest, args InspectArgs) (res *sdkmcp.CallToolResult, out InspectResult, err error) {
+	defer recoverHandler("eidos/inspect", inspectErrorResult, &res, &out)
 	specBytes, err := normalizeSpec(args.Spec)
 	if err != nil {
-		res := errorToolResult(err)
-		return res, InspectResult{}, nil
+		out = inspectErrorResult(err)
+		res, err = marshalToolResult(out)
+		return res, out, err
 	}
 	resp := validateContext(ctx, specBytes)
 	result := InspectResult{
@@ -121,8 +122,9 @@ func HandleInspect(ctx context.Context, _ *sdkmcp.CallToolRequest, args InspectA
 		result.Lists = summarizeLists(resp.IRPreview.ListResources)
 		result.Functions = summarizeFunctions(resp.IRPreview.Functions)
 	}
-	res, err := marshalToolResult(result)
-	return res, result, err
+	out = result
+	res, err = marshalToolResult(result)
+	return res, out, err
 }
 
 // ---------------------------------------------------------------------------
@@ -179,12 +181,13 @@ func GenerateTool() *sdkmcp.Tool {
 }
 
 // HandleGenerate implements eidos/generate.
-func HandleGenerate(ctx context.Context, _ *sdkmcp.CallToolRequest, args GenerateArgs) (*sdkmcp.CallToolResult, GenerateResult, error) {
-	defer recoverTool("eidos/generate")
+func HandleGenerate(ctx context.Context, _ *sdkmcp.CallToolRequest, args GenerateArgs) (res *sdkmcp.CallToolResult, out GenerateResult, err error) {
+	defer recoverHandler("eidos/generate", generateErrorResult, &res, &out)
 	specBytes, err := normalizeSpec(args.Spec)
 	if err != nil {
-		res := errorToolResult(err)
-		return res, GenerateResult{}, nil
+		out = generateErrorResult(err)
+		res, err = marshalToolResult(out)
+		return res, out, err
 	}
 	resp := validateContext(ctx, specBytes)
 	result := GenerateResult{
@@ -210,8 +213,9 @@ func HandleGenerate(ctx context.Context, _ *sdkmcp.CallToolRequest, args Generat
 			result.OutputDir = args.Output
 		}
 	}
-	res, err := marshalToolResult(result)
-	return res, result, err
+	out = result
+	res, err = marshalToolResult(result)
+	return res, out, err
 }
 
 // ---------------------------------------------------------------------------
@@ -266,12 +270,13 @@ func ValidateSchemasTool() *sdkmcp.Tool {
 }
 
 // HandleValidateSchemas implements eidos/validate-schemas.
-func HandleValidateSchemas(ctx context.Context, _ *sdkmcp.CallToolRequest, args ValidateSchemasArgs) (*sdkmcp.CallToolResult, ValidateSchemasResult, error) {
-	defer recoverTool("eidos/validate-schemas")
+func HandleValidateSchemas(ctx context.Context, _ *sdkmcp.CallToolRequest, args ValidateSchemasArgs) (res *sdkmcp.CallToolResult, out ValidateSchemasResult, err error) {
+	defer recoverHandler("eidos/validate-schemas", validateSchemasErrorResult, &res, &out)
 	specBytes, err := normalizeSpec(args.Spec)
 	if err != nil {
-		res := errorToolResult(err)
-		return res, ValidateSchemasResult{}, nil
+		out = validateSchemasErrorResult(err)
+		res, err = marshalToolResult(out)
+		return res, out, err
 	}
 	resp := validateContext(ctx, specBytes)
 	result := ValidateSchemasResult{
@@ -287,8 +292,9 @@ func HandleValidateSchemas(ctx context.Context, _ *sdkmcp.CallToolRequest, args 
 			result.Issues = append(result.Issues, schemaIssues("data source "+ds.Name, ds.Schema)...)
 		}
 	}
-	res, err := marshalToolResult(result)
-	return res, result, err
+	out = result
+	res, err = marshalToolResult(result)
+	return res, out, err
 }
 
 // ---------------------------------------------------------------------------
@@ -345,17 +351,19 @@ func OverridePreviewTool() *sdkmcp.Tool {
 }
 
 // HandleOverridePreview implements eidos/override-preview.
-func HandleOverridePreview(ctx context.Context, _ *sdkmcp.CallToolRequest, args OverridePreviewArgs) (*sdkmcp.CallToolResult, OverridePreviewResult, error) {
-	defer recoverTool("eidos/override-preview")
+func HandleOverridePreview(ctx context.Context, _ *sdkmcp.CallToolRequest, args OverridePreviewArgs) (res *sdkmcp.CallToolResult, out OverridePreviewResult, err error) {
+	defer recoverHandler("eidos/override-preview", overridePreviewErrorResult, &res, &out)
 	specBytes, err := normalizeSpec(args.Spec)
 	if err != nil {
-		res := errorToolResult(err)
-		return res, OverridePreviewResult{}, nil
+		out = overridePreviewErrorResult(err)
+		res, err = marshalToolResult(out)
+		return res, out, err
 	}
 	merged, err := mergeConfigIntoSpec(specBytes, args.Config)
 	if err != nil {
-		res := errorToolResult(err)
-		return res, OverridePreviewResult{}, nil
+		out = overridePreviewErrorResult(err)
+		res, err = marshalToolResult(out)
+		return res, out, err
 	}
 	resp := validateContext(ctx, merged)
 	result := OverridePreviewResult{
@@ -368,8 +376,9 @@ func HandleOverridePreview(ctx context.Context, _ *sdkmcp.CallToolRequest, args 
 		result.Resources = summarizeResources(resp.IRPreview.Resources)
 	}
 	result.Overrides = reportOverrides(args.Config, resp.IRPreview)
-	res, err := marshalToolResult(result)
-	return res, result, err
+	out = result
+	res, err = marshalToolResult(result)
+	return res, out, err
 }
 
 // ---------------------------------------------------------------------------
@@ -586,31 +595,58 @@ func nonNilDiags(d []api.DiagnosticJSON) []api.DiagnosticJSON {
 	return d
 }
 
-// errorToolResult returns an MCP result carrying an error diagnostic. It emits
-// every array field any eidos/* tool's OutputSchema requires as an empty array
-// (plus the error in diagnostics), so the error path validates against every
-// tool's output schema — not just the success path. Extra fields not declared
-// on a given tool's schema are permitted (the schemas do not forbid additional
-// properties).
-func errorToolResult(err error) *sdkmcp.CallToolResult {
-	text := err.Error()
-	if data, marshalErr := json.Marshal(map[string]any{
-		"valid":               false,
-		"diagnostics":         []api.DiagnosticJSON{{Severity: "error", Summary: err.Error()}},
-		"resources":           []any{},
-		"data_sources":        []any{},
-		"actions":             []any{},
-		"ephemeral_resources": []any{},
-		"list_resources":      []any{},
-		"functions":           []any{},
-		"issues":              []any{},
-		"overrides":           []any{},
-		"file_count":          0,
-	}); marshalErr == nil {
-		text = string(data)
+// errorDiags wraps a single error as an error-severity diagnostic slice. It is
+// the shared building block for the per-tool error-result constructors, which
+// the error and panic paths return as the structured tool output.
+func errorDiags(err error) []api.DiagnosticJSON {
+	return []api.DiagnosticJSON{{Severity: "error", Summary: err.Error()}}
+}
+
+// inspectErrorResult builds an eidos/inspect result for an error or panic path.
+// Every array field the tool's OutputSchema requires is a non-nil empty slice so
+// the SDK's output-schema validation passes; a zero-value InspectResult{} would
+// marshal null arrays and be rejected with "has type null, want array".
+func inspectErrorResult(err error) InspectResult {
+	return InspectResult{
+		Valid:       false,
+		Diagnostics: errorDiags(err),
+		Resources:   []ResourceSummary{},
+		DataSources: []EntitySummary{},
+		Actions:     []EntitySummary{},
+		Ephemerals:  []EntitySummary{},
+		Lists:       []EntitySummary{},
+		Functions:   []EntitySummary{},
 	}
-	return &sdkmcp.CallToolResult{
-		Content: []sdkmcp.Content{&sdkmcp.TextContent{Text: text}},
+}
+
+// generateErrorResult builds an eidos/generate error/panic result. See
+// inspectErrorResult for why every required array field is non-nil.
+func generateErrorResult(err error) GenerateResult {
+	return GenerateResult{
+		Valid:       false,
+		Diagnostics: errorDiags(err),
+		Resources:   []ResourceSummary{},
+		DataSources: []EntitySummary{},
+		Actions:     []EntitySummary{},
+	}
+}
+
+// validateSchemasErrorResult builds an eidos/validate-schemas error/panic result.
+func validateSchemasErrorResult(err error) ValidateSchemasResult {
+	return ValidateSchemasResult{
+		Valid:       false,
+		Diagnostics: errorDiags(err),
+		Issues:      []SchemaIssue{},
+	}
+}
+
+// overridePreviewErrorResult builds an eidos/override-preview error/panic result.
+func overridePreviewErrorResult(err error) OverridePreviewResult {
+	return OverridePreviewResult{
+		Valid:       false,
+		Diagnostics: errorDiags(err),
+		Resources:   []ResourceSummary{},
+		Overrides:   []OverrideReport{},
 	}
 }
 
@@ -625,9 +661,29 @@ func marshalToolResult(result any) (*sdkmcp.CallToolResult, error) {
 	}, nil
 }
 
-// recoverTool logs a panic with a stack trace and returns a generic error.
-func recoverTool(name string) {
+// recoverHandler is deferred by each eidos/* tool handler to convert a panic
+// into a valid, schema-conformant structured result. It mirrors the named-return
+// recovery pattern in HandleGenerateConfig: a panic is logged with a stack
+// trace server-side, and the named returns are set to an error result whose
+// required array fields are non-nil empty slices — so the SDK's output-schema
+// validation does not reject the recovered output as "type null, want array".
+//
+// emptyResult builds the typed zero-empty result for the panicking tool; res and
+// out are pointers to the handler's named returns. err is intentionally not a
+// parameter: a recovered panic is represented as a diagnostic inside the
+// structured result, not a protocol error, so the client receives the validated
+// output. If marshalToolResult fails during recovery (essentially impossible for
+// these plain-data structs), res is left nil and the SDK synthesizes an empty
+// CallToolResult while still sending the structured output.
+func recoverHandler[T any](name string, emptyResult func(error) T, res **sdkmcp.CallToolResult, out *T) {
 	if rec := recover(); rec != nil {
 		log.Printf("panic in %s handler: %v\n%s", name, rec, debug.Stack())
+		*out = emptyResult(fmt.Errorf("panic in %s handler: %v", name, rec))
+		r, mErr := marshalToolResult(*out)
+		if mErr != nil {
+			log.Printf("marshal failed during %s panic recovery: %v", name, mErr)
+			return
+		}
+		*res = r
 	}
 }

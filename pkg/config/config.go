@@ -58,9 +58,19 @@ type Config struct {
 	// zero value of a plain bool), which is what makes "unset = on" legible. The
 	// per-resource escape hatch is skip: true, not generate_resource: false
 	// (GenerateResource is opt-in only and silently ignores false).
-	UsePutAsCreate *bool            `yaml:"use_put_as_create,omitempty" json:"use_put_as_create,omitempty"`
-	Generation     GenerationConfig `yaml:"generation,omitempty" json:"generation,omitempty"`
-	Spec           SpecConfig       `yaml:"spec,omitempty" json:"spec,omitempty"`
+	UsePutAsCreate *bool `yaml:"use_put_as_create,omitempty" json:"use_put_as_create,omitempty"`
+	// SignRelease is the opt-out for GPG signing of generated release
+	// artifacts. Signed checksums are default-on: when nil (the field is absent,
+	// the auto-generator's natural state) or true, the generated .goreleaser.yml
+	// signs the checksums file and the release workflows import a GPG key. When
+	// false, unsigned releases are produced and no GPG secrets are required. It
+	// is a *bool so the absent field is distinguishable from an explicit false
+	// (the zero value of a plain bool), which is what makes "unset = on" legible.
+	// Operators enabling signed releases must configure GPG_PRIVATE_KEY and
+	// GPG_PASSPHRASE repository secrets.
+	SignRelease *bool            `yaml:"sign_release,omitempty" json:"sign_release,omitempty"`
+	Generation  GenerationConfig `yaml:"generation,omitempty" json:"generation,omitempty"`
+	Spec        SpecConfig       `yaml:"spec,omitempty" json:"spec,omitempty"`
 
 	// Warnings holds non-fatal validation messages produced by Validate. Warnings
 	// are not serialized back to generator.yaml; they are runtime metadata for

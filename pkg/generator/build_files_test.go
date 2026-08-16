@@ -12,6 +12,8 @@ import (
 	// .goreleaser.yml structure without pulling in a larger Kubernetes
 	// or JSON-transcoding dependency tree.
 	"gopkg.in/yaml.v3"
+
+	"github.com/signalbreak-labs/eidos/pkg/ir"
 )
 
 func TestBuildFiles(t *testing.T) {
@@ -102,7 +104,9 @@ func TestGNUmakefile(t *testing.T) {
 
 	content := readFile(t, h.OutputDir, "GNUmakefile")
 	for _, want := range []string{
-		"default: fmt lint install generate",
+		"default: help",
+		"all: fmt lint install generate",
+		"help:",
 		"build:",
 		"install: build",
 		"lint:",
@@ -110,12 +114,17 @@ func TestGNUmakefile(t *testing.T) {
 		"fmt:",
 		"test:",
 		"testacc:",
-		".PHONY: fmt lint test testacc build install generate",
+		".PHONY: default all help build install fmt lint generate test testacc",
 		"go generate ./...", "[ -d tools ]",
 	} {
 		if !strings.Contains(content, want) {
 			t.Errorf("GNUmakefile missing %q\ncontent:\n%s", want, content)
 		}
+	}
+	// help must be the default target so a bare "make" prints help rather than
+	// silently running the build chain. The file must lead with "default: help".
+	if !strings.HasPrefix(content, "default: help\n") {
+		t.Errorf("GNUmakefile must start with %q so make defaults to help; got:\n%s", "default: help", content)
 	}
 	if strings.Contains(content, "tools/ directory not found") {
 		t.Errorf("GNUmakefile should not hard-fail when tools/ is absent (M-9):\n%s", content)
@@ -343,6 +352,60 @@ func TestReleaseWorkflow_Signed(t *testing.T) {
 	var parsed map[string]interface{}
 	if err := yaml.Unmarshal([]byte(content), &parsed); err != nil {
 		t.Fatalf("yaml.Unmarshal(release.yml): %v", err)
+	}
+}
+
+// minimalSignProvider returns a ProviderIR just substantial enough to drive
+// FilesForProviderIR without error (it needs a name and at least the core
+// provider file generation to succeed).
+func minimalSignProvider() *ir.ProviderIR {
+	return &ir.ProviderIR{
+		Name:    "mycloud",
+		Version: "1.0.0",
+	}
+}
+
+// TestBuildConfigFromIR_DefaultsSignRelease asserts signed releases are
+// default-on: BuildConfigFromIR sets SignRelease true so a bare `eidos generate`
+// with no generator.yaml produces signed .goreleaser.yml and release workflows.
+func TestBuildConfigFromIR_DefaultsSignRelease(t *testing.T) {
+	cfg := BuildConfigFromIR(minimalSignProvider())
+	if !cfg.SignRelease {
+		t.Errorf("BuildConfigFromIR SignRelease = false, want true (signed-by-default)")
+	}
+}
+
+// TestFilesForProviderIR_SignReleaseOverride asserts the sign_release
+// generator.yaml field (threaded as CollectOptions.SignRelease *bool) overrides
+// the default-on signing: nil keeps signed, explicit false opts out.
+func TestFilesForProviderIR_SignReleaseOverride(t *testing.T) {
+	provider := minimalSignProvider()
+
+	// nil override → default-on (signed).
+	files, err := FilesForProviderIR(provider, BuildConfigFromIR(provider), CollectOptions{OnlyBuild: true, SignRelease: nil})
+	if err != nil {
+		t.Fatalf("FilesForProviderIR: %v", err)
+	}
+	h := Harness{OutputDir: t.TempDir()}
+	if err := h.Generate(files); err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+	if got := readFile(t, h.OutputDir, ".goreleaser.yml"); !strings.Contains(got, "signs:") {
+		t.Errorf("nil SignRelease override should keep signed-by-default; .goreleaser.yml missing signs:\n%s", got)
+	}
+
+	// explicit false → opt out (unsigned).
+	falseVal := false
+	files, err = FilesForProviderIR(provider, BuildConfigFromIR(provider), CollectOptions{OnlyBuild: true, SignRelease: &falseVal})
+	if err != nil {
+		t.Fatalf("FilesForProviderIR: %v", err)
+	}
+	h2 := Harness{OutputDir: t.TempDir()}
+	if err := h2.Generate(files); err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+	if got := readFile(t, h2.OutputDir, ".goreleaser.yml"); strings.Contains(got, "signs:") {
+		t.Errorf("SignRelease=false should opt out of signing; .goreleaser.yml unexpectedly contains signs:\n%s", got)
 	}
 }
 
@@ -610,7 +673,7 @@ func TestDefaultGoVersionMatchesRuntime(t *testing.T) {
 
 func TestDynamicReleaseWorkflow_Defaults(t *testing.T) {
 	h := Harness{OutputDir: t.TempDir()}
-	if err := h.Generate([]File{DynamicReleaseWorkflow("", "")}); err != nil {
+	if err := h.Generate([]File{DynamicReleaseWorkflow("", "", true)}); err != nil {
 		t.Fatalf("Generate() error = %v", err)
 	}
 	content := readFile(t, h.OutputDir, ".github/workflows/regenerate-and-release.yml")
@@ -625,6 +688,11 @@ func TestDynamicReleaseWorkflow_Defaults(t *testing.T) {
 		"git push origin",
 		"goreleaser release --clean",
 		"GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}",
+		// Signed-by-default: the dynamic workflow imports a GPG key and forwards
+		// the fingerprint to GoReleaser, mirroring the static release.yml.
+		"Import GPG key",
+		"crazy-max/ghaction-import-gpg@v6",
+		"GPG_FINGERPRINT: ${{ steps.import_gpg.outputs.fingerprint }}",
 	} {
 		if !strings.Contains(content, want) {
 			t.Errorf("dynamic release workflow missing %q\ncontent:\n%s", want, content)
@@ -640,9 +708,26 @@ func TestDynamicReleaseWorkflow_Defaults(t *testing.T) {
 	}
 }
 
+func TestDynamicReleaseWorkflow_Unsigned(t *testing.T) {
+	h := Harness{OutputDir: t.TempDir()}
+	if err := h.Generate([]File{DynamicReleaseWorkflow("", "", false)}); err != nil {
+		t.Fatalf("Generate() error = %v", err)
+	}
+	content := readFile(t, h.OutputDir, ".github/workflows/regenerate-and-release.yml")
+	for _, unwanted := range []string{
+		"Import GPG key",
+		"crazy-max/ghaction-import-gpg@v6",
+		"GPG_FINGERPRINT",
+	} {
+		if strings.Contains(content, unwanted) {
+			t.Errorf("unsigned dynamic workflow unexpectedly contains %q\ncontent:\n%s", unwanted, content)
+		}
+	}
+}
+
 func TestDynamicReleaseWorkflow_Overrides(t *testing.T) {
 	h := Harness{OutputDir: t.TempDir()}
-	if err := h.Generate([]File{DynamicReleaseWorkflow("ghcr.io/example/eidos:v0.4.2", "openapi.yaml")}); err != nil {
+	if err := h.Generate([]File{DynamicReleaseWorkflow("ghcr.io/example/eidos:v0.4.2", "openapi.yaml", true)}); err != nil {
 		t.Fatalf("Generate() error = %v", err)
 	}
 	content := readFile(t, h.OutputDir, ".github/workflows/regenerate-and-release.yml")

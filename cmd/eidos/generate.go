@@ -249,6 +249,12 @@ func collectOptionsFor(cfg *config.Config, flags *generateFlags) generator.Colle
 			opts.DynamicReleaseSpecPath = cfg.Generation.DynamicRelease.SpecPath
 		}
 	}
+	// sign_release is the opt-out for default-on GPG signing. Thread the *bool
+	// through so an explicit false disables signing; nil (no config) keeps the
+	// BuildConfigFromIR default of signed releases.
+	if cfg != nil {
+		opts.SignRelease = cfg.SignRelease
+	}
 	return opts
 }
 
