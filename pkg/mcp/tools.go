@@ -568,9 +568,10 @@ func mergeConfigIntoSpec(specBytes []byte, configYAML string) ([]byte, error) {
 // planned file entries.
 func writeProvider(dir string, pir *ir.ProviderIR) ([]generator.FileEntry, error) {
 	return generator.Run(pir, generator.Options{
-		Mode:      generator.ModeWrite,
-		OutputDir: dir,
-		Force:     true,
+		Mode:           generator.ModeWrite,
+		OutputDir:      dir,
+		Force:          true,
+		CollectOptions: generator.CollectOptions{IncludeBuild: true},
 	})
 }
 

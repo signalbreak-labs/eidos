@@ -101,6 +101,9 @@ eidos generate --spec ./api.yaml --config ./generator.yaml --output ./terraform-
 | `--force` | `false` | no | Overwrite an existing `generator.yaml` when used with `--generate-config`, or overwrite generated provider files in write mode. |
 | `--generate-terraform-tests` | `false` | no | Emit native `.tftest.hcl` suites in the output `tests/` directory. |
 | `--no-use-put-as-create` | `false` | no | With `--generate-config`, record `use_put_as_create: false` (the kill-switch) in the starter config. By default the starter config records `use_put_as_create: true` (PUT-as-create inference on). |
+| `--skip-build` | `false` | no | Omit the build/CI/release files (`GNUmakefile`, `.goreleaser.yml`, `.github/workflows/release.yml`, `terraform-registry-manifest.json`) from the output. Mirrors `generation.skip_build`; the flag wins when both are set. |
+| `--only-build` | `false` | no | Emit only the build/CI/release files and nothing else (not even `go.mod`, `main.go`, or the provider/client packages). Mutually exclusive with `--skip-build`. Requires `--output` unless `--dry-run`. |
+| `--dynamic-release` | `false` | no | Also generate `.github/workflows/regenerate-and-release.yml`: a manually-dispatched workflow that regenerates the provider from its spec and publishes a release using the eidos CI image. Mirrors `generation.dynamic_release.enabled`; the flag wins when both are set. |
 
 ### Behavior
 
@@ -735,6 +738,7 @@ generation:
     include: []
   skip_tests: false
   skip_docs: false
+  skip_build: false
 ```
 
 | Field | Type | Description |
@@ -745,8 +749,18 @@ generation:
 | `ephemeral_resources` | ResourceGenerationConfig | Same for ephemeral resources. |
 | `list_resources` | ResourceGenerationConfig | Same for list resources. |
 | `functions` | ResourceGenerationConfig | Same for functions. |
-| `skip_tests` | bool | Skip generating test files. *(Currently has no effect on generation output.)* |
-| `skip_docs` | bool | Skip generating documentation. *(Currently has no effect on generation output.)* |
+| `skip_tests` | bool | Omit generated `*_test.go` and coverage test files from the output. |
+| `skip_docs` | bool | Omit generated `docs/` Markdown from the output. |
+| `skip_build` | bool | Omit the build/CI/release files (`GNUmakefile`, `.goreleaser.yml`, `.github/workflows/release.yml`, `terraform-registry-manifest.json`) from the output. The `--skip-build` flag is the CLI equivalent and wins when both are set. |
+| `dynamic_release` | DynamicReleaseConfig | Opt into generating `.github/workflows/regenerate-and-release.yml`, a manually-dispatched workflow that regenerates the provider from its spec and publishes a release using the eidos CI image. Off when absent. The `--dynamic-release` flag is the CLI equivalent and wins when both are set. |
+
+`DynamicReleaseConfig`:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `enabled` | bool | Turn on generation of the regenerate-and-release workflow. |
+| `image` | string | eidos CI image reference the workflow runs in (defaults to `ghcr.io/signalbreak-labs/eidos:latest` when empty). |
+| `spec_path` | string | Path to the OpenAPI spec, relative to the provider repo root, that the workflow regenerates from (defaults to `spec.yaml` when empty). |
 
 Each `ResourceGenerationConfig`:
 
@@ -936,6 +950,129 @@ The JSON shape is stable and can be consumed by other tooling:
 `config_path` is present only when a `generator.yaml` overrides file was
 supplied; `written` is `false` for a dry-run and `true` after a full generation
 run.
+
+## Build/release files
+
+A full generation run emits four build/CI/release scaffolding files alongside
+the provider code: `GNUmakefile`, `.goreleaser.yml`,
+`.github/workflows/release.yml`, and `terraform-registry-manifest.json`. They
+are templated from the provider name and release settings (not the spec's
+constructs), so they are independent of the generated provider code.
+
+### Omitting them — `--skip-build` / `skip_build`
+
+To regenerate a provider without touching hand-managed release scaffolding
+(for example, in a CI job that regenerates the provider into a fresh directory),
+drop the four files with `--skip-build` or `generation.skip_build: true`:
+
+```bash
+eidos generate --spec ./api.yaml --output ./provider --skip-build
+```
+
+```yaml
+generation:
+  skip_build: true
+```
+
+### Generating only them — `--only-build`
+
+`--only-build` inverts the selection: it emits exactly the four scaffolding files
+and nothing else — not even `go.mod`, `main.go`, or the provider/client packages.
+This supports a workflow where the provider code is regenerated dynamically in
+CI and never stored in git, while the release scaffolding is checked in once and
+managed separately:
+
+```bash
+# Once: generate and commit just the release scaffolding.
+eidos generate --spec ./api.yaml --only-build --output . --force
+
+# In CI: regenerate the full provider (no build files) into a throwaway dir.
+eidos generate --spec ./api.yaml --skip-build --output ./provider
+```
+
+`--only-build` and `--skip-build` are mutually exclusive. Like the normal write
+path, `--only-build` requires `--output` unless `--dry-run` is set.
+
+## CI image
+
+Each eidos release publishes a container image to GHCR that bundles eidos, the
+Go toolchain, and GoReleaser:
+
+```text
+ghcr.io/signalbreak-labs/eidos:<tag>     # e.g. ghcr.io/signalbreak-labs/eidos:v0.4.0
+ghcr.io/signalbreak-labs/eidos:latest
+```
+
+It is a "generate-and-build" image: a CI job can run one container to regenerate
+a provider from a spec and publish it, without installing Go, GoReleaser, or
+eidos on the runner. The image is for the eidos *generator* (the tool). Generated
+providers are still normal Go modules that GoReleaser cross-compiles into
+Terraform plugin binaries via their own generated `.goreleaser.yml` — the image
+supplies the tools to drive that pipeline.
+
+### Dynamic regenerate-and-publish
+
+The intended workflow pairs `--only-build` (commit the release scaffolding once)
+with the image (regenerate and publish on every CI run, no provider code in git):
+
+```yaml
+# .github/workflows/release.yml in the provider repo
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    container:
+      image: ghcr.io/signalbreak-labs/eidos:v0.4.0
+    steps:
+      - uses: actions/checkout@v4
+      # Regenerate the provider from the spec; --skip-build keeps the committed
+      # scaffolding (GNUmakefile, .goreleaser.yml, release workflow, manifest).
+      - run: eidos generate --spec ./api.yaml --skip-build --output .
+      - run: go test ./...
+      # Publish via the generated GoReleaser config.
+      - run: goreleaser release --clean
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+```
+
+Run `eidos generate --spec ./api.yaml --only-build --output . --force` once and
+commit the four scaffolding files; the CI job above regenerates everything else
+on each release. The image carries Go, GoReleaser, `make`, and `eidos` on `PATH`.
+
+### Generated regenerate-and-release workflow
+
+Instead of hand-writing the job above, ask eidos to generate it into the provider
+with `--dynamic-release` (or `generation.dynamic_release.enabled: true`):
+
+```bash
+eidos generate --spec ./api.yaml --output . --force --dynamic-release
+```
+
+This emits `.github/workflows/regenerate-and-release.yml` alongside the static
+`release.yml`. The two coexist with non-overlapping triggers:
+
+- `release.yml` fires on a `v*` tag push and builds *committed* code.
+- `regenerate-and-release.yml` is manually dispatched (`workflow_dispatch` with a
+  `version` input): it regenerates the provider from the spec with
+  `eidos generate --skip-build`, builds, tests, commits to a `release/<version>`
+  branch, tags, and runs `goreleaser release --clean` inside the CI image.
+
+Because the tag is created with the default `GITHUB_TOKEN`, it does not re-trigger
+`release.yml`, so the workflows never double-fire. The regenerated code lands on a
+release-specific branch, keeping the default branch to just the spec and the
+committed build scaffolding. Configure the image and spec path:
+
+```yaml
+generation:
+  dynamic_release:
+    enabled: true
+    image: ghcr.io/signalbreak-labs/eidos:latest
+    spec_path: spec.yaml
+```
+
+The workflow is opt-in and off by default, so generation output (and golden
+snapshots) are unchanged unless you turn it on.
 
 ## Examples
 

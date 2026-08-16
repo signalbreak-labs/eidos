@@ -154,6 +154,7 @@ func generateProviderModule(dir string, pir ir.ProviderIR, cfg generator.BuildCo
 	h := generator.Harness{OutputDir: dir}
 	files, err := generator.FilesForProviderIR(&pir, cfg, generator.CollectOptions{
 		IncludeTests: true,
+		IncludeBuild: true,
 	})
 	if err != nil {
 		return err

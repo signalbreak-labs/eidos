@@ -113,4 +113,13 @@ generation:
     packages: []
   skip_tests: false
   skip_docs: false
+  skip_build: false
+  # dynamic_release opts into also generating
+  # .github/workflows/regenerate-and-release.yml: a manually-dispatched
+  # workflow that regenerates this provider from its spec and publishes a
+  # release using the eidos CI image. Off by default.
+  # dynamic_release:
+  #   enabled: true
+  #   image: ghcr.io/signalbreak-labs/eidos:latest
+  #   spec_path: spec.yaml
 `

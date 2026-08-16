@@ -1,0 +1,30 @@
+# Keep the build context small and deterministic. Only what's needed to build the
+# eidos binary is copied into the builder stage; everything else is excluded so
+# a dirty working tree (test output, coverage, local builds) cannot leak into
+# the image or bust the layer cache.
+
+.git
+.github
+.gitignore
+.dockerignore
+Dockerfile
+
+# Local build artifacts
+eidos
+eidos.exe
+*.test
+*.out
+coverage.*
+*.coverprofile
+profile.cov
+
+# Test fixtures and generated golden snapshots are not needed to build eidos.
+testfixtures/
+test/
+docs/
+.tmp/
+
+# Editor/OS noise
+.DS_Store
+*.swp
+.env

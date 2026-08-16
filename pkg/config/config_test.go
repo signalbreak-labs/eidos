@@ -1404,6 +1404,7 @@ generation:
           - owner*
   skip_tests: true
   skip_docs: true
+  skip_build: true
 `
 	cfg, err := LoadBytes([]byte(yamlInput))
 	if err != nil {
@@ -1427,6 +1428,38 @@ generation:
 	}
 	if !cfg.Generation.SkipTests || !cfg.Generation.SkipDocs {
 		t.Errorf("expected skip_tests and skip_docs to be true")
+	}
+	if !cfg.Generation.SkipBuild {
+		t.Errorf("expected skip_build to be true")
+	}
+}
+
+func TestLoadGenerationDynamicRelease(t *testing.T) {
+	const yamlInput = `
+provider:
+  name: test-api
+  version: 0.1.0
+generation:
+  dynamic_release:
+    enabled: true
+    image: ghcr.io/example/eidos:v0.4.2
+    spec_path: openapi.yaml
+`
+	cfg, err := LoadBytes([]byte(yamlInput))
+	if err != nil {
+		t.Fatalf("LoadBytes failed: %v", err)
+	}
+	if cfg.Generation.DynamicRelease == nil {
+		t.Fatal("expected dynamic_release to be set")
+	}
+	if !cfg.Generation.DynamicRelease.Enabled {
+		t.Errorf("expected dynamic_release.enabled to be true")
+	}
+	if cfg.Generation.DynamicRelease.Image != "ghcr.io/example/eidos:v0.4.2" {
+		t.Errorf("dynamic_release.image = %q", cfg.Generation.DynamicRelease.Image)
+	}
+	if cfg.Generation.DynamicRelease.SpecPath != "openapi.yaml" {
+		t.Errorf("dynamic_release.spec_path = %q", cfg.Generation.DynamicRelease.SpecPath)
 	}
 }
 

@@ -156,11 +156,39 @@ type CollectOptions struct {
 	IncludeExamples bool
 	// IncludeConfig emits a generator.yaml file in the output root.
 	IncludeConfig bool
+	// IncludeBuild emits the build/CI/release scaffolding files: GNUmakefile,
+	// .goreleaser.yml, .github/workflows/release.yml, and
+	// terraform-registry-manifest.json. These are templated from BuildConfig
+	// (provider name, module path, release settings) and are independent of the
+	// provider's constructs. When false, a full generation run omits them so a
+	// regenerated provider does not touch hand-managed release scaffolding.
+	IncludeBuild bool
+	// OnlyBuild short-circuits collection to emit exactly the build/CI/release
+	// scaffolding files and nothing else — not even the always-on core files
+	// (go.mod, README.md, main.go, provider/client packages). This supports a
+	// workflow where the provider code is regenerated dynamically in CI and the
+	// release scaffolding is checked in once and managed separately. When true
+	// it overrides every other Include* flag. OnlyBuild does not imply
+	// IncludeBuild; it emits the scaffolding directly.
+	OnlyBuild bool
+	// IncludeDynamicRelease emits the generated
+	// .github/workflows/regenerate-and-release.yml workflow that regenerates the
+	// provider from its spec and publishes a release using the eidos CI image.
+	// Opt-in (off by default). When true, DynamicReleaseImage and
+	// DynamicReleaseSpecPath configure the workflow's image and spec path.
+	IncludeDynamicRelease bool
+	// DynamicReleaseImage is the eidos CI image the generated
+	// regenerate-and-release workflow runs in. Empty means the emitter applies
+	// its default.
+	DynamicReleaseImage string
+	// DynamicReleaseSpecPath is the spec path the generated workflow regenerates
+	// from. Empty means the emitter applies its default.
+	DynamicReleaseSpecPath string
 }
 
 // DefaultCollectOptions returns the recommended collection options for a full
-// generation run: tests, docs, examples, and config are enabled; native
-// Terraform test files are disabled by default.
+// generation run: tests, docs, examples, config, and build/CI/release files
+// are enabled; native Terraform test files are disabled by default.
 func DefaultCollectOptions() CollectOptions {
 	return CollectOptions{
 		IncludeTests:          true,
@@ -168,6 +196,7 @@ func DefaultCollectOptions() CollectOptions {
 		IncludeDocs:           true,
 		IncludeExamples:       true,
 		IncludeConfig:         true,
+		IncludeBuild:          true,
 	}
 }
 
@@ -176,6 +205,14 @@ func DefaultCollectOptions() CollectOptions {
 // do not depend on the filesystem.
 func CollectFromProviderIR(provider *ir.ProviderIR, opts CollectOptions) []FileEntry {
 	rec := NewRecorder()
+	// OnlyBuild short-circuits to exactly the build/CI/release scaffolding,
+	// skipping the always-on core files so record and write modes emit the
+	// same four files.
+	if opts.OnlyBuild {
+		collectBuildFiles(rec)
+		rec.Sort()
+		return rec.Entries()
+	}
 	collectProviderCore(rec, opts)
 
 	if provider != nil {
@@ -364,13 +401,27 @@ func collectClientFiles(rec *Recorder, provider *ir.ProviderIR, _ CollectOptions
 	}
 }
 
-func collectRootFiles(rec *Recorder, provider *ir.ProviderIR, opts CollectOptions) {
-	rec.Record("go.mod", "Go module definition")
+// collectBuildFiles records the build/CI/release scaffolding: GNUmakefile,
+// .goreleaser.yml, the GitHub Actions release workflow, and the Terraform
+// Registry manifest. These files are templated from BuildConfig and are
+// independent of the provider's constructs, so they can be emitted alone
+// (OnlyBuild) or omitted from a full run (!IncludeBuild).
+func collectBuildFiles(rec *Recorder) {
 	rec.Record("GNUmakefile", "build and test automation")
-	rec.Record("README.md", "provider overview and usage guide")
 	rec.Record(".goreleaser.yml", "GoReleaser release configuration")
 	rec.Record(".github/workflows/release.yml", "GitHub Actions release workflow")
 	rec.Record("terraform-registry-manifest.json", "Terraform Registry manifest")
+}
+
+func collectRootFiles(rec *Recorder, provider *ir.ProviderIR, opts CollectOptions) {
+	rec.Record("go.mod", "Go module definition")
+	rec.Record("README.md", "provider overview and usage guide")
+	if opts.IncludeBuild {
+		collectBuildFiles(rec)
+	}
+	if opts.IncludeDynamicRelease {
+		rec.Record(".github/workflows/regenerate-and-release.yml", "dynamic regenerate-and-release workflow (opt-in)")
+	}
 	if opts.IncludeDocs {
 		rec.Record("docs/index.md", "provider overview and authentication guide")
 	}

@@ -53,6 +53,25 @@ type generateFlags struct {
 	// generator.yaml emitted by --generate-config. Default-on otherwise.
 	noUsePutAsCreate bool
 
+	// SkipBuild drops the build/CI/release scaffolding files (GNUmakefile,
+	// .goreleaser.yml, .github/workflows/release.yml,
+	// terraform-registry-manifest.json) from the generation output. Mirrors the
+	// generation.skip_build config key; the flag wins when both are set.
+	skipBuild bool
+
+	// OnlyBuild inverts the selection: emit only the build/CI/release
+	// scaffolding files and nothing else. Useful for checking in the release
+	// scaffolding once while the provider code is regenerated dynamically in
+	// CI. Mutually exclusive with --skip-build. Requires --output unless
+	// --dry-run, like the normal write path.
+	onlyBuild bool
+
+	// DynamicRelease opts into also generating a
+	// .github/workflows/regenerate-and-release.yml that regenerates the provider
+	// from its spec and publishes a release using the eidos CI image. Mirrors
+	// generation.dynamic_release.enabled; the flag wins when both are set.
+	dynamicRelease bool
+
 	// remote carries the opt-in remote --spec options (URL fetch + auth).
 	remote remoteSpecFlags
 }
@@ -81,6 +100,12 @@ Terraform provider. Use --dry-run to preview what would be generated.`,
 	cmd.Flags().BoolVar(&flags.generateTerraformTests, "generate-terraform-tests", false, "Generate native Terraform .tftest.hcl files")
 	cmd.Flags().BoolVar(&flags.noUsePutAsCreate, "no-use-put-as-create", false,
 		"With --generate-config, emit use_put_as_create: false (kill-switch). By default the starter config records use_put_as_create: true, so an instance-path PUT with no collection POST is used as the Create (upsert).")
+	cmd.Flags().BoolVar(&flags.skipBuild, "skip-build", false,
+		"Skip the build/CI/release files (GNUmakefile, .goreleaser.yml, .github/workflows/release.yml, terraform-registry-manifest.json). Mirrors generation.skip_build.")
+	cmd.Flags().BoolVar(&flags.onlyBuild, "only-build", false,
+		"Generate only the build/CI/release files (GNUmakefile, .goreleaser.yml, .github/workflows/release.yml, terraform-registry-manifest.json) and nothing else. Mutually exclusive with --skip-build.")
+	cmd.Flags().BoolVar(&flags.dynamicRelease, "dynamic-release", false,
+		"Also generate .github/workflows/regenerate-and-release.yml: a workflow that regenerates the provider from its spec and publishes a release using the eidos CI image. Mirrors generation.dynamic_release.enabled.")
 	flags.remote.register(cmd)
 
 	// --spec is NOT marked required: when --config supplies a generator.yaml
@@ -93,6 +118,9 @@ func runGenerate(cmd *cobra.Command, flags *generateFlags) error {
 	if err := validateDryRunOutput(flags.dryRunOutput, flags.dryRun); err != nil {
 		return err
 	}
+	if flags.onlyBuild && flags.skipBuild {
+		return fmt.Errorf("--only-build and --skip-build are mutually exclusive")
+	}
 
 	// The config is loaded before the spec so a remote --spec fetch can honor
 	// the generator.yaml spec.auth section (CLI flags override it).
@@ -101,32 +129,9 @@ func runGenerate(cmd *cobra.Command, flags *generateFlags) error {
 		return err
 	}
 
-	// --spec is optional when --config supplies a generator.yaml with a
-	// spec.path; the CLI flag takes precedence (consistent with spec.auth,
-	// which CLI flags also override). Fail loud when neither is set rather
-	// than silently producing nothing.
-	specPath := flags.spec
-	if specPath == "" && cfg != nil {
-		specPath = strings.TrimSpace(cfg.Spec.Path)
-	}
-	if specPath == "" {
-		return fmt.Errorf("--spec is required (or set spec.path in the generator.yaml passed via --config)")
-	}
-
-	specBytes, contentType, err := loadSpecBytes(specPath, flags.remote.options(cfg))
+	specBytes, contentType, specPath, specDisplay, err := resolveGenerateSpec(flags, cfg)
 	if err != nil {
 		return err
-	}
-
-	// The display path is the absolute local path for a file spec, or the URL
-	// itself for a remote spec (filepath.Abs would mangle a URL).
-	specDisplay := specPath
-	if !isRemoteSpecURL(specPath) {
-		absSpec, aerr := filepath.Abs(specPath)
-		if aerr != nil {
-			return fmt.Errorf("failed to resolve spec path: %w", aerr)
-		}
-		specDisplay = absSpec
 	}
 
 	// In non-dry-run --generate-config mode, handleGenerateConfig builds its
@@ -189,8 +194,7 @@ func runGenerate(cmd *cobra.Command, flags *generateFlags) error {
 		mode = generator.ModeRecord
 	}
 
-	collectOpts := generator.DefaultCollectOptions()
-	collectOpts.IncludeTerraformTests = flags.generateTerraformTests
+	collectOpts := collectOptionsFor(cfg, flags)
 
 	files, err := generator.Run(provider, generator.Options{
 		Mode:           mode,
@@ -203,6 +207,78 @@ func runGenerate(cmd *cobra.Command, flags *generateFlags) error {
 	}
 
 	return writeGenerateSummary(cmd, flags, specPath, provider, files, genDiags)
+}
+
+// collectOptionsFor builds the generator CollectOptions for a run from the
+// default-on set, the generator.yaml generation.skip_* toggles, and the CLI
+// build flags. The generation.skip_tests/skip_docs/skip_build keys existed
+// before but were never applied (the CLI hardcoded the default-on options);
+// wiring them here makes the documented toggles functional. --skip-build is
+// the CLI equivalent of skip_build and wins when both are set. --only-build
+// short-circuits to exactly the four build/CI/release files, overriding every
+// other selection; the full parse→transform pipeline still runs because the
+// scaffolding is templated from BuildConfig, which is derived from the provider
+// name.
+func collectOptionsFor(cfg *config.Config, flags *generateFlags) generator.CollectOptions {
+	opts := generator.DefaultCollectOptions()
+	opts.IncludeTerraformTests = flags.generateTerraformTests
+	if cfg != nil {
+		if cfg.Generation.SkipTests {
+			opts.IncludeTests = false
+		}
+		if cfg.Generation.SkipDocs {
+			opts.IncludeDocs = false
+		}
+		if cfg.Generation.SkipBuild {
+			opts.IncludeBuild = false
+		}
+	}
+	if flags.skipBuild {
+		opts.IncludeBuild = false
+	}
+	if flags.onlyBuild {
+		return generator.CollectOptions{OnlyBuild: true}
+	}
+	// Dynamic release is opt-in via --dynamic-release or
+	// generation.dynamic_release.enabled. The image and spec_path come from the
+	// config block; the emitter applies its own defaults when they are empty.
+	if flags.dynamicRelease || (cfg != nil && cfg.Generation.DynamicRelease != nil && cfg.Generation.DynamicRelease.Enabled) {
+		opts.IncludeDynamicRelease = true
+		if cfg != nil && cfg.Generation.DynamicRelease != nil {
+			opts.DynamicReleaseImage = cfg.Generation.DynamicRelease.Image
+			opts.DynamicReleaseSpecPath = cfg.Generation.DynamicRelease.SpecPath
+		}
+	}
+	return opts
+}
+
+// resolveGenerateSpec resolves the spec source for a generation run. --spec is
+// optional when --config supplies a generator.yaml with a spec.path; the CLI
+// flag takes precedence (consistent with spec.auth, which CLI flags also
+// override). Fail loud when neither is set rather than silently producing
+// nothing. The display path is the absolute local path for a file spec, or the
+// URL itself for a remote spec (filepath.Abs would mangle a URL).
+func resolveGenerateSpec(flags *generateFlags, cfg *config.Config) ([]byte, string, string, string, error) {
+	specPath := flags.spec
+	if specPath == "" && cfg != nil {
+		specPath = strings.TrimSpace(cfg.Spec.Path)
+	}
+	if specPath == "" {
+		return nil, "", "", "", fmt.Errorf("--spec is required (or set spec.path in the generator.yaml passed via --config)")
+	}
+	specBytes, contentType, err := loadSpecBytes(specPath, flags.remote.options(cfg))
+	if err != nil {
+		return nil, "", "", "", err
+	}
+	specDisplay := specPath
+	if !isRemoteSpecURL(specPath) {
+		absSpec, aerr := filepath.Abs(specPath)
+		if aerr != nil {
+			return nil, "", "", "", fmt.Errorf("failed to resolve spec path: %w", aerr)
+		}
+		specDisplay = absSpec
+	}
+	return specBytes, contentType, specPath, specDisplay, nil
 }
 
 func validateDryRunOutput(path string, dryRun bool) error {

@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -39,7 +40,8 @@ func TestGenerateCommand_RegisteredFlags(t *testing.T) {
 	}
 
 	flags := []string{"spec", "output", "dry-run", "config", "dry-run-output", "generate-config", "force", "provider-name", "generate-terraform-tests",
-		"spec-allow-http", "spec-auth-scheme", "spec-token-env", "spec-username-env", "spec-password-env", "spec-key-env", "spec-header-name", "spec-token-url", "spec-client-id-env", "spec-client-secret-env"}
+		"spec-allow-http", "spec-auth-scheme", "spec-token-env", "spec-username-env", "spec-password-env", "spec-key-env", "spec-header-name", "spec-token-url", "spec-client-id-env", "spec-client-secret-env",
+		"skip-build", "only-build"}
 	for _, name := range flags {
 		if genCmd.Flags().Lookup(name) == nil {
 			t.Errorf("generate command missing --%s flag", name)
@@ -729,5 +731,200 @@ func TestRunEidos_BadFlag_WritesErrorToStderr(t *testing.T) {
 	}
 	if !strings.Contains(stderr.String(), "unknown flag: --bad-flag") {
 		t.Errorf("expected stderr to contain unknown flag error, got %q", stderr.String())
+	}
+}
+
+// chdirWithSpec creates a fresh temp dir, chdirs there, and writes api.yaml
+// with minimalBuildSpec so the generator has a spec to run against.
+func chdirWithSpec(t *testing.T) {
+	t.Helper()
+	tmp := t.TempDir()
+	t.Chdir(tmp)
+	if err := os.WriteFile("api.yaml", []byte(minimalBuildSpec), 0o600); err != nil {
+		t.Fatalf("write spec: %v", err)
+	}
+}
+
+// dryRunJSON runs `eidos generate --dry-run` (JSON summary) with the given extra
+// args in the current working directory and returns the set of file paths the
+// generator would write. The caller is responsible for setting up the working
+// directory (spec, optional config) via chdirWithSpec and any extra writes.
+func dryRunJSON(t *testing.T, args ...string) map[string]struct{} {
+	t.Helper()
+	fullArgs := append([]string{"generate", "--spec", "api.yaml", "--output", "out", "--dry-run", "--dry-run-output", "summary.json"}, args...)
+	cmd, out := newTestCommand(fullArgs...)
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("dry-run failed: %v\noutput:\n%s", err, out.String())
+	}
+	data, err := os.ReadFile("summary.json")
+	if err != nil {
+		t.Fatalf("read summary: %v", err)
+	}
+	var sum struct {
+		Files []struct {
+			Path string `json:"path"`
+		} `json:"files"`
+	}
+	if err := json.Unmarshal(data, &sum); err != nil {
+		t.Fatalf("unmarshal summary: %v\n%s", err, string(data))
+	}
+	set := make(map[string]struct{}, len(sum.Files))
+	for _, f := range sum.Files {
+		set[f.Path] = struct{}{}
+	}
+	return set
+}
+
+// minimalBuildSpec is a spec with one resource so a full generation emits both
+// build/CI/release files and provider-code files (go.mod, provider.go, etc.).
+const minimalBuildSpec = `openapi: 3.0.0
+info:
+  title: Test API
+  version: 1.0.0
+paths:
+  /pets/{id}:
+    get:
+      operationId: get_pet
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: ok
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Pet'
+    delete:
+      operationId: delete_pet
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "204":
+          description: deleted
+components:
+  schemas:
+    Pet:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+`
+
+var buildScaffoldingFiles = []string{
+	"GNUmakefile",
+	".goreleaser.yml",
+	".github/workflows/release.yml",
+	"terraform-registry-manifest.json",
+}
+
+func TestGenerateCommand_SkipBuildDropsScaffolding(t *testing.T) {
+	chdirWithSpec(t)
+	set := dryRunJSON(t, "--skip-build")
+	for _, p := range buildScaffoldingFiles {
+		if _, ok := set[p]; ok {
+			t.Errorf("--skip-build should drop %q, but it appears in the file set: %v", p, set)
+		}
+	}
+	// Core files the provider needs to compile are still present.
+	for _, p := range []string{"go.mod", "README.md", "internal/provider/provider.go"} {
+		if _, ok := set[p]; !ok {
+			t.Errorf("--skip-build should keep core file %q, but it is missing from the file set", p)
+		}
+	}
+}
+
+func TestGenerateCommand_SkipBuildViaConfig(t *testing.T) {
+	chdirWithSpec(t)
+	if err := os.WriteFile("generator.yaml", []byte("provider:\n  name: test-api\n  version: 0.1.0\ngeneration:\n  skip_build: true\n"), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	set := dryRunJSON(t, "--config", "generator.yaml")
+	for _, p := range buildScaffoldingFiles {
+		if _, ok := set[p]; ok {
+			t.Errorf("skip_build config should drop %q, but it appears in the file set", p)
+		}
+	}
+}
+
+func TestGenerateCommand_OnlyBuildEmitsJustScaffolding(t *testing.T) {
+	chdirWithSpec(t)
+	set := dryRunJSON(t, "--only-build")
+	if len(set) != len(buildScaffoldingFiles) {
+		t.Errorf("--only-build should emit exactly %d files, got %d: %v", len(buildScaffoldingFiles), len(set), set)
+	}
+	for _, p := range buildScaffoldingFiles {
+		if _, ok := set[p]; !ok {
+			t.Errorf("--only-build should emit %q, but it is missing from the file set", p)
+		}
+	}
+	// No provider-code files leak through.
+	for _, p := range []string{"go.mod", "README.md", "internal/provider/provider.go"} {
+		if _, ok := set[p]; ok {
+			t.Errorf("--only-build should not emit %q, but it appears in the file set", p)
+		}
+	}
+}
+
+func TestGenerateCommand_OnlyBuildAndSkipBuildMutuallyExclusive(t *testing.T) {
+	chdirWithSpec(t)
+	cmd, _ := newTestCommand("generate", "--spec", "api.yaml", "--dry-run", "--only-build", "--skip-build")
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatal("expected error combining --only-build and --skip-build")
+	}
+	if !strings.Contains(err.Error(), "mutually exclusive") {
+		t.Errorf("expected mutually-exclusive error, got %q", err.Error())
+	}
+}
+
+const dynamicReleaseWorkflowPath = ".github/workflows/regenerate-and-release.yml"
+
+func TestGenerateCommand_DynamicReleaseDefaultOff(t *testing.T) {
+	chdirWithSpec(t)
+	set := dryRunJSON(t)
+	if _, ok := set[dynamicReleaseWorkflowPath]; ok {
+		t.Errorf("regenerate-and-release workflow should be absent by default, but appears in: %v", set)
+	}
+}
+
+func TestGenerateCommand_DynamicReleaseViaFlag(t *testing.T) {
+	chdirWithSpec(t)
+	set := dryRunJSON(t, "--dynamic-release")
+	if _, ok := set[dynamicReleaseWorkflowPath]; !ok {
+		t.Errorf("--dynamic-release should emit %q, missing from: %v", dynamicReleaseWorkflowPath, set)
+	}
+	// It is additive: the existing release.yml scaffolding is still present.
+	if _, ok := set[".github/workflows/release.yml"]; !ok {
+		t.Errorf("--dynamic-release should keep the static release.yml, missing from: %v", set)
+	}
+}
+
+func TestGenerateCommand_DynamicReleaseViaConfig(t *testing.T) {
+	chdirWithSpec(t)
+	const cfgYaml = `provider:
+  name: test-api
+  version: 0.1.0
+generation:
+  dynamic_release:
+    enabled: true
+    image: ghcr.io/example/eidos:v0.4.2
+    spec_path: openapi.yaml
+`
+	if err := os.WriteFile("generator.yaml", []byte(cfgYaml), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	set := dryRunJSON(t, "--config", "generator.yaml")
+	if _, ok := set[dynamicReleaseWorkflowPath]; !ok {
+		t.Errorf("dynamic_release.enabled should emit %q, missing from: %v", dynamicReleaseWorkflowPath, set)
 	}
 }
