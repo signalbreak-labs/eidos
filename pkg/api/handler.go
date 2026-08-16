@@ -3471,6 +3471,10 @@ func generateStarterConfig(spec []byte, name, providerName string, usePutAsCreat
 	// carries use_put_as_create explicitly (self-documenting default-on) and
 	// round-trips: feeding it back to `eidos generate --config` honors it.
 	cfg.UsePutAsCreate = boolPtr(usePutAsCreate)
+	// Record sign_release explicitly so the starter config documents the
+	// default-on GPG signing as a visible, flippable knob (set false to opt
+	// out) and round-trips through `eidos generate --config`.
+	cfg.SignRelease = boolPtr(true)
 	return cfg, version, allDiags, nil
 }
 

@@ -80,6 +80,10 @@ provider:
 spec:
   path: %q
   format: openapi3
+# sign_release opts out of GPG-signed checksums. Signed releases are default-on;
+# configure GPG_PRIVATE_KEY and GPG_PASSPHRASE repository secrets, or uncomment
+# to disable signing:
+# sign_release: false
 generation:
   resources:
     include: []

@@ -8,6 +8,8 @@ import (
 
 	"github.com/google/jsonschema-go/jsonschema"
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
+
+	"github.com/signalbreak-labs/eidos/pkg/api"
 )
 
 // These tests guard against the MCP output-schema violations an LLM hit against
@@ -82,6 +84,40 @@ func assertArrayFieldsNotNull(t *testing.T, body []byte, fields []string) {
 	}
 }
 
+// assertStructuredOutputValidates validates the handler's structured return
+// value (the second return value, `out`) against the tool's OutputSchema —
+// exactly what the go-sdk does before sending the result to the client (it
+// marshals `out`, then applies the OutputSchema). The text-content checks above
+// only cover the CallToolResult body; the SDK rejects the call at the
+// structured-output layer, so this is the direct regression guard for the
+// "type: ... has type null, want array" failure an LLM hit against eidos 0.3.3,
+// whose root cause was error/panic paths returning zero-value structs with nil
+// slices.
+func assertStructuredOutputValidates(t *testing.T, tool *sdkmcp.Tool, out any) {
+	t.Helper()
+	schema, ok := tool.OutputSchema.(*jsonschema.Schema)
+	if !ok {
+		t.Fatalf("%s OutputSchema is %T, not *jsonschema.Schema", tool.Name, tool.OutputSchema)
+	}
+	resolved, err := schema.Resolve(nil)
+	if err != nil {
+		t.Fatalf("resolve %s output schema: %v", tool.Name, err)
+	}
+	outbytes, err := json.Marshal(out)
+	if err != nil {
+		t.Fatalf("marshal %s structured output: %v", tool.Name, err)
+	}
+	var v any
+	if err := json.Unmarshal(outbytes, &v); err != nil {
+		t.Fatalf("unmarshal %s structured output: %v\n%s", tool.Name, err, outbytes)
+	}
+	if err := resolved.Validate(v); err != nil {
+		t.Errorf("%s STRUCTURED output does not validate against its OutputSchema "+
+			"(this is what the SDK rejects and sends to the client): %v\nout: %s",
+			tool.Name, err, outbytes)
+	}
+}
+
 // emptySpec is a valid OpenAPI doc with no paths: it builds an IR preview with
 // no constructs, exercising the "valid spec, empty result" path where append to
 // a nil slice previously left array fields nil.
@@ -101,7 +137,7 @@ func TestHandleInspect_EmptyResultValidatesAgainstOutputSchema(t *testing.T) {
 		{"invalid spec", invalidSpec},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			res, _, err := HandleInspect(context.Background(), nil, InspectArgs{Spec: tc.spec})
+			res, out, err := HandleInspect(context.Background(), nil, InspectArgs{Spec: tc.spec})
 			if err != nil {
 				t.Fatalf("HandleInspect error: %v", err)
 			}
@@ -109,6 +145,7 @@ func TestHandleInspect_EmptyResultValidatesAgainstOutputSchema(t *testing.T) {
 			assertOutputValidates(t, InspectTool(), body)
 			assertArrayFieldsNotNull(t, body,
 				[]string{"diagnostics", "resources", "data_sources", "actions", "ephemeral_resources", "list_resources", "functions"})
+			assertStructuredOutputValidates(t, InspectTool(), out)
 		})
 	}
 }
@@ -122,7 +159,7 @@ func TestHandleGenerate_EmptyResultValidatesAgainstOutputSchema(t *testing.T) {
 		{"invalid spec", invalidSpec},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			res, _, err := HandleGenerate(context.Background(), nil, GenerateArgs{Spec: tc.spec})
+			res, out, err := HandleGenerate(context.Background(), nil, GenerateArgs{Spec: tc.spec})
 			if err != nil {
 				t.Fatalf("HandleGenerate error: %v", err)
 			}
@@ -130,6 +167,7 @@ func TestHandleGenerate_EmptyResultValidatesAgainstOutputSchema(t *testing.T) {
 			assertOutputValidates(t, GenerateTool(), body)
 			assertArrayFieldsNotNull(t, body,
 				[]string{"diagnostics", "resources", "data_sources", "actions"})
+			assertStructuredOutputValidates(t, GenerateTool(), out)
 		})
 	}
 }
@@ -143,13 +181,14 @@ func TestHandleValidateSchemas_EmptyResultValidatesAgainstOutputSchema(t *testin
 		{"invalid spec", invalidSpec},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			res, _, err := HandleValidateSchemas(context.Background(), nil, ValidateSchemasArgs{Spec: tc.spec})
+			res, out, err := HandleValidateSchemas(context.Background(), nil, ValidateSchemasArgs{Spec: tc.spec})
 			if err != nil {
 				t.Fatalf("HandleValidateSchemas error: %v", err)
 			}
 			body := toolBody(t, res)
 			assertOutputValidates(t, ValidateSchemasTool(), body)
 			assertArrayFieldsNotNull(t, body, []string{"diagnostics", "issues"})
+			assertStructuredOutputValidates(t, ValidateSchemasTool(), out)
 		})
 	}
 }
@@ -164,25 +203,29 @@ func TestHandleOverridePreview_EmptyResultValidatesAgainstOutputSchema(t *testin
 		{"invalid spec", invalidSpec},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			res, _, err := HandleOverridePreview(context.Background(), nil, OverridePreviewArgs{Spec: tc.spec, Config: cfg})
+			res, out, err := HandleOverridePreview(context.Background(), nil, OverridePreviewArgs{Spec: tc.spec, Config: cfg})
 			if err != nil {
 				t.Fatalf("HandleOverridePreview error: %v", err)
 			}
 			body := toolBody(t, res)
 			assertOutputValidates(t, OverridePreviewTool(), body)
 			assertArrayFieldsNotNull(t, body, []string{"diagnostics", "resources", "overrides"})
+			assertStructuredOutputValidates(t, OverridePreviewTool(), out)
 		})
 	}
 }
 
-// TestHandleInspect_ErrorPathValidatesAgainstOutputSchema ensures the shared
-// error path (errorToolResult) emits every required array field as [], so a
-// spec-source error does not produce output the SDK rejects. This was the
-// other half of the null-array bug: the error result omitted required fields.
+// TestHandleInspect_ErrorPathValidatesAgainstOutputSchema ensures the error
+// path emits every required array field as [] in BOTH the text content and the
+// structured return value, so a spec-source error does not produce output the
+// SDK rejects. This was the other half of the null-array bug: the error result
+// omitted required fields, and — the part the SDK actually enforces — the
+// handler returned a zero-value InspectResult{} whose nil slices marshaled to
+// null and were rejected at the structured-output layer.
 func TestHandleInspect_ErrorPathValidatesAgainstOutputSchema(t *testing.T) {
 	// An absolute path that does not exist yields a file-read error from
-	// normalizeSpec, routing through errorToolResult.
-	res, _, err := HandleInspect(context.Background(), nil, InspectArgs{
+	// normalizeSpec, routing through the error path.
+	res, out, err := HandleInspect(context.Background(), nil, InspectArgs{
 		Spec: "/definitely/not/a/real/spec/path.yaml",
 	})
 	if err != nil {
@@ -192,7 +235,31 @@ func TestHandleInspect_ErrorPathValidatesAgainstOutputSchema(t *testing.T) {
 	assertOutputValidates(t, InspectTool(), body)
 	assertArrayFieldsNotNull(t, body,
 		[]string{"diagnostics", "resources", "data_sources", "actions"})
+	assertStructuredOutputValidates(t, InspectTool(), out)
 	if !strings.Contains(string(body), `"valid":false`) {
 		t.Errorf("expected valid:false in error output, got %s", body)
+	}
+}
+
+// TestHandleInspect_PanicPathValidatesAgainstOutputSchema swaps the validate
+// seam for a panicking function and asserts the recovered structured output
+// still validates against the OutputSchema. Before recoverHandler set the named
+// returns, a recovered panic left the structured return as a zero-value
+// InspectResult{} (nil slices → null), which the SDK rejected.
+func TestHandleInspect_PanicPathValidatesAgainstOutputSchema(t *testing.T) {
+	setValidateContextForTest(func(context.Context, []byte) api.ValidateResponse {
+		panic("boom from pipeline")
+	})
+	t.Cleanup(func() { setValidateContextForTest(api.ValidateContext) })
+
+	res, out, err := HandleInspect(context.Background(), nil, InspectArgs{Spec: emptySpec})
+	if err != nil {
+		t.Fatalf("HandleInspect error: %v", err)
+	}
+	body := toolBody(t, res)
+	assertOutputValidates(t, InspectTool(), body)
+	assertStructuredOutputValidates(t, InspectTool(), out)
+	if !strings.Contains(string(body), "panic in eidos/inspect handler") {
+		t.Errorf("expected panic summary in body, got %s", body)
 	}
 }

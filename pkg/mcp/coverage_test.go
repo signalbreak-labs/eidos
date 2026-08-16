@@ -185,30 +185,51 @@ func TestCollectionSchemaIssues(t *testing.T) {
 	}
 }
 
-// TestErrorToolResult asserts the error result carries a JSON body flagging
-// valid=false with an error diagnostic.
-func TestErrorToolResult(t *testing.T) {
-	res := errorToolResult(errors.New("boom"))
-	if res == nil || len(res.Content) == 0 {
-		t.Fatal("expected non-empty error result")
+// TestInspectErrorResult asserts the per-tool error-result constructor produces
+// a body that validates against eidos/inspect's OutputSchema: valid=false with
+// an error diagnostic and every required array field a non-nil empty slice. The
+// SDK validates the structured return value against the OutputSchema, so a
+// zero-value InspectResult{} (nil slices → JSON null) would be rejected with
+// "has type null, want array"; this is the regression guard for that path.
+func TestInspectErrorResult(t *testing.T) {
+	out := inspectErrorResult(errors.New("boom"))
+	res, err := marshalToolResult(out)
+	if err != nil {
+		t.Fatalf("marshalToolResult: %v", err)
 	}
-	text, ok := res.Content[0].(*sdkmcp.TextContent)
-	if !ok {
-		t.Fatalf("content[0] = %T, want text content", res.Content[0])
-	}
-	body := text.Text
-	if !strings.Contains(body, "boom") || !strings.Contains(body, "valid") {
+	body := toolBody(t, res)
+	assertOutputValidates(t, InspectTool(), body)
+	assertArrayFieldsNotNull(t, body,
+		[]string{"diagnostics", "resources", "data_sources", "actions", "ephemeral_resources", "list_resources", "functions"})
+	if !strings.Contains(string(body), "boom") || !strings.Contains(string(body), `"valid":false`) {
 		t.Errorf("error result body = %q, want error detail + valid=false", body)
 	}
 }
 
-// TestRecoverTool_PanicPath asserts recoverTool swallows a panic in a deferred
-// call so the handler never propagates.
-func TestRecoverTool_PanicPath(t *testing.T) {
+// TestRecoverHandler_PanicPath asserts recoverHandler swallows a panic in a
+// deferred call and sets the named returns to a valid error result, so the
+// handler never propagates and the SDK receives schema-conformant output
+// instead of a zero-value struct whose nil arrays it would reject.
+func TestRecoverHandler_PanicPath(t *testing.T) {
+	var (
+		res *sdkmcp.CallToolResult
+		out InspectResult
+	)
 	func() {
-		defer recoverTool("eidos/test")
+		defer recoverHandler("eidos/test", inspectErrorResult, &res, &out)
 		panic("kaboom")
 	}()
+	if res == nil {
+		t.Fatal("expected recoverHandler to set a non-nil result")
+	}
+	if out.Valid {
+		t.Errorf("expected Valid=false after panic, got %+v", out)
+	}
+	body := toolBody(t, res)
+	assertOutputValidates(t, InspectTool(), body)
+	if !strings.Contains(string(body), "panic in eidos/test handler") {
+		t.Errorf("expected panic summary in body, got %s", body)
+	}
 }
 
 // TestWriteProvider_WritesFiles asserts writeProvider emits files into dir.

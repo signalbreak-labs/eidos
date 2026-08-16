@@ -184,6 +184,12 @@ type CollectOptions struct {
 	// DynamicReleaseSpecPath is the spec path the generated workflow regenerates
 	// from. Empty means the emitter applies its default.
 	DynamicReleaseSpecPath string
+	// SignRelease overrides the default-on GPG signing of release artifacts.
+	// It mirrors the top-level sign_release generator.yaml field (a *bool): nil
+	// means "unset" → keep the BuildConfigFromIR default (signed); an explicit
+	// false opts out. Applied in FilesForProviderIR before releaseFiles and the
+	// dynamic-release workflow are emitted.
+	SignRelease *bool
 }
 
 // DefaultCollectOptions returns the recommended collection options for a full
