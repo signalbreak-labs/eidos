@@ -56,12 +56,20 @@
     "reason": "generated HTTP client"
   },
   {
+    "path": "internal/client/client_test.go",
+    "reason": "generated HTTP client unit tests"
+  },
+  {
     "path": "internal/client/errors.go",
     "reason": "typed API error helpers"
   },
   {
     "path": "internal/client/logging.go",
     "reason": "request/response trace logging"
+  },
+  {
+    "path": "internal/client/logging_test.go",
+    "reason": "trace logging unit tests"
   },
   {
     "path": "internal/client/models.go",
@@ -80,8 +88,16 @@
     "reason": "action mycloud-data_search_records"
   },
   {
+    "path": "internal/provider/action_search_records_remote_test.go",
+    "reason": "coverage tests for action search_records remote helper"
+  },
+  {
     "path": "internal/provider/data_source_list_data_sets.go",
     "reason": "data source mycloud-data_list_data_sets"
+  },
+  {
+    "path": "internal/provider/data_source_list_data_sets_remote_test.go",
+    "reason": "coverage tests for data source list_data_sets remote helpers"
   },
   {
     "path": "internal/provider/data_source_list_data_sets_test.go",
@@ -90,6 +106,10 @@
   {
     "path": "internal/provider/data_source_list_fields.go",
     "reason": "data source mycloud-data_list_fields"
+  },
+  {
+    "path": "internal/provider/data_source_list_fields_remote_test.go",
+    "reason": "coverage tests for data source list_fields remote helpers"
   },
   {
     "path": "internal/provider/data_source_list_fields_test.go",
@@ -106,6 +126,10 @@
   {
     "path": "internal/provider/provider_test.go",
     "reason": "provider-level unit tests"
+  },
+  {
+    "path": "internal/provider/testing_helpers_test.go",
+    "reason": "shared httptest helpers for coverage tests"
   },
   {
     "path": "internal/provider/validators.go",

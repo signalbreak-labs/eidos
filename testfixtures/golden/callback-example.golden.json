@@ -40,12 +40,20 @@
     "reason": "generated HTTP client"
   },
   {
+    "path": "internal/client/client_test.go",
+    "reason": "generated HTTP client unit tests"
+  },
+  {
     "path": "internal/client/errors.go",
     "reason": "typed API error helpers"
   },
   {
     "path": "internal/client/logging.go",
     "reason": "request/response trace logging"
+  },
+  {
+    "path": "internal/client/logging_test.go",
+    "reason": "trace logging unit tests"
   },
   {
     "path": "internal/client/models.go",
@@ -64,6 +72,10 @@
     "reason": "action callback-example-api_subscribe_to_stream"
   },
   {
+    "path": "internal/provider/action_subscribe_to_stream_remote_test.go",
+    "reason": "coverage tests for action subscribe_to_stream remote helper"
+  },
+  {
     "path": "internal/provider/json_convert.go",
     "reason": "JSON/model conversion helpers for wired CRUD bodies"
   },
@@ -74,6 +86,10 @@
   {
     "path": "internal/provider/provider_test.go",
     "reason": "provider-level unit tests"
+  },
+  {
+    "path": "internal/provider/testing_helpers_test.go",
+    "reason": "shared httptest helpers for coverage tests"
   },
   {
     "path": "internal/provider/validators.go",

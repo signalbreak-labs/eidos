@@ -176,6 +176,10 @@ func TestActionExampleFile_Render(t *testing.T) {
 
 	wantSubstrings := []string{
 		`action "mycloud_reboot_server" "example" {`,
+		// Terraform 1.14+ wraps action arguments in a nested config block;
+		// emitting them at the action block's top level is rejected as
+		// "Unsupported argument" at validate/plan time.
+		`config {`,
 		"server_id = \"example\"",
 		"force = true",
 		"}",

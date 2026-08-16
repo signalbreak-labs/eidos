@@ -446,3 +446,194 @@ func TestWiredUpdateBody_PreservesStateIntoPlan(t *testing.T) {
 		t.Errorf("wired Update body must call preserveStateIntoPlan(&plan, &state)\n--- body ---\n%s", got)
 	}
 }
+
+// TestWiredCreateBody_ResponseInnerPath asserts the wired Create body navigates
+// into the response inner path (after the envelope unwrap) before applying the
+// body to the model. This handles create responses that nest the created
+// resource under a named property alongside side-effect objects (e.g. SpaceTraders
+// purchase-ship {data:{ship:{...},transaction:{...},agent:{...}}}).
+func TestWiredCreateBody_ResponseInnerPath(t *testing.T) {
+	r := sampleResourceIR()
+	r.CRUDMapping.Create.ResponseEnvelope = "data"
+	r.CRUDMapping.Create.ResponseInnerPath = "ship"
+
+	file := ResourceFile(r, testClientImport)
+	var buf bytes.Buffer
+	if err := file.Render(&buf); err != nil {
+		t.Fatalf("Render() error = %v", err)
+	}
+	got := buf.String()
+
+	for _, want := range []string{
+		`inner, ok := data["ship"]`,
+		`im, ok := inner.(map[string]any)`,
+		`data = im`,
+		`applyJSONToModel(&plan, data)`,
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("generated create body missing %q\n--- body ---\n%s", want, got)
+		}
+	}
+}
+
+// TestWiredCreateBody_NoInnerPathByDefault asserts a create response with no
+// inner path does not emit the inner navigation block (so the common, unnested
+// case is unchanged).
+func TestWiredCreateBody_NoInnerPathByDefault(t *testing.T) {
+	r := sampleResourceIR()
+	r.CRUDMapping.Create.ResponseEnvelope = "data"
+
+	file := ResourceFile(r, testClientImport)
+	var buf bytes.Buffer
+	if err := file.Render(&buf); err != nil {
+		t.Fatalf("Render() error = %v", err)
+	}
+	got := buf.String()
+
+	if strings.Contains(got, `inner, ok := data[`) {
+		t.Errorf("create body must not emit inner navigation when ResponseInnerPath is empty\n--- body ---\n%s", got)
+	}
+}
+
+// identityResourceIR returns a wired resource paired with a list resource via a
+// shared identity schema, mirroring the SpaceTraders ship resource: the
+// identity attribute "ship_symbol" is sourced from the model's "symbol" field
+// (matched by wire name). A bare "id" attribute exercises the name fallback.
+func identityResourceIR() ir.ResourceIR {
+	r := sampleResourceIR()
+	// The model field the identity is sourced from. Its wire name ("symbol")
+	// differs from the identity attribute name ("ship_symbol"), exercising the
+	// wire-name match path.
+	r.Schema.Attributes = append(r.Schema.Attributes, ir.AttributeIR{
+		Name:     "symbol",
+		Computed: true,
+		WireName: "symbol",
+		Schema:   ir.SchemaIR{Type: ir.TypeString},
+	})
+	r.IdentitySchema = &ir.ObjectSchemaIR{
+		Attributes: []ir.AttributeIR{
+			{
+				Name:     "ship_symbol",
+				WireName: "symbol",
+				Computed: true,
+				Schema:   ir.SchemaIR{Type: ir.TypeString},
+			},
+		},
+	}
+	return r
+}
+
+// TestWiredCreateBody_IdentitySet asserts a wired Create populates resp.Identity
+// from the model so the framework does not reject the response with "Missing
+// Resource Identity After Create". The identity attribute is sourced from the
+// model field matched by wire name.
+func TestWiredCreateBody_IdentitySet(t *testing.T) {
+	r := identityResourceIR()
+
+	file := ResourceFile(r, testClientImport)
+	var buf bytes.Buffer
+	if err := file.Render(&buf); err != nil {
+		t.Fatalf("Render() error = %v", err)
+	}
+	got := buf.String()
+
+	for _, want := range []string{
+		`resp.Identity.SetAttribute(ctx, path.Root("ship_symbol"), plan.Symbol)`,
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("generated create body missing %q\n--- body ---\n%s", want, got)
+		}
+	}
+}
+
+// TestWiredReadBody_IdentitySet asserts a wired Read also sets the identity
+// from the refreshed state model (identity is immutable, so it is re-derived
+// from the same field after Read).
+func TestWiredReadBody_IdentitySet(t *testing.T) {
+	r := identityResourceIR()
+
+	file := ResourceFile(r, testClientImport)
+	var buf bytes.Buffer
+	if err := file.Render(&buf); err != nil {
+		t.Fatalf("Render() error = %v", err)
+	}
+	got := buf.String()
+
+	if !strings.Contains(got, `resp.Identity.SetAttribute(ctx, path.Root("ship_symbol"), state.Symbol)`) {
+		t.Errorf("generated read body missing identity SetAttribute from state\n--- body ---\n%s", got)
+	}
+}
+
+// TestWiredBody_NoIdentityOmitsIdentitySet asserts a resource without an
+// identity schema (the common inferred-resource case) never emits identity
+// SetAttribute statements, so non-paired resources are unaffected.
+func TestWiredBody_NoIdentityOmitsIdentitySet(t *testing.T) {
+	r := sampleResourceIR() // no IdentitySchema
+
+	file := ResourceFile(r, testClientImport)
+	var buf bytes.Buffer
+	if err := file.Render(&buf); err != nil {
+		t.Fatalf("Render() error = %v", err)
+	}
+	got := buf.String()
+
+	if strings.Contains(got, `resp.Identity.SetAttribute(`) {
+		t.Errorf("body must not emit identity SetAttribute when resource has no identity schema\n--- body ---\n%s", got)
+	}
+}
+
+// TestIdentityModelField asserts the identity-to-model-field match prefers the
+// wire name and falls back to the sanitized attribute name.
+func TestIdentityModelField(t *testing.T) {
+	r := identityResourceIR()
+
+	// Wire-name match: "symbol" wire name resolves to the Symbol model field.
+	if got := identityModelField(r, r.IdentitySchema.Attributes[0]); got != "Symbol" {
+		t.Errorf("identityModelField(wire name match) = %q, want %q", got, "Symbol")
+	}
+
+	// Name fallback: an identity attribute whose wire name has no model match
+	// falls back to matching the attribute name against model attribute names.
+	r.Schema.Attributes = append(r.Schema.Attributes, ir.AttributeIR{
+		Name:   "ship_symbol",
+		Schema: ir.SchemaIR{Type: ir.TypeString},
+	})
+	idAttr := ir.AttributeIR{Name: "ship_symbol", WireName: "nonexistent"}
+	if got := identityModelField(r, idAttr); got != "ShipSymbol" {
+		t.Errorf("identityModelField(name fallback) = %q, want %q", got, "ShipSymbol")
+	}
+
+	// No match returns "" so identitySetStmts surfaces a runtime diagnostic.
+	if got := identityModelField(sampleResourceIR(), ir.AttributeIR{Name: "missing", WireName: "absent"}); got != "" {
+		t.Errorf("identityModelField(no match) = %q, want %q", got, "")
+	}
+}
+
+// TestWiredCreateBody_IdentitySet_Compiles generates a full provider module with
+// an identity-bearing wired resource and compiles it, proving the path import is
+// registered and the SetAttribute call is syntactically valid.
+func TestWiredCreateBody_IdentitySet_Compiles(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping network-bound compile test in -short mode")
+	}
+
+	p := sampleProviderWithResourceIR()
+	p.Resources = []ir.ResourceIR{identityResourceIR()}
+
+	tmp := generateResourceModule(t, p)
+
+	ctx, cancel := contextWithTimeout(t, 5*time.Minute)
+	defer cancel()
+
+	tidyCmd := exec.CommandContext(ctx, "go", "mod", "tidy")
+	tidyCmd.Dir = tmp
+	if out, err := tidyCmd.CombinedOutput(); err != nil {
+		t.Fatalf("go mod tidy failed: %v\n%s", err, out)
+	}
+
+	buildCmd := exec.CommandContext(ctx, "go", "build", "./...")
+	buildCmd.Dir = tmp
+	if out, err := buildCmd.CombinedOutput(); err != nil {
+		t.Fatalf("go build ./... failed for identity resource: %v\n%s", err, out)
+	}
+}

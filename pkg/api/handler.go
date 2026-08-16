@@ -699,6 +699,15 @@ func buildIRPreview(spec *parser.Spec, version parser.Version, cfg *config.Confi
 	applyWriteOnlyAttributesToProvider(preview, &previewDiags)
 	inferSensitiveAttributesToProvider(preview, &previewDiags)
 
+	// List resources share their identity schema with the paired managed
+	// resource of the same type name: terraform query types the identities a
+	// list resource streams against the managed resource's identity schema
+	// (ResourceWithIdentity), so the two must match. Copy the list resource's
+	// identity schema onto the managed resource so the generator emits the
+	// IdentitySchema method the framework requires; without it terraform query
+	// fails with "Identity schema not found for resource type".
+	pairListResourceIdentities(preview)
+
 	// Two operations that normalize to the same construct name (e.g. duplicate
 	// operationIds) would make the generator emit two files at one path. Fail
 	// loud here with a diagnostic naming both source operations instead of
@@ -1505,9 +1514,9 @@ func addPathOperations(preview *ir.ProviderIR, spec *parser.Spec, path string, p
 				warnListUniqueItems(diags, pathOps, path, method)
 			}
 		case kindAction:
-			preview.Actions = append(preview.Actions, actionFromOperation(op, providerName, path, method, pathOps))
+			preview.Actions = append(preview.Actions, actionFromOperation(op, providerName, path, method, pathOps, diags))
 		case kindEphemeral:
-			preview.EphemeralResources = append(preview.EphemeralResources, ephemeralFromOperation(spec, op, providerName, path, method, pathOps))
+			preview.EphemeralResources = append(preview.EphemeralResources, ephemeralFromOperation(spec, op, providerName, path, method, pathOps, diags))
 			// The sibling lifecycle operations the ephemeral claims as its
 			// Renew/Close mappings are consumed so they do not also classify as
 			// their own constructs (renew/revoke/rotate are action verbs, so a
@@ -1610,7 +1619,7 @@ func buildGroupedResources(spec *parser.Spec, providerName string, pathOps map[s
 		// ephemeral, function, or list is not a resource lifecycle step. The
 		// method-based resource/data-source distinction is intentionally overridden
 		// by grouping (a GET on an instance path becomes the resource Read).
-		if !groupIsResource(spec, g, pathOps) {
+		if !groupIsResource(g, pathOps) {
 			continue
 		}
 
@@ -1630,6 +1639,7 @@ func buildGroupedResources(spec *parser.Spec, providerName string, pathOps map[s
 		}
 		res.CRUDMapping.Create = resourceOperationMapping(spec, "POST", g.CollectionPath, parserOp(spec, g.CollectionPath, "POST"), envelopeOf(g.Create))
 		res.CRUDMapping.Create.MediaType = mediaTypeOf(g.Create)
+		res.CRUDMapping.Create.ResponseInnerPath = detectResponseInnerPath(g.Create, g.Read)
 		res.CRUDMapping.Read = resourceOperationMapping(spec, "GET", g.InstancePath, parserOp(spec, g.InstancePath, "GET"), envelopeOf(g.Read))
 		res.CRUDMapping.Read.MediaType = mediaTypeOf(g.Read)
 		if g.Update != nil {
@@ -1639,6 +1649,7 @@ func buildGroupedResources(spec *parser.Spec, providerName string, pathOps map[s
 			}
 			upd := resourceOperationMapping(spec, updMethod, g.InstancePath, parserOp(spec, g.InstancePath, updMethod), envelopeOf(g.Update))
 			upd.MediaType = mediaTypeOf(g.Update)
+			upd.ResponseInnerPath = detectResponseInnerPath(g.Update, g.Read)
 			res.CRUDMapping.Update = &upd
 		}
 		res.CRUDMapping.Delete = resourceOperationMapping(spec, "DELETE", g.InstancePath, parserOp(spec, g.InstancePath, "DELETE"), envelopeOf(g.Delete))
@@ -1810,6 +1821,9 @@ func resourceFromOverrideCRUD(spec *parser.Spec, providerName string, g transfor
 	if g.Create != nil {
 		res.CRUDMapping.Create = resourceOperationMapping(spec, string(g.Create.Method), g.Create.Path, parserOp(spec, g.Create.Path, string(g.Create.Method)), envelopeOf(g.Create))
 		res.CRUDMapping.Create.MediaType = mediaTypeOf(g.Create)
+		if g.Read != nil {
+			res.CRUDMapping.Create.ResponseInnerPath = detectResponseInnerPath(g.Create, g.Read)
+		}
 	}
 	if g.Read != nil {
 		res.CRUDMapping.Read = resourceOperationMapping(spec, string(g.Read.Method), g.Read.Path, parserOp(spec, g.Read.Path, string(g.Read.Method)), envelopeOf(g.Read))
@@ -1818,6 +1832,9 @@ func resourceFromOverrideCRUD(spec *parser.Spec, providerName string, g transfor
 	if g.Update != nil {
 		upd := resourceOperationMapping(spec, string(g.Update.Method), g.Update.Path, parserOp(spec, g.Update.Path, string(g.Update.Method)), envelopeOf(g.Update))
 		upd.MediaType = mediaTypeOf(g.Update)
+		if g.Read != nil {
+			upd.ResponseInnerPath = detectResponseInnerPath(g.Update, g.Read)
+		}
 		res.CRUDMapping.Update = &upd
 	}
 	if g.Delete != nil {
@@ -1827,6 +1844,7 @@ func resourceFromOverrideCRUD(spec *parser.Spec, providerName string, g transfor
 	schema, idAttr := transformer.ManagedResourceSchema(g)
 	res.Schema = schema
 	res.IDAttribute = idAttr
+	res.OverrideCreated = true
 	return &res
 }
 
@@ -1860,6 +1878,59 @@ func envelopeOfTransformerOp(pathOps map[string]map[transformer.HTTPMethod]trans
 		return top.ResponseEnvelope
 	}
 	return ""
+}
+
+// detectResponseInnerPath identifies the property under which a create or
+// update response nests the created/updated resource alongside side-effect
+// objects. The single-key envelope unwrap (transformer.UnwrapResponseEnvelope)
+// strips one {data: ...} wrapper, but some create/update responses wrap the
+// resource under a named property of that wrapper (e.g. SpaceTraders
+// purchase-ship returns {data:{ship:{...},transaction:{...},agent:{...}}},
+// where the ship is under "ship"). After the envelope is stripped the
+// response is {ship, transaction, agent}, which does not match the resource
+// model directly, so the generator would find no identifier and fail to track
+// the resource.
+//
+// This matches a property of the unwrapped create/update response whose $ref
+// (RefName) equals the resource's read response $ref, returning that property
+// name so the generator navigates into it before applying the body to the
+// model. It returns "" when the response applies directly after the envelope
+// unwrap (the create response already IS the resource), when either side has
+// no resolvable $ref, or when the match is ambiguous (zero or more than one
+// property references the resource schema) — in those cases the generator
+// applies the body as-is and surfaces a clear runtime diagnostic if the
+// identifier remains unset (fail-loud, never silent).
+func detectResponseInnerPath(write, read *transformer.Operation) string {
+	if write == nil || write.ResponseSchema == nil || read == nil || read.ResponseSchema == nil {
+		return ""
+	}
+	readRef := strings.TrimSpace(read.ResponseSchema.RefName)
+	if readRef == "" {
+		return ""
+	}
+	// The response applies directly when the create/update response itself is
+	// the resource (same RefName) — no inner navigation needed.
+	if strings.EqualFold(strings.TrimSpace(write.ResponseSchema.RefName), readRef) {
+		return ""
+	}
+	if !strings.EqualFold(write.ResponseSchema.Type, "object") || len(write.ResponseSchema.Properties) == 0 {
+		return ""
+	}
+	var match string
+	count := 0
+	for name, p := range write.ResponseSchema.Properties {
+		if !strings.EqualFold(strings.TrimSpace(p.RefName), readRef) {
+			continue
+		}
+		count++
+		if count == 1 {
+			match = name
+		}
+	}
+	if count != 1 {
+		return ""
+	}
+	return match
 }
 
 // groupedImportFormat builds the brace-enclosed import ID format for a grouped
@@ -1912,36 +1983,98 @@ func groupedImportFormat(g transformer.ResourceCRUD, schema ir.ObjectSchemaIR, i
 // when any operation is claimed as an action, ephemeral, function, or list. The
 // method-based kindResource/kindDataSource distinction is deliberately not checked
 // here: grouping reclassifies an instance GET as a resource Read.
-func groupIsResource(spec *parser.Spec, g transformer.ResourceCRUD, pathOps map[string]map[transformer.HTTPMethod]transformer.Operation) bool {
+// groupIsResource reports whether the CRUD group's operations survive
+// reclassification as a managed resource: each of its lifecycle operations must
+// still classify as a resource under per-operation rules. An explicit
+// x-terraform-* extension or a path keyword (e.g. "convert", "search", "query"
+// making the instance GET a provider function) rejects the group, because the
+// operation is meant to be a function/action/ephemeral/list, not a resource
+// lifecycle step.
+//
+// The parser operations are reconstructed from the group's transformer
+// Operations rather than via parserOp(spec, ...) so the check needs no *parser.Spec
+// and can be reused by classifyOperation's resource gate (groupEmitsFullCRUDResource)
+// without threading spec through classifyOperation. transformer.Operation carries
+// OperationID and Extensions — the only parser.Operation fields classifyOperation
+// consults — so the reconstruction is equivalent for classification.
+func groupIsResource(g transformer.ResourceCRUD, pathOps map[string]map[transformer.HTTPMethod]transformer.Operation) bool {
+	// opRef pairs the path classifyOperation expects for a lifecycle step
+	// (g.CollectionPath for Create, g.InstancePath for Read/Update/Delete) with
+	// the HTTP method and the transformer Operation supplying OperationID and
+	// Extensions. The path comes from the group rather than the op so callers
+	// building synthetic ResourceCRUDs (and production, where InferResourceCRUD
+	// sets both consistently) need not populate Operation.Path.
 	type opRef struct {
-		path, method string
+		path   string
+		method string
+		op     *transformer.Operation
 	}
-	opRefs := []opRef{
-		{g.CollectionPath, "POST"},
-		{g.InstancePath, "GET"},
-		{g.InstancePath, "DELETE"},
-	}
-	if g.FullUpdate != nil {
-		opRefs = append(opRefs, opRef{g.InstancePath, "PUT"})
-	}
-	if g.PartialUpdate != nil {
-		opRefs = append(opRefs, opRef{g.InstancePath, "PATCH"})
-	}
-	for _, ref := range opRefs {
-		op := parserOp(spec, ref.path, ref.method)
-		if op == nil {
-			return false
+	var opRefs []opRef
+	add := func(path, method string, top *transformer.Operation) {
+		if top != nil {
+			opRefs = append(opRefs, opRef{path, method, top})
 		}
+	}
+	add(g.CollectionPath, "POST", g.Create)
+	add(g.InstancePath, "GET", g.Read)
+	add(g.InstancePath, "DELETE", g.Delete)
+	add(g.InstancePath, "PUT", g.FullUpdate)
+	add(g.InstancePath, "PATCH", g.PartialUpdate)
+	for _, ref := range opRefs {
+		pop := &parser.Operation{OperationID: ref.op.OperationID, Extensions: ref.op.Extensions}
 		// checkFullCRUD is false here: the group's operations are already known
 		// to form a complete CRUD group, so the CRUD-completeness reclassification
 		// (which turns a partial-update PATCH into an action) must not veto the
 		// group. Only explicit extensions and path keywords reject a group.
-		switch classifyOperation(ref.path, ref.method, op, pathOps, false) {
+		switch classifyOperation(ref.path, ref.method, pop, pathOps, false) {
 		case kindAction, kindEphemeral, kindFunction, kindListResource:
 			return false
 		}
 	}
 	return true
+}
+
+// groupEmitsFullCRUDResource reports whether the operation at (path, method)
+// belongs to a CRUD group that buildGroupedResources would actually emit as a
+// managed resource: the group must be structurally complete (Create + Read +
+// Delete) AND pass groupIsResource (its lifecycle ops are not reclassified as a
+// function/action/ephemeral/list by an x-terraform-* extension or a path
+// keyword). This is the gate classifyOperation applies in place of the
+// structural-only transformer.HasFullCRUD: without the groupIsResource overlay,
+// an operation whose group is rejected (e.g. a /convert/.../rules POST whose
+// sibling instance GET is a provider function via the "convert" keyword) would
+// still classify as kindResource and resourceFromOperation would emit an empty,
+// fully-scaffolded orphan resource — worse than the action it should become,
+// matching the HasFullCRUD design intent ("a scaffolded resource with an empty
+// model is worse than a wired action"). The structural check is equivalent to
+// transformer.HasFullCRUD; groupIsResource is the overlay that was missing.
+func groupEmitsFullCRUDResource(path, method string, pathOps map[string]map[transformer.HTTPMethod]transformer.Operation) bool {
+	hm := transformer.HTTPMethod(strings.ToUpper(method))
+	for _, g := range transformer.InferResourceCRUD(pathOps) {
+		if g.Create == nil || g.Read == nil || g.Delete == nil {
+			continue
+		}
+		if !opInGroup(g, path, hm) {
+			continue
+		}
+		if groupIsResource(g, pathOps) {
+			return true
+		}
+	}
+	return false
+}
+
+// opInGroup reports whether the CRUD group contains the operation at (path,
+// method), comparing against the group's Create/Read/Update/Delete operations.
+// transformer.groupHasOperation is unexported, so this mirrors it for use in
+// the handler's classification gate.
+func opInGroup(g transformer.ResourceCRUD, path string, method transformer.HTTPMethod) bool {
+	for _, op := range []*transformer.Operation{g.Create, g.Read, g.Update, g.Delete} {
+		if op != nil && op.Path == path && op.Method == method {
+			return true
+		}
+	}
+	return false
 }
 
 // groupSourceOperation returns the operation id that best identifies the group,
@@ -2122,6 +2255,9 @@ func operationMapping(method, path string, op *parser.Operation, responseEnvelop
 		FormDataParams:       formData,
 		SecurityRequirements: securityRequirementsFromOp(op),
 		ResponseEnvelope:     responseEnvelope,
+	}
+	if op != nil {
+		m.OperationID = op.OperationID
 	}
 	// A declared request body disables bodiless wiring for actions, list
 	// resources, and ephemeral resources: the generated client only encodes
@@ -2633,19 +2769,21 @@ func methodKind(method, path string, op *parser.Operation, pathOps map[string]ma
 		if !transformer.IsCRUDCreatePath(path, pathOps) {
 			return kindAction
 		}
-		// A POST that is a CRUD Create but whose group lacks a full
-		// Create+Read+Delete mapping is reclassified as an action: a scaffolded
-		// resource with an empty model is worse than a wired action, and a
-		// resource without a Delete cannot be destroyed by Terraform. The check
-		// is skipped when classifying a group's own operations (groupIsResource),
-		// which are already known to form a complete CRUD group.
-		if checkFullCRUD && !transformer.HasFullCRUD(path, transformer.HTTPMethod(method), pathOps) {
+		// A POST that is a CRUD Create but whose group buildGroupedResources would
+		// not emit (either structurally incomplete — no full Create+Read+Delete —
+		// or rejected by groupIsResource because a sibling op is a
+		// function/action/ephemeral/list) is reclassified as an action: a scaffolded
+		// resource with an empty model is worse than a wired action, and a resource
+		// without a Delete cannot be destroyed by Terraform. The check is skipped
+		// when classifying a group's own operations (groupIsResource), which are
+		// already known to form a complete CRUD group.
+		if checkFullCRUD && !groupEmitsFullCRUDResource(path, method, pathOps) {
 			return kindAction
 		}
 		return kindResource
 	case "PUT", "PATCH":
 		if itemPath {
-			if checkFullCRUD && !transformer.HasFullCRUD(path, transformer.HTTPMethod(method), pathOps) {
+			if checkFullCRUD && !groupEmitsFullCRUDResource(path, method, pathOps) {
 				return kindAction
 			}
 			return kindResource
@@ -2654,7 +2792,7 @@ func methodKind(method, path string, op *parser.Operation, pathOps map[string]ma
 		return kindAction
 	case "DELETE":
 		if itemPath {
-			if checkFullCRUD && !transformer.HasFullCRUD(path, transformer.HTTPMethod(method), pathOps) {
+			if checkFullCRUD && !groupEmitsFullCRUDResource(path, method, pathOps) {
 				return kindAction
 			}
 			return kindResource
@@ -2725,7 +2863,7 @@ func operationIDVerb(op *parser.Operation) string {
 	return ""
 }
 
-func actionFromOperation(op *parser.Operation, providerName, path, method string, pathOps map[string]map[transformer.HTTPMethod]transformer.Operation) ir.ActionIR {
+func actionFromOperation(op *parser.Operation, providerName, path, method string, pathOps map[string]map[transformer.HTTPMethod]transformer.Operation, diags *diagnostics.Diagnostics) ir.ActionIR {
 	name := resourceName(op, method, path)
 	// Build the config schema from the operation's parameters AND request-body
 	// properties (via the transformer's ObjectSchemaFromOperation, the same
@@ -2735,7 +2873,7 @@ func actionFromOperation(op *parser.Operation, providerName, path, method string
 	// this, the essential register action would present an empty schema.
 	configSchema := ir.ObjectSchemaIR{Attributes: actionConfigAttributes(op)}
 	if top := lookupTransformerOp(pathOps, path, method); top != nil {
-		configSchema = transformer.ObjectSchemaFromOperation(*top)
+		configSchema = transformer.ObjectSchemaFromOperationWithDiagnostics(*top, diags)
 	}
 	return ir.ActionIR{
 		Name:            name,
@@ -2847,7 +2985,7 @@ func actionConfigAttributes(op *parser.Operation) []ir.AttributeIR {
 	return attrs
 }
 
-func ephemeralFromOperation(spec *parser.Spec, op *parser.Operation, providerName, path, method string, pathOps map[string]map[transformer.HTTPMethod]transformer.Operation) ir.EphemeralResourceIR {
+func ephemeralFromOperation(spec *parser.Spec, op *parser.Operation, providerName, path, method string, pathOps map[string]map[transformer.HTTPMethod]transformer.Operation, diags *diagnostics.Diagnostics) ir.EphemeralResourceIR {
 	name := resourceName(op, method, path)
 	er := ir.EphemeralResourceIR{
 		Name:            name,
@@ -2863,7 +3001,7 @@ func ephemeralFromOperation(spec *parser.Spec, op *parser.Operation, providerNam
 	// keeping an empty-schema scaffold (PROJECT_DESIGN §23). The transformer exposes
 	// the same builders its own inferEphemeralResource uses.
 	if top := lookupTransformerOp(pathOps, path, method); top != nil {
-		er.ConfigSchema = transformer.ObjectSchemaFromOperation(*top)
+		er.ConfigSchema = transformer.ObjectSchemaFromOperationWithDiagnostics(*top, diags)
 		er.ResultSchema = transformer.ResultSchemaFromResponse(top.ResponseSchema)
 	}
 	// Renew/Close are wired to the sibling lifecycle operations when the spec
@@ -2950,10 +3088,13 @@ func listResourceFromOperation(op *parser.Operation, providerName, path, method 
 	}
 	if len(identityParams) > 0 {
 		for _, p := range identityParams {
+			name := transformer.ToSnakeCase(p)
+			wire := matchItemProperty(p, item.Properties)
 			lr.IdentitySchema.Attributes = append(lr.IdentitySchema.Attributes, ir.AttributeIR{
-				Name:     p,
+				Name:     name,
+				WireName: wire,
 				Computed: true,
-				Schema:   ir.SchemaIR{Type: propType(p)},
+				Schema:   ir.SchemaIR{Type: propType(wire)},
 			})
 		}
 	} else if _, ok := item.Properties["id"]; ok {
@@ -2966,17 +3107,77 @@ func listResourceFromOperation(op *parser.Operation, providerName, path, method 
 	return lr
 }
 
+// pairListResourceIdentities copies each list resource's identity schema onto
+// the managed resource that shares its type name. terraform query types the
+// identities a list resource streams against the managed resource's identity
+// schema (ResourceWithIdentity), so the two must be identical; a list resource
+// whose type name has no matching managed resource is not registered by the
+// generator's listRegistrationBody (G12), so it is skipped here too.
+func pairListResourceIdentities(provider *ir.ProviderIR) {
+	resourcesByType := make(map[string]int, len(provider.Resources))
+	for i := range provider.Resources {
+		resourcesByType[provider.Resources[i].TypeName] = i
+	}
+	for i := range provider.ListResources {
+		lr := &provider.ListResources[i]
+		if len(lr.IdentitySchema.Attributes) == 0 {
+			continue
+		}
+		idx, ok := resourcesByType[lr.TypeName]
+		if !ok {
+			continue
+		}
+		identity := lr.IdentitySchema
+		provider.Resources[idx].IdentitySchema = &identity
+	}
+}
+
 // instancePathParams returns the templated ({param}) segments of an instance
-// path, snake_cased, in order. They name the identity attributes of a list
-// resource promoted from a CRUD group.
+// path, in their original OpenAPI casing, in order. They name the identity
+// attributes of a list resource promoted from a CRUD group; the original
+// casing is preserved so listResourceFromOperation can match each param to the
+// paired item object's identifier property (e.g. path {shipSymbol} ↔ item
+// property "symbol") and carry that wire name on the identity attribute.
 func instancePathParams(path string) []string {
 	var out []string
 	for _, seg := range strings.Split(path, "/") {
 		if strings.HasPrefix(seg, "{") && strings.HasSuffix(seg, "}") {
-			out = append(out, transformer.ToSnakeCase(strings.TrimSuffix(strings.TrimPrefix(seg, "{"), "}")))
+			out = append(out, strings.TrimSuffix(strings.TrimPrefix(seg, "{"), "}"))
 		}
 	}
 	return out
+}
+
+// matchItemProperty resolves an instance path parameter name to the item
+// object property that holds its value, returning that property's original
+// (wire) name. The path parameter and the item identifier commonly differ in
+// name — e.g. SpaceTraders GET /my/ships/{shipSymbol} returns ships whose
+// identifier property is "symbol", not "shipSymbol" — so the identity
+// extraction must probe the item's actual JSON key, not the path parameter
+// name. Matching is: exact name first, then the last camelCase word of the
+// parameter compared case-insensitively to the item properties (shipSymbol →
+// "symbol"). When no property matches, the parameter name itself is returned
+// (a best-effort wire name; the list extraction still falls back to "id").
+// The result is deterministic: when several properties match, the
+// lexicographically smallest name wins.
+func matchItemProperty(param string, props map[string]transformer.SchemaSpec) string {
+	if _, ok := props[param]; ok {
+		return param
+	}
+	parts := strings.Split(transformer.ToSnakeCase(param), "_")
+	last := strings.ToLower(parts[len(parts)-1])
+	var match string
+	for name := range props {
+		if strings.EqualFold(name, last) {
+			if match == "" || name < match {
+				match = name
+			}
+		}
+	}
+	if match != "" {
+		return match
+	}
+	return param
 }
 
 // functionFromOperation builds a provider-defined function from an operation,

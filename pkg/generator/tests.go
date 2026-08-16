@@ -385,10 +385,29 @@ func generateMapperModelTests(f *astgen.File, modelName string, obj ir.ObjectSch
 // provider. It includes provider_test.go, one resource_<name>_test.go per
 // resource and one data_source_<name>_test.go per data source.
 func TestFiles(pir ir.ProviderIR, cfg BuildConfig) []File {
+	clientImport := cfg.modulePath() + "/internal/client"
 	files := make([]File, 0, 1+len(pir.Resources)+len(pir.DataSources))
 	files = append(files, ProviderTestFile(pir))
 	files = append(files, ResourceTestFiles(pir.Resources)...)
 	files = append(files, ResourceAcceptanceTestFiles(pir, cfg)...)
 	files = append(files, DataSourceTestFiles(pir.DataSources)...)
+	// Coverage tests exercise the extracted *Remote helper methods directly
+	// against an httptest mock, covering happy and unhappy HTTP paths without
+	// TF_ACC. The shared helpers file is emitted only when at least one
+	// coverage test file is produced, so its helpers are never left unused
+	// (staticcheck U1000).
+	coverage := ResourceCoverageTestFiles(pir.Resources, clientImport)
+	dsCoverage := DataSourceCoverageTestFiles(pir.DataSources, clientImport)
+	actCoverage := ActionCoverageTestFiles(pir.Actions, clientImport)
+	ephCoverage := EphemeralCoverageTestFiles(pir.EphemeralResources, clientImport)
+	listCoverage := ListCoverageTestFiles(pir.ListResources, clientImport)
+	if len(coverage) > 0 || len(dsCoverage) > 0 || len(actCoverage) > 0 || len(ephCoverage) > 0 || len(listCoverage) > 0 {
+		files = append(files, SharedTestHelpersFile(clientImport))
+		files = append(files, coverage...)
+		files = append(files, dsCoverage...)
+		files = append(files, actCoverage...)
+		files = append(files, ephCoverage...)
+		files = append(files, listCoverage...)
+	}
 	return files
 }

@@ -88,6 +88,48 @@ func TestPlanListResourceWiring(t *testing.T) {
 	})
 }
 
+// TestListIdentityKeys locks in the identity-key probing order: the wire name
+// leads (it is the item object's actual JSON key), then the sanitized attribute
+// name, then "id". The wire name leads because the Terraform attribute name
+// (e.g. "ship_symbol") need not match the item JSON key (e.g. "symbol").
+func TestListIdentityKeys(t *testing.T) {
+	t.Run("wire name leads", func(t *testing.T) {
+		keys := listIdentityKeys("ship_symbol", "symbol")
+		want := []string{"symbol", "ship_symbol", "id"}
+		if !equalStrings(keys, want) {
+			t.Errorf("listIdentityKeys(ship_symbol, symbol) = %v, want %v", keys, want)
+		}
+	})
+
+	t.Run("empty wire name falls back to attribute then id", func(t *testing.T) {
+		keys := listIdentityKeys("id", "")
+		want := []string{"id"}
+		if !equalStrings(keys, want) {
+			t.Errorf("listIdentityKeys(id, \"\") = %v, want %v", keys, want)
+		}
+	})
+
+	t.Run("duplicates dropped", func(t *testing.T) {
+		keys := listIdentityKeys("id", "id")
+		want := []string{"id"}
+		if !equalStrings(keys, want) {
+			t.Errorf("listIdentityKeys(id, id) = %v, want %v", keys, want)
+		}
+	})
+}
+
+func equalStrings(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
 // TestWiredListResource_Render asserts the wired List body: the stream.Results
 // closure decodes the filter config, fetches pages via client.ListAllPages,
 // probes the identity value from each item, converts it via

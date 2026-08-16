@@ -185,16 +185,10 @@ func generateDataSourceFile(ds ir.DataSourceIR, clientImport string) *ast.File {
 
 	// Read method. Wired data sources call the read endpoint and store the API
 	// response as state; data sources without a resolvable read mapping keep the
-	// honest scaffold body.
+	// honest scaffold body. The extracted *Remote helper is emitted alongside
+	// Read so the request/response logic is unit-testable without a tfsdk.Config.
 	f.AddComment("Read fetches remote state into the data source model.")
-	readBody := scaffoldDataSourceReadBody(modelName)
-	if wiring.wired {
-		if wiring.list {
-			readBody = wiredListDataSourceReadBody(ds, wiring.read, modelName)
-		} else {
-			readBody = wiredDataSourceReadBody(ds, wiring.read, modelName)
-		}
-	}
+	readBody, helperComment, helperDecl := dataSourceReadPlan(ds, wiring, modelName, structName)
 	f.AddDecl(astgen.MethodDecl(
 		"Read", "d", astgen.StarExpr(astgen.Ident(structName)),
 		astgen.Params(
@@ -205,6 +199,10 @@ func generateDataSourceFile(ds ir.DataSourceIR, clientImport string) *ast.File {
 		astgen.Results(),
 		astgen.Block(readBody...),
 	))
+	if helperDecl != nil {
+		f.AddComment(helperComment)
+		f.AddDecl(helperDecl)
+	}
 
 	// Configure method. Wired data sources implement DataSourceWithConfigure to
 	// receive the API client constructed by the provider's Configure method.
@@ -226,12 +224,17 @@ func generateDataSourceFile(ds ir.DataSourceIR, clientImport string) *ast.File {
 	if wiring.wired {
 		// Wired Read bodies build and send HTTP requests through the generated
 		// client and decode JSON responses. Data source reads have no request
-		// body, so bytes is not imported. A list data source fetches pages via
-		// client.ListAllPages (url.Values) rather than decoding a single body
-		// with io.EOF handling, so io is only imported for single-object reads.
+		// body. A list data source fetches pages via client.ListAllPages
+		// (url.Values) and decodes each page with a json.Decoder + UseNumber
+		// (so numeric item fields map to Int64/Number attributes, not float64),
+		// importing bytes for bytes.NewReader; a single-object read decodes one
+		// body with io.EOF handling, so it imports io instead. The two paths are
+		// mutually exclusive, so bytes and io are never imported together.
 		f.AddImport(clientImport, "client")
 		f.AddImports("encoding/json", "fmt", "net/http")
-		if !wiring.list {
+		if wiring.list {
+			f.AddImport("bytes", "")
+		} else {
 			f.AddImport("io", "")
 		}
 		if wiring.needsURL {
@@ -261,6 +264,27 @@ func generateDataSourceFile(ds ir.DataSourceIR, clientImport string) *ast.File {
 	}
 
 	return f.AST()
+}
+
+// dataSourceReadPlan resolves the Read method body and the extracted *Remote
+// helper declaration (plus its doc comment) for a data source. Unwired data
+// sources keep the honest scaffold body and return a nil helper so no extracted
+// method is emitted. Single-object and list data sources use distinct helper
+// methods (readRemote / readListRemote). Factoring this out of
+// generateDataSourceFile keeps that function's cognitive complexity bounded.
+func dataSourceReadPlan(ds ir.DataSourceIR, wiring dataSourceWiringPlan, modelName, structName string) (readBody []ast.Stmt, helperComment string, helperDecl *ast.FuncDecl) {
+	readBody = scaffoldDataSourceReadBody(modelName)
+	if !wiring.wired {
+		return readBody, "", nil
+	}
+	if wiring.list {
+		return wiredListDataSourceReadBody(modelName),
+			"readListRemote performs the paginated read HTTP exchange and decodes the response array into config. Extracted from Read so the request/response logic is unit-testable without a tfsdk.Config.",
+			wiredListDataSourceReadHelperDecl(ds, wiring.read, modelName, structName)
+	}
+	return wiredDataSourceReadBody(wiring.read, modelName),
+		"readRemote performs the read HTTP exchange and decodes the response into config. Extracted from Read so the request/response logic is unit-testable without a tfsdk.Config.",
+		wiredDataSourceReadHelperDecl(ds, wiring.read, modelName, structName)
 }
 
 // scaffoldDataSourceReadBody returns the honest scaffold Read body used when the

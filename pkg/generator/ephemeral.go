@@ -181,12 +181,11 @@ func generateEphemeralFile(er ir.EphemeralResourceIR, clientImport string) *ast.
 
 	// Open method. Wired ephemeral resources call the open endpoint and store the
 	// API response as the ephemeral result; ephemeral resources without a
-	// resolvable bodiless open mapping keep the honest scaffold Open body.
+	// resolvable bodiless open mapping keep the honest scaffold Open body. The
+	// extracted openRemote helper is emitted alongside Open so the request/
+	// response logic is unit-testable without a tfsdk.Config.
 	f.AddComment("Open generates a new ephemeral resource value.")
-	openBody := scaffoldEphemeralOpenBody(modelName)
-	if wiring.wired {
-		openBody = wiredEphemeralOpenBody(er, wiring, modelName)
-	}
+	openBody, openHelperComment, openHelperDecl := ephemeralOpenPlan(er, wiring, modelName, structName)
 	f.AddDecl(astgen.MethodDecl(
 		"Open", "e", astgen.StarExpr(astgen.Ident(structName)),
 		astgen.Params(
@@ -197,6 +196,10 @@ func generateEphemeralFile(er ir.EphemeralResourceIR, clientImport string) *ast.
 		astgen.Results(),
 		astgen.Block(openBody...),
 	))
+	if openHelperDecl != nil {
+		f.AddComment(openHelperComment)
+		f.AddDecl(openHelperDecl)
+	}
 
 	// Renew method. Wired when the open is wired and the renew mapping resolves
 	// (bodiless, parameters resolvable): the body reads the parameter values
@@ -267,6 +270,21 @@ func generateEphemeralFile(er ir.EphemeralResourceIR, clientImport string) *ast.
 	}
 
 	return f.AST()
+}
+
+// ephemeralOpenPlan selects the Open body and the extracted openRemote helper
+// declaration for an ephemeral resource. An unwired ephemeral resource (no
+// resolvable open mapping) gets the honest scaffold body and no helper.
+// Factoring this out of generateEphemeralFile keeps that function's cognitive
+// complexity bounded.
+func ephemeralOpenPlan(er ir.EphemeralResourceIR, wiring ephemeralWiringPlan, modelName, structName string) (openBody []ast.Stmt, helperComment string, helperDecl *ast.FuncDecl) {
+	openBody = scaffoldEphemeralOpenBody(modelName)
+	if !wiring.wired {
+		return openBody, "", nil
+	}
+	return wiredEphemeralOpenBody(wiring, modelName),
+		"openRemote performs the open HTTP exchange and decodes the response into config. Extracted from Open so the request/response logic is unit-testable without a tfsdk.Config.",
+		wiredEphemeralOpenHelperDecl(er, wiring.open, modelName, structName)
 }
 
 // ephemeralLifecycleMethodDecl returns the Renew or Close method declaration

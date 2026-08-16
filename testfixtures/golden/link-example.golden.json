@@ -52,12 +52,20 @@
     "reason": "generated HTTP client"
   },
   {
+    "path": "internal/client/client_test.go",
+    "reason": "generated HTTP client unit tests"
+  },
+  {
     "path": "internal/client/errors.go",
     "reason": "typed API error helpers"
   },
   {
     "path": "internal/client/logging.go",
     "reason": "request/response trace logging"
+  },
+  {
+    "path": "internal/client/logging_test.go",
+    "reason": "trace logging unit tests"
   },
   {
     "path": "internal/client/models.go",

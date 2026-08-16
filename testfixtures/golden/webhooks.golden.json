@@ -48,12 +48,20 @@
     "reason": "generated HTTP client"
   },
   {
+    "path": "internal/client/client_test.go",
+    "reason": "generated HTTP client unit tests"
+  },
+  {
     "path": "internal/client/errors.go",
     "reason": "typed API error helpers"
   },
   {
     "path": "internal/client/logging.go",
     "reason": "request/response trace logging"
+  },
+  {
+    "path": "internal/client/logging_test.go",
+    "reason": "trace logging unit tests"
   },
   {
     "path": "internal/client/models.go",
@@ -70,6 +78,10 @@
   {
     "path": "internal/provider/action_receive_new_pet.go",
     "reason": "action webhooks-api_receive_new_pet"
+  },
+  {
+    "path": "internal/provider/action_receive_new_pet_remote_test.go",
+    "reason": "coverage tests for action receive_new_pet remote helper"
   },
   {
     "path": "internal/provider/data_source_list_pets.go",
@@ -90,6 +102,10 @@
   {
     "path": "internal/provider/provider_test.go",
     "reason": "provider-level unit tests"
+  },
+  {
+    "path": "internal/provider/testing_helpers_test.go",
+    "reason": "shared httptest helpers for coverage tests"
   },
   {
     "path": "internal/provider/validators.go",

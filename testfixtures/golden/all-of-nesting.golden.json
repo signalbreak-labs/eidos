@@ -48,12 +48,20 @@
     "reason": "generated HTTP client"
   },
   {
+    "path": "internal/client/client_test.go",
+    "reason": "generated HTTP client unit tests"
+  },
+  {
     "path": "internal/client/errors.go",
     "reason": "typed API error helpers"
   },
   {
     "path": "internal/client/logging.go",
     "reason": "request/response trace logging"
+  },
+  {
+    "path": "internal/client/logging_test.go",
+    "reason": "trace logging unit tests"
   },
   {
     "path": "internal/client/models.go",
@@ -72,8 +80,16 @@
     "reason": "action all-of-nesting-api_create_shipment"
   },
   {
+    "path": "internal/provider/action_create_shipment_remote_test.go",
+    "reason": "coverage tests for action create_shipment remote helper"
+  },
+  {
     "path": "internal/provider/data_source_get_shipment.go",
     "reason": "data source all-of-nesting-api_get_shipment"
+  },
+  {
+    "path": "internal/provider/data_source_get_shipment_remote_test.go",
+    "reason": "coverage tests for data source get_shipment remote helpers"
   },
   {
     "path": "internal/provider/data_source_get_shipment_test.go",
@@ -90,6 +106,10 @@
   {
     "path": "internal/provider/provider_test.go",
     "reason": "provider-level unit tests"
+  },
+  {
+    "path": "internal/provider/testing_helpers_test.go",
+    "reason": "shared httptest helpers for coverage tests"
   },
   {
     "path": "internal/provider/validators.go",

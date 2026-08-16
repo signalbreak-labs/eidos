@@ -56,8 +56,16 @@
     "reason": "authentication middleware"
   },
   {
+    "path": "internal/client/auth_test.go",
+    "reason": "authentication middleware unit tests"
+  },
+  {
     "path": "internal/client/client.go",
     "reason": "generated HTTP client"
+  },
+  {
+    "path": "internal/client/client_test.go",
+    "reason": "generated HTTP client unit tests"
   },
   {
     "path": "internal/client/errors.go",
@@ -66,6 +74,10 @@
   {
     "path": "internal/client/logging.go",
     "reason": "request/response trace logging"
+  },
+  {
+    "path": "internal/client/logging_test.go",
+    "reason": "trace logging unit tests"
   },
   {
     "path": "internal/client/models.go",
@@ -88,12 +100,20 @@
     "reason": "data source complex-polymorphism-api_get_polymorphic_pet"
   },
   {
+    "path": "internal/provider/data_source_get_polymorphic_pet_remote_test.go",
+    "reason": "coverage tests for data source get_polymorphic_pet remote helpers"
+  },
+  {
     "path": "internal/provider/data_source_get_polymorphic_pet_test.go",
     "reason": "unit tests for data source get_polymorphic_pet"
   },
   {
     "path": "internal/provider/data_source_list_animals.go",
     "reason": "data source complex-polymorphism-api_list_animals"
+  },
+  {
+    "path": "internal/provider/data_source_list_animals_remote_test.go",
+    "reason": "coverage tests for data source list_animals remote helpers"
   },
   {
     "path": "internal/provider/data_source_list_animals_test.go",
@@ -110,6 +130,10 @@
   {
     "path": "internal/provider/provider_test.go",
     "reason": "provider-level unit tests"
+  },
+  {
+    "path": "internal/provider/testing_helpers_test.go",
+    "reason": "shared httptest helpers for coverage tests"
   },
   {
     "path": "internal/provider/validators.go",

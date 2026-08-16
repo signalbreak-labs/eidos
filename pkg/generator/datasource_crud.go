@@ -182,15 +182,16 @@ func resolveDataSourcePathSubstitution(attrs []ir.AttributeIR, placeholder strin
 	return pathSubstitution{}, false
 }
 
-// wiredDataSourceReadBody returns the Read body wired to the generated API
-// client: it reads the practitioner-supplied filter attributes from the request
-// config, issues the read request, and stores the API response as Terraform
-// state. A 404 surfaces an error diagnostic rather than silently dropping
-// state, because a data source read references an instance the practitioner
-// expected to exist.
-func wiredDataSourceReadBody(ds ir.DataSourceIR, plan crudOperationPlan, modelName string) []ast.Stmt {
-	summary := fmt.Sprintf("Error reading %s", dataSourceTypeName(ds))
-	stmts := make([]ast.Stmt, 0, 20)
+// wiredDataSourceReadBody returns the framework Read body for a wired
+// single-object data source: it reads the practitioner-supplied filter
+// attributes from the request config, delegates the HTTP exchange to
+// readRemote (which writes diagnostics to the same resp and mutates *config),
+// then surfaces the single-page pagination warning and stores state. The HTTP
+// logic lives in a separate method so it is unit-testable without constructing
+// a tfsdk.Config, whose Schema is built from an internal fwschema type that
+// generated code cannot instantiate.
+func wiredDataSourceReadBody(plan crudOperationPlan, modelName string) []ast.Stmt {
+	stmts := make([]ast.Stmt, 0, 12)
 	stmts = append(stmts,
 		astgen.VarDecl("config", modelName, nil),
 		astgen.ExprStmt(astgen.Call(
@@ -205,17 +206,17 @@ func wiredDataSourceReadBody(ds ir.DataSourceIR, plan crudOperationPlan, modelNa
 			astgen.Call(astgen.Selector(astgen.Selector(astgen.Ident("resp"), "Diagnostics"), "HasError")),
 			astgen.Return(),
 		),
-		clientGuardStmt("d"),
+		astgen.ExprStmt(astgen.Call(
+			astgen.Selector(astgen.Ident("d"), "readRemote"),
+			astgen.Ident("ctx"),
+			astgen.UnaryPtr(astgen.Ident("config")),
+			astgen.Ident("resp"),
+		)),
+		astgen.If(
+			astgen.Call(astgen.Selector(astgen.Selector(astgen.Ident("resp"), "Diagnostics"), "HasError")),
+			astgen.Return(),
+		),
 	)
-	stmts = append(stmts, requestPathStmts(plan, "config")...)
-	// A 404 on a data source read means the referenced instance does not exist:
-	// surface an error rather than silently leaving stale state.
-	notFound := []ast.Stmt{
-		addErrorStmt(summary, astgen.Lit("The requested resource was not found.")),
-		astgen.Return(),
-	}
-	stmts = append(stmts, sendRequestStmts(plan, "d", summary, "config", nil, notFound)...)
-	stmts = append(stmts, decodeAndApplyStmts(summary, "config", plan.responseEnvelope)...)
 	// A single-object data source whose endpoint exposes a pagination query
 	// parameter (page/offset/skip/cursor/after) returns one page only — it does
 	// not aggregate across pages the way a list data source (bare-array response)
@@ -240,6 +241,44 @@ func wiredDataSourceReadBody(ds ir.DataSourceIR, plan crudOperationPlan, modelNa
 	}
 	stmts = append(stmts, stateSetStmt("config"))
 	return stmts
+}
+
+// wiredDataSourceReadHelperBody returns the body of readRemote: the client
+// guard, request path, HTTP exchange, and response decode. It writes
+// diagnostics to resp.Diagnostics and mutates *config, so the framework Read
+// method can call it and then store state on success. A 404 surfaces an error
+// diagnostic rather than silently dropping state, because a data source read
+// references an instance the practitioner expected to exist.
+func wiredDataSourceReadHelperBody(ds ir.DataSourceIR, plan crudOperationPlan) []ast.Stmt {
+	summary := fmt.Sprintf("Error reading %s", dataSourceTypeName(ds))
+	// A 404 on a data source read means the referenced instance does not exist:
+	// surface an error rather than silently leaving stale state.
+	notFound := []ast.Stmt{
+		addErrorStmt(summary, astgen.Lit("The requested resource was not found.")),
+		astgen.Return(),
+	}
+	stmts := make([]ast.Stmt, 0, 16)
+	stmts = append(stmts, clientGuardStmt("d"))
+	stmts = append(stmts, requestPathStmts(plan, "config")...)
+	stmts = append(stmts, sendRequestStmts(plan, "d", summary, "config", nil, notFound)...)
+	stmts = append(stmts, decodeAndApplyStmts(summary, "config", plan.responseEnvelope, "")...)
+	return stmts
+}
+
+// wiredDataSourceReadHelperDecl emits the readRemote method declaration wired
+// to the generated API client. Emitted only for wired single-object data
+// sources, alongside Read.
+func wiredDataSourceReadHelperDecl(ds ir.DataSourceIR, plan crudOperationPlan, modelName, structName string) *ast.FuncDecl {
+	return astgen.MethodDecl(
+		"readRemote", "d", astgen.StarExpr(astgen.Ident(structName)),
+		astgen.Params(
+			astgen.Field("ctx", astgen.QualExpr("context", "Context"), ""),
+			astgen.Field("config", astgen.StarExpr(astgen.Ident(modelName)), ""),
+			astgen.Field("resp", astgen.StarExpr(astgen.QualExpr("datasource", "ReadResponse")), ""),
+		),
+		astgen.Results(),
+		astgen.Block(wiredDataSourceReadHelperBody(ds, plan)...),
+	)
 }
 
 // paginationSuggestingParam returns the first query parameter on the plan whose
@@ -271,11 +310,16 @@ func paginationSuggestingParam(plan crudOperationPlan) *paramSubstitution {
 // applying them to the model through applyJSONToModel with an {"items": ...}
 // wrapper, reusing the same JSON-to-attr conversion the single-object Read body
 // uses (REMAINING_GAPS §2/§4).
-func wiredListDataSourceReadBody(ds ir.DataSourceIR, plan crudOperationPlan, modelName string) []ast.Stmt {
-	summary := fmt.Sprintf("Error reading %s", dataSourceTypeName(ds))
-	style, pageParam, cursorField, nextLinkRel := listPaginationConfig(ds)
-
-	stmts := make([]ast.Stmt, 0, 20)
+// wiredListDataSourceReadBody returns the framework Read body for a wired list
+// data source (a read whose response is a top-level JSON array): it reads the
+// practitioner-supplied filter attributes from the request config, delegates
+// the paginated HTTP exchange to readListRemote (which writes diagnostics to
+// the same resp and mutates *config), then stores state. The HTTP/pagination
+// logic lives in a separate method so it is unit-testable without constructing
+// a tfsdk.Config, whose Schema is built from an internal fwschema type that
+// generated code cannot instantiate.
+func wiredListDataSourceReadBody(modelName string) []ast.Stmt {
+	stmts := make([]ast.Stmt, 0, 8)
 	stmts = append(stmts,
 		astgen.VarDecl("config", modelName, nil),
 		astgen.ExprStmt(astgen.Call(
@@ -290,8 +334,33 @@ func wiredListDataSourceReadBody(ds ir.DataSourceIR, plan crudOperationPlan, mod
 			astgen.Call(astgen.Selector(astgen.Selector(astgen.Ident("resp"), "Diagnostics"), "HasError")),
 			astgen.Return(),
 		),
-		clientGuardStmt("d"),
+		astgen.ExprStmt(astgen.Call(
+			astgen.Selector(astgen.Ident("d"), "readListRemote"),
+			astgen.Ident("ctx"),
+			astgen.UnaryPtr(astgen.Ident("config")),
+			astgen.Ident("resp"),
+		)),
+		astgen.If(
+			astgen.Call(astgen.Selector(astgen.Selector(astgen.Ident("resp"), "Diagnostics"), "HasError")),
+			astgen.Return(),
+		),
+		stateSetStmt("config"),
 	)
+	return stmts
+}
+
+// wiredListDataSourceReadHelperBody returns the body of readListRemote: the
+// client guard, request path, query parameters, paginated fetch via the
+// generated client's ListAllPages helper, and per-page decode/accumulate. It
+// writes diagnostics to resp.Diagnostics and mutates *config (setting the
+// items attribute), so the framework Read method can call it and then store
+// state on success.
+func wiredListDataSourceReadHelperBody(ds ir.DataSourceIR, plan crudOperationPlan) []ast.Stmt {
+	summary := fmt.Sprintf("Error reading %s", dataSourceTypeName(ds))
+	style, pageParam, cursorField, nextLinkRel := listPaginationConfig(ds)
+
+	stmts := make([]ast.Stmt, 0, 20)
+	stmts = append(stmts, clientGuardStmt("d"))
 	stmts = append(stmts, requestPathStmts(plan, "config")...)
 	// The query parameters travel in a url.Values that ListAllPages clones and
 	// passes to both the fetch closure (which encodes them onto the request) and
@@ -351,8 +420,23 @@ func wiredListDataSourceReadBody(ds ir.DataSourceIR, plan crudOperationPlan, mod
 		),
 	)
 	stmts = append(stmts, listAccumulateStmts(summary, plan.responseEnvelope)...)
-	stmts = append(stmts, stateSetStmt("config"))
 	return stmts
+}
+
+// wiredListDataSourceReadHelperDecl emits the readListRemote method declaration
+// wired to the generated API client. Emitted only for wired list data sources,
+// alongside Read.
+func wiredListDataSourceReadHelperDecl(ds ir.DataSourceIR, plan crudOperationPlan, modelName, structName string) *ast.FuncDecl {
+	return astgen.MethodDecl(
+		"readListRemote", "d", astgen.StarExpr(astgen.Ident(structName)),
+		astgen.Params(
+			astgen.Field("ctx", astgen.QualExpr("context", "Context"), ""),
+			astgen.Field("config", astgen.StarExpr(astgen.Ident(modelName)), ""),
+			astgen.Field("resp", astgen.StarExpr(astgen.QualExpr("datasource", "ReadResponse")), ""),
+		),
+		astgen.Results(),
+		astgen.Block(wiredListDataSourceReadHelperBody(ds, plan)...),
+	)
 }
 
 // listPaginationConfig resolves the pagination strategy for a list data source
@@ -621,51 +705,71 @@ func listAccumulateStmts(summary, envelope string) []ast.Stmt {
 	}
 }
 
+// useNumberDecodePage emits statements that decode the []byte page into target
+// using a json.Decoder configured with UseNumber, so JSON numbers decode as
+// json.Number rather than float64. applyJSONToModel rejects float64 for
+// Int64/Number attributes (its numeric cases type-assert json.Number), so a
+// plain json.Unmarshal here breaks every list data source whose items carry a
+// numeric field against the live API. The single-object Read path already uses
+// this decoder pattern; the list path must match it. errBody is the statement
+// list executed when Decode fails (typically an AddError + return).
+func useNumberDecodePage(target ast.Expr, errBody []ast.Stmt) []ast.Stmt {
+	return []ast.Stmt{
+		astgen.AssignSingle(
+			astgen.Ident("dec"),
+			astgen.Call(
+				astgen.QualExpr("json", "NewDecoder"),
+				astgen.Call(astgen.QualExpr("bytes", "NewReader"), astgen.Ident("page")),
+			),
+		),
+		astgen.ExprStmt(astgen.Call(astgen.Selector(astgen.Ident("dec"), "UseNumber"))),
+		&ast.IfStmt{
+			Init: astgen.AssignSingle(
+				astgen.Ident("err"),
+				astgen.Call(astgen.Selector(astgen.Ident("dec"), "Decode"), astgen.UnaryPtr(target)),
+			),
+			Cond: astgen.NotEqual(astgen.Ident("err"), astgen.Nil()),
+			Body: astgen.Block(errBody...),
+		},
+	}
+}
+
 // listPageDecodeStmts decodes a single fetched page into the pageItems slice and
 // appends it to the items accumulator. Without an envelope the page is a bare
 // JSON array decoded directly; with an envelope the page is a JSON object whose
 // envelope key holds the item array (e.g. SpaceTraders' {data: [...], meta: ...}),
 // extracted by type assertion so a malformed page surfaces an error rather than
-// silently accumulating nothing.
+// silently accumulating nothing. Both branches decode with UseNumber (via
+// useNumberDecodePage) so numeric item fields map correctly to Int64/Number
+// attributes instead of being rejected as float64.
 func listPageDecodeStmts(summary, envelope string) []ast.Stmt {
 	if envelope == "" {
-		return []ast.Stmt{
-			astgen.AssignSingle(
-				astgen.Ident("pageItems"),
-				astgen.CompositeLit(astgen.SliceType(astgen.Ident("any"))),
-			),
-			&ast.IfStmt{
-				Init: astgen.AssignSingle(astgen.Ident("err"), astgen.Call(
-					astgen.QualExpr("json", "Unmarshal"), astgen.Ident("page"), astgen.UnaryPtr(astgen.Ident("pageItems")),
-				)),
-				Cond: astgen.NotEqual(astgen.Ident("err"), astgen.Nil()),
-				Body: astgen.Block(
-					addErrorfStmt(summary, "Could not decode list page: %s", astgen.Ident("err")),
-					astgen.Return(),
-				),
-			},
-			astgen.AssignStmt(
-				[]ast.Expr{astgen.Ident("items")},
-				[]ast.Expr{astgen.Call(astgen.Ident("append"), astgen.Ident("items"), astgen.Ellipsis(astgen.Ident("pageItems")))},
-				token.ASSIGN,
-			),
-		}
+		stmts := make([]ast.Stmt, 0, 5)
+		stmts = append(stmts, astgen.AssignSingle(
+			astgen.Ident("pageItems"),
+			astgen.CompositeLit(astgen.SliceType(astgen.Ident("any"))),
+		))
+		stmts = append(stmts, useNumberDecodePage(astgen.Ident("pageItems"), []ast.Stmt{
+			addErrorfStmt(summary, "Could not decode list page: %s", astgen.Ident("err")),
+			astgen.Return(),
+		})...)
+		stmts = append(stmts, astgen.AssignStmt(
+			[]ast.Expr{astgen.Ident("items")},
+			[]ast.Expr{astgen.Call(astgen.Ident("append"), astgen.Ident("items"), astgen.Ellipsis(astgen.Ident("pageItems")))},
+			token.ASSIGN,
+		))
+		return stmts
 	}
-	return []ast.Stmt{
-		astgen.AssignSingle(
-			astgen.Ident("pageObj"),
-			astgen.CompositeLit(astgen.MapType(astgen.Ident("string"), astgen.Ident("any"))),
-		),
-		&ast.IfStmt{
-			Init: astgen.AssignSingle(astgen.Ident("err"), astgen.Call(
-				astgen.QualExpr("json", "Unmarshal"), astgen.Ident("page"), astgen.UnaryPtr(astgen.Ident("pageObj")),
-			)),
-			Cond: astgen.NotEqual(astgen.Ident("err"), astgen.Nil()),
-			Body: astgen.Block(
-				addErrorfStmt(summary, "Could not decode list page: %s", astgen.Ident("err")),
-				astgen.Return(),
-			),
-		},
+	stmts := make([]ast.Stmt, 0, 7)
+	stmts = append(stmts, astgen.AssignSingle(
+		astgen.Ident("pageObj"),
+		astgen.CompositeLit(astgen.MapType(astgen.Ident("string"), astgen.Ident("any"))),
+	))
+	stmts = append(stmts, useNumberDecodePage(astgen.Ident("pageObj"), []ast.Stmt{
+		addErrorfStmt(summary, "Could not decode list page: %s", astgen.Ident("err")),
+		astgen.Return(),
+	})...)
+	stmts = append(stmts,
 		astgen.Assign(
 			[]ast.Expr{astgen.Ident("pageItems"), astgen.Ident("ok")},
 			[]ast.Expr{astgen.TypeAssertExpr(
@@ -685,7 +789,8 @@ func listPageDecodeStmts(summary, envelope string) []ast.Stmt {
 			[]ast.Expr{astgen.Call(astgen.Ident("append"), astgen.Ident("items"), astgen.Ellipsis(astgen.Ident("pageItems")))},
 			token.ASSIGN,
 		),
-	}
+	)
+	return stmts
 }
 
 // dataSourceConfigureDecl returns the Configure method implementing

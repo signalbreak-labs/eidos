@@ -154,7 +154,19 @@ func generateActionExampleHCL(a ir.ActionIR) string {
 	var h hclBuilder
 	h.writeLinef(`action "%s" "example" {`, actionExampleTypeName(a))
 	h.indent++
+	// Terraform 1.14+ wraps an action's configurable arguments in a nested
+	// `config` block; only meta-arguments (provider/count/for_each) live at the
+	// action block's top level. Emitting the action's attributes directly under
+	// the action block produces "Unsupported argument" at validate/plan time,
+	// even though GetProviderSchema reports them as required. Standalone
+	// actions are invoked with `terraform apply -invoke=action.<type>.<name>`
+	// (or a resource lifecycle action_trigger); a plain `terraform apply` does
+	// not invoke a standalone action block.
+	h.writeLinef("config {")
+	h.indent++
 	writeHCLBody(&h, a.ConfigSchema)
+	h.indent--
+	h.writeLinef("}")
 	h.indent--
 	h.writeLinef("}")
 	return h.b.String()

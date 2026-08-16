@@ -10,13 +10,22 @@ import "time"
 // encoding/json treats `omitempty` as a no-op on non-pointer struct values, so
 // the tag is omitted here rather than misleadingly implying empty values drop.
 type ResourceIR struct {
-	Name               string           `json:"name"`
-	FullName           string           `json:"full_name,omitempty"`
-	TypeName           string           `json:"type_name,omitempty"`
-	Description        string           `json:"description,omitempty"`
-	Schema             ObjectSchemaIR   `json:"schema"`
-	CRUDMapping        CRUDMappingIR    `json:"crud_mapping"`
-	IDAttribute        string           `json:"id_attribute,omitempty"`
+	Name        string         `json:"name"`
+	FullName    string         `json:"full_name,omitempty"`
+	TypeName    string         `json:"type_name,omitempty"`
+	Description string         `json:"description,omitempty"`
+	Schema      ObjectSchemaIR `json:"schema"`
+	CRUDMapping CRUDMappingIR  `json:"crud_mapping"`
+	IDAttribute string         `json:"id_attribute,omitempty"`
+	// IdentitySchema is the managed resource's identity schema, shared with
+	// the paired list resource of the same type name. terraform query (Terraform
+	// 1.14+) requires the managed resource to implement ResourceWithIdentity so
+	// the framework can type the identities a list resource streams; the schemas
+	// must match. Empty for resources with no identity (no paired list resource),
+	// in which case the generator emits no IdentitySchema method. Carried as a
+	// pointer so the absence of identity is distinguishable from an empty
+	// (zero-attribute) schema and so omitempty drops it from serialization.
+	IdentitySchema     *ObjectSchemaIR  `json:"identity_schema,omitempty"`
 	ImportIDFormat     string           `json:"import_id_format,omitempty"`
 	Importable         bool             `json:"importable,omitempty"`
 	SensitiveAttrs     []string         `json:"sensitive_attrs,omitempty"`
@@ -24,8 +33,15 @@ type ResourceIR struct {
 	Tags               []string         `json:"tags,omitempty"`
 	DeprecationMessage string           `json:"deprecation_message,omitempty"`
 	SourceOperation    string           `json:"source_operation,omitempty"`
-	SchemaVersion      int              `json:"schema_version,omitempty"`
-	StateUpgrades      []StateUpgradeIR `json:"state_upgrades,omitempty"`
+	// OverrideCreated marks a managed resource that was promoted from a
+	// resource_override with generate_resource/create_operation/... rather than
+	// inferred by the CRUD grouping pass. Such resources are not reproducible
+	// from inference alone, so the config generator re-emits generate_resource
+	// plus the CRUD operation ids for them so a normalized generator.yaml
+	// round-trips (G8). False for inferred resources.
+	OverrideCreated bool             `json:"override_created,omitempty"`
+	SchemaVersion   int              `json:"schema_version,omitempty"`
+	StateUpgrades   []StateUpgradeIR `json:"state_upgrades,omitempty"`
 }
 
 // StateUpgradeIR describes a single migration from a prior schema version to the
@@ -71,7 +87,14 @@ type CRUDMappingIR struct {
 // data source, action, ephemeral resource, or list resource. It captures the
 // request shape, expected response shape, and parameter bindings.
 type OperationMappingIR struct {
-	Method         string    `json:"method,omitempty"`
+	Method string `json:"method,omitempty"`
+	// OperationID is the OpenAPI operationId of the operation this mapping was
+	// built from. It is carried so the config generator can re-emit the
+	// create/read/update/delete operation ids for override-created resources,
+	// letting a normalized generator.yaml round-trip resources that CRUD
+	// inference would not itself reproduce (G8). Empty for mappings built without
+	// a parser operation or whose operation lacks an operationId.
+	OperationID    string    `json:"operation_id,omitempty"`
 	PathTemplate   string    `json:"path_template,omitempty"`
 	PathParams     []ParamIR `json:"path_params,omitempty"`
 	QueryParams    []ParamIR `json:"query_params,omitempty"`
@@ -94,9 +117,19 @@ type OperationMappingIR struct {
 	// generator unwraps the decoded response body by this key before applying it
 	// to the model, so the schema and the response stay consistent (E1). Empty
 	// when the response is not enveloped.
-	ResponseEnvelope string                 `json:"response_envelope,omitempty"`
-	SuccessCodes     []int                  `json:"success_codes,omitempty"`
-	ErrorMappings    map[int]ErrorMappingIR `json:"error_mappings,omitempty"`
+	ResponseEnvelope string `json:"response_envelope,omitempty"`
+	// ResponseInnerPath is the property name to navigate into AFTER the response
+	// envelope is unwrapped, before applying the body to the model. It handles
+	// create/update responses that nest the created/updated resource under a
+	// named property alongside side-effect objects (e.g. SpaceTraders
+	// purchase-ship returns {data:{ship:{...},transaction:{...},agent:{...}}};
+	// after unwrapping "data" the ship is still nested under "ship"). The
+	// transformer sets it by matching a property of the unwrapped create/update
+	// response whose $ref equals the resource's read response $ref. Empty when
+	// the response applies directly after the envelope unwrap.
+	ResponseInnerPath string                 `json:"response_inner_path,omitempty"`
+	SuccessCodes      []int                  `json:"success_codes,omitempty"`
+	ErrorMappings     map[int]ErrorMappingIR `json:"error_mappings,omitempty"`
 	// SecurityRequirements carries the operation's declared security
 	// requirements (a list of alternatives; each alternative is a map of
 	// security scheme name to scopes). OpenAPI security is OR across

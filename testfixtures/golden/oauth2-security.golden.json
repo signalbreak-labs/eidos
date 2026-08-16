@@ -48,8 +48,16 @@
     "reason": "authentication middleware"
   },
   {
+    "path": "internal/client/auth_test.go",
+    "reason": "authentication middleware unit tests"
+  },
+  {
     "path": "internal/client/client.go",
     "reason": "generated HTTP client"
+  },
+  {
+    "path": "internal/client/client_test.go",
+    "reason": "generated HTTP client unit tests"
   },
   {
     "path": "internal/client/errors.go",
@@ -58,6 +66,10 @@
   {
     "path": "internal/client/logging.go",
     "reason": "request/response trace logging"
+  },
+  {
+    "path": "internal/client/logging_test.go",
+    "reason": "trace logging unit tests"
   },
   {
     "path": "internal/client/models.go",
@@ -76,6 +88,10 @@
     "reason": "action o-auth2-security-api_create_protected"
   },
   {
+    "path": "internal/provider/action_create_protected_remote_test.go",
+    "reason": "coverage tests for action create_protected remote helper"
+  },
+  {
     "path": "internal/provider/data_source_get_protected.go",
     "reason": "data source o-auth2-security-api_get_protected"
   },
@@ -90,6 +106,10 @@
   {
     "path": "internal/provider/provider_test.go",
     "reason": "provider-level unit tests"
+  },
+  {
+    "path": "internal/provider/testing_helpers_test.go",
+    "reason": "shared httptest helpers for coverage tests"
   },
   {
     "path": "internal/provider/validators.go",
