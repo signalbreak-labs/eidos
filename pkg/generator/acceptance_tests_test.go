@@ -1036,3 +1036,76 @@ func TestResourceAcceptanceTestFile_NonIDAttrAndPOSTDelete(t *testing.T) {
 		}
 	}
 }
+
+// TestResourceAcceptanceTestFile_PutAsCreateDispatch verifies the mock server
+// for a PUT-as-create (upsert) resource: the instance-path PUT is the Create,
+// the same PUT is the Update, and the create branch must dispatch on
+// http.MethodPut rather than a hard-coded POST. Because create and update
+// share the instance PUT, the update branch must drop http.MethodPut (keeping
+// only http.MethodPatch) so the generated switch has no duplicate case labels.
+// The acceptance update step must also mutate a non-identifier attribute: the
+// id is Required for a PUT-as-create resource, but changing it would rewrite
+// the instance path rather than test a real update.
+func TestResourceAcceptanceTestFile_PutAsCreateDispatch(t *testing.T) {
+	r := ir.ResourceIR{
+		Name:        "alarm",
+		TypeName:    "mycloud_alarm",
+		Description: "An alarm resource.",
+		IDAttribute: "alarm_id",
+		Schema: ir.ObjectSchemaIR{
+			Attributes: []ir.AttributeIR{
+				{Name: "alarm_id", Required: true, Schema: ir.SchemaIR{Type: ir.TypeString}},
+				{Name: "severity", Required: true, Schema: ir.SchemaIR{Type: ir.TypeString}},
+			},
+		},
+		CRUDMapping: ir.CRUDMappingIR{
+			// PUT-as-create: no collection POST; the instance PUT is Create and
+			// Update (the same upsert), GET is Read, DELETE is Delete.
+			Create: ir.OperationMappingIR{Method: "PUT", PathTemplate: "/alarms/{alarmId}", SuccessCodes: []int{200}},
+			Read:   ir.OperationMappingIR{Method: "GET", PathTemplate: "/alarms/{alarmId}", SuccessCodes: []int{200}},
+			Update: &ir.OperationMappingIR{Method: "PUT", PathTemplate: "/alarms/{alarmId}", SuccessCodes: []int{200}},
+			Delete: ir.OperationMappingIR{Method: "DELETE", PathTemplate: "/alarms/{alarmId}", SuccessCodes: []int{200}},
+		},
+		Importable: true,
+	}
+	pir := sampleProviderWithResourceIR()
+	pir.Resources[0] = r
+	cfg := BuildConfig{ProviderName: pir.Name, Namespace: pir.Name}
+
+	file := ResourceAcceptanceTestFile(pir, r, cfg)
+	var buf bytes.Buffer
+	if err := file.Render(&buf); err != nil {
+		t.Fatalf("Render() error = %v", err)
+	}
+	got := buf.String()
+
+	// The create branch must match the PUT method, not a hard-coded POST, so a
+	// PUT create reaches the create handler.
+	if !strings.Contains(got, `case http.MethodPut:`) {
+		t.Errorf("PUT-as-create mock must dispatch create on http.MethodPut\ncontent:\n%s", got)
+	}
+	// The update branch must not re-list http.MethodPut (duplicate case label is
+	// a compile error); only http.MethodPatch should remain for update.
+	putCount := strings.Count(got, `http.MethodPut`)
+	if putCount != 1 {
+		t.Errorf("http.MethodPut must appear exactly once (create branch only); got %d\ncontent:\n%s", putCount, got)
+	}
+	if !strings.Contains(got, `case http.MethodPatch:`) {
+		t.Errorf("update branch must still dispatch http.MethodPatch\ncontent:\n%s", got)
+	}
+	// The update step must mutate a non-identifier attribute (severity), not the
+	// Required alarm_id, so the test exercises a real update rather than an
+	// identity/path rewrite.
+	if strings.Contains(got, `testAccAlarmResourceConfig(server.URL, "updated")`) {
+		// The update step's config call is present; confirm it does not key the
+		// mutation off the identifier by checking the param attribute is severity.
+		if !strings.Contains(got, `"severity"`) {
+			t.Errorf("update step should check the severity attribute, not the identifier\ncontent:\n%s", got)
+		}
+	}
+	// The identifier must not be the acceptance param attribute: the config
+	// function's mutated argument must not be alarm_id.
+	if strings.Contains(got, `TestCheckResourceAttr("mycloud_alarm.example", "alarm_id", "updated`) {
+		t.Errorf("update step must not mutate the identifier attribute alarm_id\ncontent:\n%s", got)
+	}
+}

@@ -637,3 +637,120 @@ func TestWiredCreateBody_IdentitySet_Compiles(t *testing.T) {
 		t.Fatalf("go build ./... failed for identity resource: %v\n%s", err, out)
 	}
 }
+
+// TestWiredCreateBody_PutAsCreate asserts a PUT-as-create (upsert) resource's
+// wired Create body issues http.MethodPut to the instance path with the
+// practitioner-supplied identifier substituted into the path placeholder. The
+// identifier is Required (the mandatory schema fix that ships with the
+// inference), so the path fills with a real value rather than a null id.
+func TestWiredCreateBody_PutAsCreate(t *testing.T) {
+	r := ir.ResourceIR{
+		Name:        "alarm",
+		TypeName:    "mycloud_alarm",
+		Description: "An alarm resource.",
+		IDAttribute: "alarm_id",
+		Schema: ir.ObjectSchemaIR{
+			Attributes: []ir.AttributeIR{
+				{Name: "alarm_id", Required: true, WireName: "alarmId", Schema: ir.SchemaIR{Type: ir.TypeString}},
+				{Name: "severity", Required: true, WireName: "severity", Schema: ir.SchemaIR{Type: ir.TypeString}},
+			},
+		},
+		CRUDMapping: ir.CRUDMappingIR{
+			// PUT-as-create: the instance PUT is Create (and Update); no
+			// collection POST exists.
+			Create: ir.OperationMappingIR{Method: "PUT", PathTemplate: "/alarms/{alarmId}"},
+			Read:   ir.OperationMappingIR{Method: "GET", PathTemplate: "/alarms/{alarmId}"},
+			Update: &ir.OperationMappingIR{Method: "PUT", PathTemplate: "/alarms/{alarmId}"},
+			Delete: ir.OperationMappingIR{Method: "DELETE", PathTemplate: "/alarms/{alarmId}"},
+		},
+	}
+
+	// The resource must be wired (Create/Read/Delete all resolve) for the body
+	// to be emitted rather than scaffolded.
+	plan := planResourceWiring(r)
+	if !plan.wired {
+		t.Fatalf("PUT-as-create resource should be wired, plan=%+v", plan)
+	}
+
+	file := ResourceFile(r, testClientImport)
+	var buf bytes.Buffer
+	if err := file.Render(&buf); err != nil {
+		t.Fatalf("Render() error = %v", err)
+	}
+	got := buf.String()
+
+	for _, want := range []string{
+		`http.MethodPut`,                             // Create issues a PUT, not a POST
+		`reqPath := "/alarms/{alarmId}"`,             // instance path, not a collection path
+		`url.PathEscape(plan.AlarmId.ValueString())`, // Required identifier fills the path
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("generated PUT-as-create body missing %q\n--- body ---\n%s", want, got)
+		}
+	}
+	// A PUT-as-create must not fall back to a POST create.
+	if strings.Contains(got, `http.MethodPost`) {
+		t.Errorf("PUT-as-create body must not emit http.MethodPost\n--- body ---\n%s", got)
+	}
+}
+
+// TestWiredCreateBody_PutAsCreateComposite asserts a composite-identity
+// PUT-as-create resource (an instance path with multiple path parameters, e.g.
+// /notifMetaConfig/{notifType}/{taskId}) wires and that the Create body fills
+// EVERY path placeholder with a practitioner-supplied Required identifier. The
+// path-substitution resolver matches each camelCase placeholder against the
+// attribute's WireName (the attr Name is snake_case), and composite paths have
+// no single-id fallback, so both identifiers must resolve for the resource to
+// wire at all. This mirrors the Gigamon /notifMetaConfig/{notifType}/{taskId}
+// case the plan's verification step 2 expects to wire.
+func TestWiredCreateBody_PutAsCreateComposite(t *testing.T) {
+	r := ir.ResourceIR{
+		Name:        "notif_meta_config",
+		TypeName:    "upsert_api_notif_meta_config",
+		Description: "A composite-id upsert resource.",
+		IDAttribute: "id",
+		Schema: ir.ObjectSchemaIR{
+			Attributes: []ir.AttributeIR{
+				{Name: "id", Computed: true, WireName: "id", Schema: ir.SchemaIR{Type: ir.TypeString}},
+				{Name: "notif_type", Required: true, WireName: "notifType", Schema: ir.SchemaIR{Type: ir.TypeString}},
+				{Name: "task_id", Required: true, WireName: "taskId", Schema: ir.SchemaIR{Type: ir.TypeString}},
+				{Name: "enabled", Required: true, WireName: "enabled", Schema: ir.SchemaIR{Type: ir.TypeBool}},
+			},
+		},
+		CRUDMapping: ir.CRUDMappingIR{
+			Create: ir.OperationMappingIR{Method: "PUT", PathTemplate: "/notification/event/notifMetaConfig/{notifType}/{taskId}"},
+			Read:   ir.OperationMappingIR{Method: "GET", PathTemplate: "/notification/event/notifMetaConfig/{notifType}/{taskId}"},
+			Update: &ir.OperationMappingIR{Method: "PUT", PathTemplate: "/notification/event/notifMetaConfig/{notifType}/{taskId}"},
+			Delete: ir.OperationMappingIR{Method: "DELETE", PathTemplate: "/notification/event/notifMetaConfig/{notifType}/{taskId}"},
+		},
+	}
+
+	plan := planResourceWiring(r)
+	if !plan.wired {
+		t.Fatalf("composite PUT-as-create resource should be wired, plan=%+v", plan)
+	}
+
+	file := ResourceFile(r, testClientImport)
+	var buf bytes.Buffer
+	if err := file.Render(&buf); err != nil {
+		t.Fatalf("Render() error = %v", err)
+	}
+	got := buf.String()
+
+	for _, want := range []string{
+		`http.MethodPut`,
+		`reqPath := "/notification/event/notifMetaConfig/{notifType}/{taskId}"`,
+		`url.PathEscape(plan.NotifType.ValueString())`, // first composite id fills its slot
+		`url.PathEscape(plan.TaskId.ValueString())`,    // second composite id fills its slot
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("composite PUT-as-create body missing %q\n--- body ---\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, `http.MethodPost`) {
+		t.Errorf("composite PUT-as-create body must not emit http.MethodPost\n--- body ---\n%s", got)
+	}
+	if strings.Contains(got, `is not wired to a remote API endpoint`) {
+		t.Errorf("composite PUT-as-create must be wired, not scaffolded\n--- body ---\n%s", got)
+	}
+}

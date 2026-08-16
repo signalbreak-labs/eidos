@@ -15,11 +15,12 @@ import (
 )
 
 type generateConfigFlags struct {
-	spec         string
-	output       string
-	providerName string
-	force        bool
-	remote       remoteSpecFlags
+	spec             string
+	output           string
+	providerName     string
+	force            bool
+	noUsePutAsCreate bool
+	remote           remoteSpecFlags
 }
 
 func newGenerateConfigCmd() *cobra.Command {
@@ -40,6 +41,8 @@ custom overrides and rename resources before running eidos generate.`,
 	cmd.Flags().StringVar(&flags.output, "output", "generator.yaml", "Path to write the starter generator.yaml")
 	cmd.Flags().StringVar(&flags.providerName, "provider-name", "generated", "Provider name to use in the generated config")
 	cmd.Flags().BoolVar(&flags.force, "force", false, "Overwrite an existing output file")
+	cmd.Flags().BoolVar(&flags.noUsePutAsCreate, "no-use-put-as-create", false,
+		"Emit use_put_as_create: false (kill-switch). By default the generated config records use_put_as_create: true, so an instance-path PUT with no collection POST is used as the Create (upsert).")
 	flags.remote.register(cmd)
 
 	mustMarkFlagRequired(cmd, "spec")
@@ -73,7 +76,12 @@ func runGenerateConfig(cmd *cobra.Command, flags *generateConfigFlags) error {
 		return fmt.Errorf("failed to resolve output path: %w", err)
 	}
 
-	convertDiags, err := writeStarterConfigFromSpec(specBytes, specDisplay, absOutput, strings.TrimSpace(flags.providerName), flags.force)
+	// PUT-as-create is default-on; --no-use-put-as-create records the kill-switch
+	// in the generated config and builds the IR with PUT-as-create disabled so the
+	// emitted overrides stay consistent with the toggle.
+	usePutAsCreate := !flags.noUsePutAsCreate
+
+	convertDiags, err := writeStarterConfigFromSpec(specBytes, specDisplay, absOutput, strings.TrimSpace(flags.providerName), flags.force, usePutAsCreate)
 	if err != nil {
 		return err
 	}
@@ -84,8 +92,8 @@ func runGenerateConfig(cmd *cobra.Command, flags *generateConfigFlags) error {
 	return writeStarterConfigHint(cmd.OutOrStdout(), absOutput, specDisplay)
 }
 
-func writeStarterConfigFromSpec(specData []byte, specPath, absOutput, providerName string, force bool) (diagnostics.Diagnostics, error) {
-	cfg, version, convertDiags, err := api.GenerateStarterConfigWithName(specData, specPath, providerName)
+func writeStarterConfigFromSpec(specData []byte, specPath, absOutput, providerName string, force, usePutAsCreate bool) (diagnostics.Diagnostics, error) {
+	cfg, version, convertDiags, err := api.GenerateStarterConfigWithName(specData, specPath, providerName, usePutAsCreate)
 	if err != nil {
 		return convertDiags, fmt.Errorf("failed to generate starter config: %w", err)
 	}

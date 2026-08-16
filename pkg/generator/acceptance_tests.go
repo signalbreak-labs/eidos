@@ -595,8 +595,18 @@ func writeHCLAcceptanceBlock(h *hclBuilder, block ir.BlockIR) {
 // vary across the create and update test steps. It prefers a required or
 // optional string attribute and falls back to any primitive attribute.
 func acceptanceParamAttribute(r ir.ResourceIR) (string, ir.PrimitiveType, bool) {
+	// The update step mutates this attribute to verify the resource was
+	// updated. The identifier (id) attribute must never be the mutation target:
+	// changing it rewrites the resource's identity and, for a PUT-as-create
+	// upsert, the instance path the Create/Update PUT substitutes, so the step
+	// would not exercise a real update. Skip it regardless of Required/Optional.
+	idAttr := strings.TrimSpace(r.IDAttribute)
+	if idAttr == "" {
+		idAttr = "id"
+	}
+	isIdentifier := func(name string) bool { return name == idAttr }
 	for _, attr := range r.Schema.Attributes {
-		if !includeInExample(attr) {
+		if !includeInExample(attr) || isIdentifier(attr.Name) {
 			continue
 		}
 		if attr.Schema.Collection != nil || schema.IsObjectLike(attr.Schema) {
@@ -607,7 +617,7 @@ func acceptanceParamAttribute(r ir.ResourceIR) (string, ir.PrimitiveType, bool) 
 		}
 	}
 	for _, attr := range r.Schema.Attributes {
-		if !includeInExample(attr) {
+		if !includeInExample(attr) || isIdentifier(attr.Name) {
 			continue
 		}
 		if attr.Schema.Collection != nil || schema.IsObjectLike(attr.Schema) {
@@ -753,6 +763,13 @@ type mockRoute struct {
 	read   bool
 	update bool
 	delete bool
+	// createMethod is the HTTP method of the create operation. It is "POST" for
+	// a conventional collection create and "PUT" for a PUT-as-create (upsert)
+	// resource whose Create is the instance-path PUT. The generated handler
+	// dispatches the create branch on this method instead of a hard-coded POST,
+	// so a PUT create reaches the create branch. Empty defaults to POST for
+	// routes built without a create method (preserves prior output).
+	createMethod string
 	// deleteMethod is the HTTP method of the delete operation. A non-DELETE
 	// delete (e.g. POST /pets/{id}/scrap) shares the route prefix with the
 	// collection POST create; the generated handler uses this to dispatch
@@ -775,6 +792,27 @@ func firstSuccessCode(codes []int, fallback int) int {
 		return fallback
 	}
 	return codes[0]
+}
+
+// updateMethodList returns the HTTP methods the update branch should dispatch
+// on. The update branch covers PUT and PATCH; when the create branch already
+// handles one of them (PUT-as-create: create and update are the same instance
+// PUT), it is dropped to avoid a duplicate switch label. The returned slice
+// preserves the conventional [PUT, PATCH] order for byte-identical output on
+// resources whose create is a collection POST.
+func updateMethodList(create bool, createMethod string) []string {
+	methods := []string{"PUT", "PATCH"}
+	if !create {
+		return methods
+	}
+	kept := make([]string, 0, len(methods))
+	for _, m := range methods {
+		if strings.EqualFold(m, createMethod) {
+			continue
+		}
+		kept = append(kept, m)
+	}
+	return kept
 }
 
 func generateMockServerFunction(f *astgen.File, r ir.ResourceIR, funcName string, routes []mockRoute, schemes []ir.SecuritySchemeIR) {
@@ -857,6 +895,7 @@ func mockRoutes(m ir.CRUDMappingIR) []mockRoute {
 		switch kind {
 		case routeCreate:
 			route.create = true
+			route.createMethod = method
 			route.createStatus = status
 		case routeRead:
 			route.read = true
@@ -1340,6 +1379,17 @@ func statefulMockRouteHandler(route mockRoute, index int, schemes []ir.SecurityS
 
 	var cases []ast.Stmt
 
+	// createMethod is the HTTP method the generated handler dispatches the
+	// create branch on. PUT-as-create (upsert) resources issue Create as the
+	// instance-path PUT, so the branch must match MethodPut, not a hard-coded
+	// POST. The update branch below drops any method already handled here so the
+	// two never emit duplicate switch labels (PUT-as-create: create and update
+	// are the same instance PUT).
+	createMethod := route.createMethod
+	if createMethod == "" {
+		createMethod = "POST"
+	}
+
 	if route.create {
 		createBody := []ast.Stmt{}
 		// A non-DELETE delete on a nested path (e.g. POST /pets/{id}/scrap)
@@ -1430,7 +1480,7 @@ func statefulMockRouteHandler(route mockRoute, index int, schemes []ir.SecurityS
 			),
 			astgen.Return(),
 		)
-		cases = append(cases, caseWithBody([]ast.Expr{astgen.QualExpr("http", "MethodPost")}, createBody...))
+		cases = append(cases, caseWithBody([]ast.Expr{httpMethodExpr(createMethod)}, createBody...))
 	}
 
 	if route.read {
@@ -1536,10 +1586,20 @@ func statefulMockRouteHandler(route mockRoute, index int, schemes []ir.SecurityS
 			),
 			astgen.Return(),
 		}
-		cases = append(cases, caseWithBody([]ast.Expr{
-			astgen.QualExpr("http", "MethodPut"),
-			astgen.QualExpr("http", "MethodPatch"),
-		}, updateBody...))
+		// The update branch dispatches on PUT and PATCH. Drop any method the
+		// create branch already matches — PUT-as-create issues Create as the
+		// instance PUT, the same op Update uses — so the two never emit
+		// duplicate switch labels. When no methods remain (update was PUT-only
+		// and create took PUT) the create branch already serves the upsert, so
+		// the update case is omitted entirely.
+		updateMethods := updateMethodList(route.create, createMethod)
+		if len(updateMethods) > 0 {
+			methodExprs := make([]ast.Expr, 0, len(updateMethods))
+			for _, m := range updateMethods {
+				methodExprs = append(methodExprs, httpMethodExpr(m))
+			}
+			cases = append(cases, caseWithBody(methodExprs, updateBody...))
+		}
 	}
 
 	if route.delete {

@@ -100,6 +100,10 @@ eidos generate --spec ./api.yaml --config ./generator.yaml --output ./terraform-
 | `--provider-name` | *(spec title)* | no | Provider name for the starter config when used with `--generate-config`. |
 | `--force` | `false` | no | Overwrite an existing `generator.yaml` when used with `--generate-config`, or overwrite generated provider files in write mode. |
 | `--generate-terraform-tests` | `false` | no | Emit native `.tftest.hcl` suites in the output `tests/` directory. |
+| `--no-use-put-as-create` | `false` | no | With `--generate-config`, record `use_put_as_create: false` (the kill-switch) in the starter config. By default the starter config records `use_put_as_create: true` (PUT-as-create inference on). |
+| `--skip-build` | `false` | no | Omit the build/CI/release files (`GNUmakefile`, `.goreleaser.yml`, `.github/workflows/release.yml`, `terraform-registry-manifest.json`) from the output. Mirrors `generation.skip_build`; the flag wins when both are set. |
+| `--only-build` | `false` | no | Emit only the build/CI/release files and nothing else (not even `go.mod`, `main.go`, or the provider/client packages). Mutually exclusive with `--skip-build`. Requires `--output` unless `--dry-run`. |
+| `--dynamic-release` | `false` | no | Also generate `.github/workflows/regenerate-and-release.yml`: a manually-dispatched workflow that regenerates the provider from its spec and publishes a release using the eidos CI image. Mirrors `generation.dynamic_release.enabled`; the flag wins when both are set. |
 
 ### Behavior
 
@@ -133,6 +137,7 @@ eidos generate-config --spec ./api.yaml --output ./generator.yaml --provider-nam
 | `--output` | `generator.yaml` | no | Path to write the starter config. |
 | `--provider-name` | `generated` | no | Provider short name used in the config. |
 | `--force` | `false` | no | Overwrite the output file if it already exists. |
+| `--no-use-put-as-create` | `false` | no | Record `use_put_as_create: false` (the kill-switch) in the starter config. By default the starter config records `use_put_as_create: true` so an instance-path PUT with no collection POST is used as the Create (upsert). |
 | `--spec-allow-http` | `false` | no | Permit `http://` spec URLs (https is the default for remote specs). |
 | `--spec-auth-scheme` | *(none)* | no | Authenticate a remote spec fetch: `bearer`, `basic`, `apiKey`, or `oauth2-client-credentials`. Credential *values* come from environment variables (see below). |
 | `--spec-token-env` | *(none)* | no | Environment variable holding the bearer token for `--spec-auth-scheme bearer`. |
@@ -322,6 +327,7 @@ global_timeouts:        TimeoutConfig
 pagination:             PaginationConfig
 polymorphism:           PolymorphismConfig
 generate_terraform_tests: bool
+use_put_as_create:      bool
 generation:             GenerationConfig
 spec:                   SpecConfig
 ```
@@ -329,6 +335,13 @@ spec:                   SpecConfig
 `generate_terraform_tests` is honored via the `eidos generate
 --generate-terraform-tests` flag. The config key is surfaced in the API
 `detected` summary but does not yet control generation output.
+
+`use_put_as_create` is **on by default** for auto-generated providers (see
+[PUT-as-create (upsert) inference](#put-as-create-upsert-inference)). It is a
+tri-state key: absent (or `true`) enables the inference, and `false` is the
+global kill-switch that restores the legacy scaffold behavior. A freshly
+generated starter config records `use_put_as_create: true` so the default is
+self-documenting and round-trips through `eidos generate --config`.
 
 ### `provider`
 
@@ -410,9 +423,9 @@ resource_overrides:
 | `computed_attributes` | []string | Attributes forced to `Computed`. |
 | `sensitive_attributes` | []string | Attributes forced to `Sensitive`. |
 | `write_only_attributes` | []WriteOnlyAttribute | Write-only arguments. |
-| `skip` | bool | Skip this resource entirely. |
+| `skip` | bool | Skip this resource entirely (the per-resource opt-out — drops the resource from generation). |
 | `generate_datasource` | bool | Emit a matching data source. |
-| `generate_resource` | bool | Emit the managed resource. When combined with the per-CRUD operation fields, promotes an operation that inference classified as an action into a wired managed resource. |
+| `generate_resource` | bool | **Opt-in only.** `true` (with the per-CRUD operation fields) promotes an operation that inference classified as an action into a wired managed resource. `false` is silently ignored — it is **not** an opt-out; use `skip: true` to drop a resource. |
 | `create_operation` | string | OpenAPI operationId for Create. |
 | `read_operation` | string | OpenAPI operationId for Read. |
 | `update_operation` | string | OpenAPI operationId for Update (optional). |
@@ -725,6 +738,7 @@ generation:
     include: []
   skip_tests: false
   skip_docs: false
+  skip_build: false
 ```
 
 | Field | Type | Description |
@@ -735,8 +749,18 @@ generation:
 | `ephemeral_resources` | ResourceGenerationConfig | Same for ephemeral resources. |
 | `list_resources` | ResourceGenerationConfig | Same for list resources. |
 | `functions` | ResourceGenerationConfig | Same for functions. |
-| `skip_tests` | bool | Skip generating test files. *(Currently has no effect on generation output.)* |
-| `skip_docs` | bool | Skip generating documentation. *(Currently has no effect on generation output.)* |
+| `skip_tests` | bool | Omit generated `*_test.go` and coverage test files from the output. |
+| `skip_docs` | bool | Omit generated `docs/` Markdown from the output. |
+| `skip_build` | bool | Omit the build/CI/release files (`GNUmakefile`, `.goreleaser.yml`, `.github/workflows/release.yml`, `terraform-registry-manifest.json`) from the output. The `--skip-build` flag is the CLI equivalent and wins when both are set. |
+| `dynamic_release` | DynamicReleaseConfig | Opt into generating `.github/workflows/regenerate-and-release.yml`, a manually-dispatched workflow that regenerates the provider from its spec and publishes a release using the eidos CI image. Off when absent. The `--dynamic-release` flag is the CLI equivalent and wins when both are set. |
+
+`DynamicReleaseConfig`:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `enabled` | bool | Turn on generation of the regenerate-and-release workflow. |
+| `image` | string | eidos CI image reference the workflow runs in (defaults to `ghcr.io/signalbreak-labs/eidos:latest` when empty). |
+| `spec_path` | string | Path to the OpenAPI spec, relative to the provider repo root, that the workflow regenerates from (defaults to `spec.yaml` when empty). |
 
 Each `ResourceGenerationConfig`:
 
@@ -762,6 +786,51 @@ spec:
 | `path` | string | Path or http(s) URL of the OpenAPI spec. |
 | `format` | string | Detected OpenAPI version (`openapi2`, `openapi3`, or `openapi31`) recorded in starter configs; not consumed by generation. |
 | `auth` | SpecAuthConfig | Authentication for a remote spec fetch (same fields as the `--spec-auth-*` CLI flags). |
+
+### PUT-as-create (upsert) inference
+
+Many APIs expose *upsert* resources — a `PUT` on an item path
+(`PUT /alarms/{alarmId}`) with no collection `POST`. Eidos infers a managed
+resource's Create mapping from a collection `POST` by default, so such resources
+would otherwise stay permanently scaffolded. When `use_put_as_create` is on
+(the default), Eidos instead uses the instance-path `PUT` as the resource's
+Create mapping (an upsert) whenever a CRUD group has no collection `POST` but
+its instance path has `PUT` (plus `GET`/`DELETE`). The same `PUT` remains the
+Update mapping — Create and Update both issue the upsert, which is correct.
+A collection `POST` still wins when present; groups missing `GET` or `DELETE`
+stay scaffolded as before.
+
+Because the practitioner must supply the ID in the request URI for a PUT create,
+the inference forces the resource's identifier attribute to **Required**
+(user-settable) so the wired Create body fills the path placeholder with a real
+value rather than a null, Computed id.
+
+When the inference fires, Eidos emits an `Info` diagnostic naming the resource
+and the PUT path, e.g. `using PUT /alarms/{alarmId} as Create (upsert)` — an
+inferred Create is a load-bearing assumption the user should see (fail loud,
+never silently).
+
+**Escape hatches:**
+
+- `use_put_as_create: false` — global kill-switch that restores the legacy
+  scaffold behavior for every resource at once.
+- `skip: true` on the resource (`resource_overrides`) — per-resource opt-out
+  that drops the resource entirely:
+
+  ```yaml
+  resource_overrides:
+    - operation: "PUT /alarms/{alarmId}"
+      skip: true
+  ```
+
+  `generate_resource: false` is **not** an opt-out — `generate_resource` is
+  opt-in only, so `false` is silently ignored. Use `skip: true` to drop a
+  resource.
+
+`eidos generate-config` records `use_put_as_create: true` in the starter
+config by default (so the default is self-documenting and round-trips through
+`eidos generate --config`); pass `--no-use-put-as-create` to record the
+kill-switch (`use_put_as_create: false`) instead.
 
 ## Generated provider layout
 
@@ -881,6 +950,129 @@ The JSON shape is stable and can be consumed by other tooling:
 `config_path` is present only when a `generator.yaml` overrides file was
 supplied; `written` is `false` for a dry-run and `true` after a full generation
 run.
+
+## Build/release files
+
+A full generation run emits four build/CI/release scaffolding files alongside
+the provider code: `GNUmakefile`, `.goreleaser.yml`,
+`.github/workflows/release.yml`, and `terraform-registry-manifest.json`. They
+are templated from the provider name and release settings (not the spec's
+constructs), so they are independent of the generated provider code.
+
+### Omitting them — `--skip-build` / `skip_build`
+
+To regenerate a provider without touching hand-managed release scaffolding
+(for example, in a CI job that regenerates the provider into a fresh directory),
+drop the four files with `--skip-build` or `generation.skip_build: true`:
+
+```bash
+eidos generate --spec ./api.yaml --output ./provider --skip-build
+```
+
+```yaml
+generation:
+  skip_build: true
+```
+
+### Generating only them — `--only-build`
+
+`--only-build` inverts the selection: it emits exactly the four scaffolding files
+and nothing else — not even `go.mod`, `main.go`, or the provider/client packages.
+This supports a workflow where the provider code is regenerated dynamically in
+CI and never stored in git, while the release scaffolding is checked in once and
+managed separately:
+
+```bash
+# Once: generate and commit just the release scaffolding.
+eidos generate --spec ./api.yaml --only-build --output . --force
+
+# In CI: regenerate the full provider (no build files) into a throwaway dir.
+eidos generate --spec ./api.yaml --skip-build --output ./provider
+```
+
+`--only-build` and `--skip-build` are mutually exclusive. Like the normal write
+path, `--only-build` requires `--output` unless `--dry-run` is set.
+
+## CI image
+
+Each eidos release publishes a container image to GHCR that bundles eidos, the
+Go toolchain, and GoReleaser:
+
+```text
+ghcr.io/signalbreak-labs/eidos:<tag>     # e.g. ghcr.io/signalbreak-labs/eidos:v0.4.0
+ghcr.io/signalbreak-labs/eidos:latest
+```
+
+It is a "generate-and-build" image: a CI job can run one container to regenerate
+a provider from a spec and publish it, without installing Go, GoReleaser, or
+eidos on the runner. The image is for the eidos *generator* (the tool). Generated
+providers are still normal Go modules that GoReleaser cross-compiles into
+Terraform plugin binaries via their own generated `.goreleaser.yml` — the image
+supplies the tools to drive that pipeline.
+
+### Dynamic regenerate-and-publish
+
+The intended workflow pairs `--only-build` (commit the release scaffolding once)
+with the image (regenerate and publish on every CI run, no provider code in git):
+
+```yaml
+# .github/workflows/release.yml in the provider repo
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    container:
+      image: ghcr.io/signalbreak-labs/eidos:v0.4.0
+    steps:
+      - uses: actions/checkout@v4
+      # Regenerate the provider from the spec; --skip-build keeps the committed
+      # scaffolding (GNUmakefile, .goreleaser.yml, release workflow, manifest).
+      - run: eidos generate --spec ./api.yaml --skip-build --output .
+      - run: go test ./...
+      # Publish via the generated GoReleaser config.
+      - run: goreleaser release --clean
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+```
+
+Run `eidos generate --spec ./api.yaml --only-build --output . --force` once and
+commit the four scaffolding files; the CI job above regenerates everything else
+on each release. The image carries Go, GoReleaser, `make`, and `eidos` on `PATH`.
+
+### Generated regenerate-and-release workflow
+
+Instead of hand-writing the job above, ask eidos to generate it into the provider
+with `--dynamic-release` (or `generation.dynamic_release.enabled: true`):
+
+```bash
+eidos generate --spec ./api.yaml --output . --force --dynamic-release
+```
+
+This emits `.github/workflows/regenerate-and-release.yml` alongside the static
+`release.yml`. The two coexist with non-overlapping triggers:
+
+- `release.yml` fires on a `v*` tag push and builds *committed* code.
+- `regenerate-and-release.yml` is manually dispatched (`workflow_dispatch` with a
+  `version` input): it regenerates the provider from the spec with
+  `eidos generate --skip-build`, builds, tests, commits to a `release/<version>`
+  branch, tags, and runs `goreleaser release --clean` inside the CI image.
+
+Because the tag is created with the default `GITHUB_TOKEN`, it does not re-trigger
+`release.yml`, so the workflows never double-fire. The regenerated code lands on a
+release-specific branch, keeping the default branch to just the spec and the
+committed build scaffolding. Configure the image and spec path:
+
+```yaml
+generation:
+  dynamic_release:
+    enabled: true
+    image: ghcr.io/signalbreak-labs/eidos:latest
+    spec_path: spec.yaml
+```
+
+The workflow is opt-in and off by default, so generation output (and golden
+snapshots) are unchanged unless you turn it on.
 
 ## Examples
 

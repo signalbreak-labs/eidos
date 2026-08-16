@@ -230,7 +230,10 @@ func TestInferResourceCRUD(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := InferResourceCRUD(tt.paths)
+			// usePutAsCreate=false preserves the legacy inference shape these
+			// assertions lock in (a PUT-only group stays Create-less). The
+			// PUT-as-create behavior is exercised by TestInferResourceCRUDPutAsCreate.
+			got := InferResourceCRUD(tt.paths, false)
 			if !reflect.DeepEqual(got, tt.want) {
 				t.Errorf("InferResourceCRUD() = %+v, want %+v", got, tt.want)
 			}
@@ -306,7 +309,7 @@ func TestInferResourceCRUDDedupsNameCollisions(t *testing.T) {
 
 	// Run several times; output must be stable and contain exactly one "pet".
 	for i := 0; i < 5; i++ {
-		resources := InferResourceCRUD(pathOps)
+		resources := InferResourceCRUD(pathOps, false)
 		if len(resources) != 1 {
 			t.Fatalf("iteration %d: expected 1 deduped resource, got %d: %+v", i, len(resources), resources)
 		}
@@ -339,7 +342,7 @@ func TestInferResourceCRUDPrefersCompleteCRUDOnNameCollision(t *testing.T) {
 		},
 	}
 
-	resources := InferResourceCRUD(pathOps)
+	resources := InferResourceCRUD(pathOps, false)
 	var team *ResourceCRUD
 	for i := range resources {
 		if resources[i].Name == "team" {
@@ -356,5 +359,81 @@ func TestInferResourceCRUDPrefersCompleteCRUDOnNameCollision(t *testing.T) {
 	if team.Create == nil || team.Read == nil || team.Delete == nil || team.Update == nil {
 		t.Fatalf("expected full CRUD on the surviving team group, got create=%v read=%v update=%v delete=%v",
 			team.Create != nil, team.Read != nil, team.Update != nil, team.Delete != nil)
+	}
+}
+
+// TestInferResourceCRUDPutAsCreate locks in the default-on PUT-as-create
+// inference: a CRUD group whose collection path has no POST but whose instance
+// path has PUT+GET+DELETE uses the PUT as the Create (upsert). With the
+// kill-switch (usePutAsCreate=false) the group stays Create-less (legacy
+// scaffold behavior). Collection POST still wins when present.
+func TestInferResourceCRUDPutAsCreate(t *testing.T) {
+	pathOps := map[string]map[HTTPMethod]Operation{
+		"/alarms/{alarmId}": {
+			MethodGet:    op(MethodGet, "/alarms/{alarmId}"),
+			MethodPut:    op(MethodPut, "/alarms/{alarmId}"),
+			MethodDelete: op(MethodDelete, "/alarms/{alarmId}"),
+		},
+	}
+
+	t.Run("default-on uses PUT as create", func(t *testing.T) {
+		resources := InferResourceCRUD(pathOps, true)
+		if len(resources) != 1 {
+			t.Fatalf("expected 1 resource, got %d: %+v", len(resources), resources)
+		}
+		g := resources[0]
+		if g.Create == nil || g.Create.Method != MethodPut || g.Create.Path != "/alarms/{alarmId}" {
+			t.Fatalf("expected Create = PUT /alarms/{alarmId}, got %+v", g.Create)
+		}
+		// The same PUT remains the Update mapping (upsert for both Create and Update).
+		if g.Update == nil || g.Update.Method != MethodPut {
+			t.Fatalf("expected Update = PUT, got %+v", g.Update)
+		}
+		if g.Read == nil || g.Delete == nil {
+			t.Fatalf("expected Read and Delete present, got read=%+v delete=%+v", g.Read, g.Delete)
+		}
+	})
+
+	t.Run("kill-switch leaves Create nil", func(t *testing.T) {
+		resources := InferResourceCRUD(pathOps, false)
+		if len(resources) != 1 {
+			t.Fatalf("expected 1 resource, got %d: %+v", len(resources), resources)
+		}
+		g := resources[0]
+		if g.Create != nil {
+			t.Fatalf("expected Create == nil with usePutAsCreate=false, got %+v", g.Create)
+		}
+		// Update still resolves from the PUT (legacy behavior).
+		if g.Update == nil || g.Update.Method != MethodPut {
+			t.Fatalf("expected Update = PUT, got %+v", g.Update)
+		}
+	})
+}
+
+// TestInferResourceCRUDPutAsCreatePostWins confirms a collection POST still
+// wins as Create when present, even with usePutAsCreate=true: the PUT stays the
+// Update mapping only.
+func TestInferResourceCRUDPutAsCreatePostWins(t *testing.T) {
+	pathOps := map[string]map[HTTPMethod]Operation{
+		"/alarms": {
+			MethodPost: op(MethodPost, "/alarms"),
+			MethodGet:  op(MethodGet, "/alarms"),
+		},
+		"/alarms/{alarmId}": {
+			MethodGet:    op(MethodGet, "/alarms/{alarmId}"),
+			MethodPut:    op(MethodPut, "/alarms/{alarmId}"),
+			MethodDelete: op(MethodDelete, "/alarms/{alarmId}"),
+		},
+	}
+	resources := InferResourceCRUD(pathOps, true)
+	if len(resources) != 1 {
+		t.Fatalf("expected 1 resource, got %d: %+v", len(resources), resources)
+	}
+	g := resources[0]
+	if g.Create == nil || g.Create.Method != MethodPost || g.Create.Path != "/alarms" {
+		t.Fatalf("expected Create = POST /alarms, got %+v", g.Create)
+	}
+	if g.Update == nil || g.Update.Method != MethodPut {
+		t.Fatalf("expected Update = PUT, got %+v", g.Update)
 	}
 }

@@ -353,6 +353,173 @@ func TestRecordMatchesWriteMode(t *testing.T) {
 	}
 }
 
+// buildFiles is the set of build/CI/release scaffolding files gated by
+// IncludeBuild. Both record and write paths must gate them identically.
+var buildFiles = []string{
+	"GNUmakefile",
+	".goreleaser.yml",
+	".github/workflows/release.yml",
+	"terraform-registry-manifest.json",
+}
+
+// TestIncludeBuildGatesBuildFiles verifies that IncludeBuild controls the four
+// build/CI/release scaffolding files in both record and write paths, and that
+// record/write parity holds with the flag off.
+func TestIncludeBuildGatesBuildFiles(t *testing.T) {
+	provider := &ir.ProviderIR{Name: "mycloud", Version: "0.1.0"}
+	cfg := BuildConfigFromIR(provider)
+
+	// Default: build files present in both paths.
+	defaultOpts := DefaultCollectOptions()
+	for _, p := range buildFiles {
+		assertContains(t, pathsFrom(CollectFromProviderIR(provider, defaultOpts)), p)
+	}
+	wf, err := FilesForProviderIR(provider, cfg, defaultOpts)
+	if err != nil {
+		t.Fatalf("FilesForProviderIR default: %v", err)
+	}
+	for _, p := range buildFiles {
+		assertContains(t, pathsFromFile(wf), p)
+	}
+
+	// IncludeBuild=false: the four files are absent from both record and write.
+	skipOpts := DefaultCollectOptions()
+	skipOpts.IncludeBuild = false
+	recordPaths := pathsFrom(CollectFromProviderIR(provider, skipOpts))
+	wfSkip, err := FilesForProviderIR(provider, cfg, skipOpts)
+	if err != nil {
+		t.Fatalf("FilesForProviderIR skip: %v", err)
+	}
+	writePaths := pathsFromFile(wfSkip)
+	for _, p := range buildFiles {
+		if contains(recordPaths, p) {
+			t.Errorf("record path unexpectedly includes %q with IncludeBuild=false", p)
+		}
+		if contains(writePaths, p) {
+			t.Errorf("write path unexpectedly includes %q with IncludeBuild=false", p)
+		}
+	}
+	// Record/write parity must still hold with build files excluded.
+	recordSet := setOf(recordPaths)
+	writeSet := setOf(writePaths)
+	for p := range recordSet {
+		if _, ok := writeSet[p]; !ok {
+			t.Errorf("recorded but not written with IncludeBuild=false: %s", p)
+		}
+	}
+	for p := range writeSet {
+		if _, ok := recordSet[p]; !ok {
+			t.Errorf("written but not recorded with IncludeBuild=false: %s", p)
+		}
+	}
+
+	// OnlyBuild: both paths emit exactly the four scaffolding files and nothing
+	// else, so record/write parity holds and no core file leaks through.
+	onlyRecord := pathsFrom(CollectFromProviderIR(provider, CollectOptions{OnlyBuild: true}))
+	onlyWrite, err := FilesForProviderIR(provider, cfg, CollectOptions{OnlyBuild: true})
+	if err != nil {
+		t.Fatalf("FilesForProviderIR only-build: %v", err)
+	}
+	onlyWritePaths := pathsFromFile(onlyWrite)
+	if len(onlyRecord) != len(buildFiles) || len(onlyWritePaths) != len(buildFiles) {
+		t.Errorf("OnlyBuild should emit %d files, got record=%d write=%d",
+			len(buildFiles), len(onlyRecord), len(onlyWritePaths))
+	}
+	for _, p := range buildFiles {
+		if !contains(onlyRecord, p) {
+			t.Errorf("OnlyBuild record missing %q: %v", p, onlyRecord)
+		}
+		if !contains(onlyWritePaths, p) {
+			t.Errorf("OnlyBuild write missing %q: %v", p, onlyWritePaths)
+		}
+	}
+	for _, p := range []string{"go.mod", "README.md", "main.go", "internal/provider/provider.go"} {
+		if contains(onlyRecord, p) || contains(onlyWritePaths, p) {
+			t.Errorf("OnlyBuild should not emit core file %q", p)
+		}
+	}
+}
+
+// dynamicReleaseWorkflowPath is the opt-in regenerate-and-release workflow
+// gated by IncludeDynamicRelease. Default-off so golden snapshots stay
+// byte-identical; both record and write paths must gate it identically.
+const dynamicReleaseWorkflowPath = ".github/workflows/regenerate-and-release.yml"
+
+// TestDynamicReleaseOptIn verifies that IncludeDynamicRelease gates the
+// regenerate-and-release workflow in both record and write paths, that it is
+// absent by default (so goldens are unchanged), and that record/write parity
+// holds in both states.
+func TestDynamicReleaseOptIn(t *testing.T) {
+	provider := &ir.ProviderIR{Name: "mycloud", Version: "0.1.0"}
+	cfg := BuildConfigFromIR(provider)
+
+	// Default-off: the workflow is absent from both paths.
+	defaultOpts := DefaultCollectOptions()
+	if contains(pathsFrom(CollectFromProviderIR(provider, defaultOpts)), dynamicReleaseWorkflowPath) {
+		t.Errorf("default record path unexpectedly includes dynamic release workflow")
+	}
+	wf, err := FilesForProviderIR(provider, cfg, defaultOpts)
+	if err != nil {
+		t.Fatalf("FilesForProviderIR default: %v", err)
+	}
+	if contains(pathsFromFile(wf), dynamicReleaseWorkflowPath) {
+		t.Errorf("default write path unexpectedly includes dynamic release workflow")
+	}
+
+	// Opt-in: the workflow is present in both paths, and parity holds.
+	onOpts := DefaultCollectOptions()
+	onOpts.IncludeDynamicRelease = true
+	recordPaths := pathsFrom(CollectFromProviderIR(provider, onOpts))
+	wfOn, err := FilesForProviderIR(provider, cfg, onOpts)
+	if err != nil {
+		t.Fatalf("FilesForProviderIR dynamic-release: %v", err)
+	}
+	writePaths := pathsFromFile(wfOn)
+	if !contains(recordPaths, dynamicReleaseWorkflowPath) {
+		t.Errorf("record path missing dynamic release workflow with IncludeDynamicRelease=true: %v", recordPaths)
+	}
+	if !contains(writePaths, dynamicReleaseWorkflowPath) {
+		t.Errorf("write path missing dynamic release workflow with IncludeDynamicRelease=true: %v", writePaths)
+	}
+	recordSet := setOf(recordPaths)
+	writeSet := setOf(writePaths)
+	for p := range recordSet {
+		if _, ok := writeSet[p]; !ok {
+			t.Errorf("recorded but not written with IncludeDynamicRelease=true: %s", p)
+		}
+	}
+	for p := range writeSet {
+		if _, ok := recordSet[p]; !ok {
+			t.Errorf("written but not recorded with IncludeDynamicRelease=true: %s", p)
+		}
+	}
+}
+
+func contains(haystack []string, needle string) bool {
+	for _, s := range haystack {
+		if s == needle {
+			return true
+		}
+	}
+	return false
+}
+
+func setOf(xs []string) map[string]struct{} {
+	m := make(map[string]struct{}, len(xs))
+	for _, x := range xs {
+		m[x] = struct{}{}
+	}
+	return m
+}
+
+func pathsFromFile(fs []File) []string {
+	out := make([]string, 0, len(fs))
+	for _, f := range fs {
+		out = append(out, f.Path)
+	}
+	return out
+}
+
 func TestRun_WriteMode(t *testing.T) {
 	opts := Options{Mode: ModeWrite, OutputDir: t.TempDir()}
 	entries, err := Run(&ir.ProviderIR{Name: "test"}, opts)

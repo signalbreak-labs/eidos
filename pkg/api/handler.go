@@ -639,6 +639,12 @@ func buildIRPreview(spec *parser.Spec, version parser.Version, cfg *config.Confi
 	previewDiags := make(diagnostics.Diagnostics, 0, len(opsDiags)+len(filterDiags))
 	previewDiags = append(previewDiags, filterDiags...)
 	previewDiags = append(previewDiags, opsDiags...)
+	// Resolve the PUT-as-create toggle: default-on when no config is supplied
+	// (the auto-generator's natural behavior) or when the field is unset/true;
+	// use_put_as_create: false is the global kill-switch that restores the legacy
+	// scaffold behavior. The *bool distinguishes "unset" (nil → on) from an
+	// explicit false, which is what makes the default-on stance legible.
+	usePutAsCreate := cfg == nil || cfg.UsePutAsCreate == nil || *cfg.UsePutAsCreate
 	// Group operations into managed resources first (REMAINING_GAPS §3). A
 	// complete CRUD group (Create + Read + Delete on a collection/instance path
 	// pair) becomes a single wired resource instead of one partial resource per
@@ -648,8 +654,22 @@ func buildIRPreview(spec *parser.Spec, version parser.Version, cfg *config.Confi
 	// classification unchanged. The transformer path-operation map is computed
 	// once and shared with the per-operation pass so data sources can build their
 	// schemas from the same resolved request/response shapes (REMAINING_GAPS §4).
-	groupedResources, consumed := buildGroupedResources(spec, name, pathOps, &previewDiags)
+	groupedResources, consumed := buildGroupedResources(spec, name, pathOps, &previewDiags, usePutAsCreate)
 	preview.Resources = append(preview.Resources, groupedResources...)
+	// Record which surviving grouped resources had their Create resolved from the
+	// instance-path PUT (PUT-as-create inference). The Info diagnostic for this
+	// inference is emitted after config overrides below so it fires only for
+	// resources that survive a skip: true opt-out — emitting it inside
+	// buildGroupedResources would surface a misleading "set skip: true" hint for a
+	// resource the practitioner already dropped. Explicit create-operation overrides
+	// (applyResourceCreationOverrides) are deliberately excluded: a practitioner who
+	// declares create_operation: putX already knows the PUT is the Create.
+	inferredPutCreates := make(map[string]bool)
+	for _, r := range groupedResources {
+		if r.CRUDMapping.Create.Method == string(transformer.MethodPut) {
+			inferredPutCreates[r.CRUDMapping.Create.PathTemplate] = true
+		}
+	}
 
 	// resource_overrides with generate_resource or explicit CRUD operations
 	// promote an action to a managed resource (G8). Run before the per-operation
@@ -663,7 +683,7 @@ func buildIRPreview(spec *parser.Spec, version parser.Version, cfg *config.Confi
 	// instance path's template parameters name the promoted list resource's
 	// identity attributes.
 	listPaths := make(map[string][]string)
-	for _, l := range transformer.InferListResources(transformer.InferResourceCRUD(pathOps)) {
+	for _, l := range transformer.InferListResources(transformer.InferResourceCRUD(pathOps, usePutAsCreate)) {
 		listPaths[l.CollectionPath] = instancePathParams(l.InstancePath)
 	}
 
@@ -693,6 +713,14 @@ func buildIRPreview(spec *parser.Spec, version parser.Version, cfg *config.Confi
 	// client ships ready-made interceptors.
 	applySecurityConfigAttributes(preview, &previewDiags)
 	applyConfigOverrides(preview, cfg, name, pathOps, consumed, &previewDiags)
+	// Surface PUT-as-create (upsert) inference with an Info diagnostic so the
+	// load-bearing assumption is never silent (AGENTS.md "fail loud, never
+	// silently"). Emitted after config overrides so a skip: true opt-out drops
+	// both the resource and its Info — the hint it carries ("set skip: true")
+	// would otherwise advise an action the practitioner already took. Only
+	// inferred PUT-as-create groups qualify (inferredPutCreates); an explicit
+	// create_operation override that happens to use a PUT is not an inference.
+	emitPutAsCreateInfoDiagnostics(preview, inferredPutCreates, &previewDiags)
 	// Write-only and secret (Sensitive) inference are spec-driven passes, not
 	// generator.yaml preferences, so they run unconditionally (even when cfg is
 	// nil) after config overrides so override-added constructs are covered too.
@@ -1602,11 +1630,11 @@ func warnUnwritableManagedResource(diags *diagnostics.Diagnostics, res ir.Resour
 // classification. This is the §3 fix: real specs with a collection POST plus an
 // instance GET/DELETE now yield a single wired resource instead of separate
 // partial resources.
-func buildGroupedResources(spec *parser.Spec, providerName string, pathOps map[string]map[transformer.HTTPMethod]transformer.Operation, diags *diagnostics.Diagnostics) ([]ir.ResourceIR, map[string]map[string]bool) {
+func buildGroupedResources(spec *parser.Spec, providerName string, pathOps map[string]map[transformer.HTTPMethod]transformer.Operation, diags *diagnostics.Diagnostics, usePutAsCreate bool) ([]ir.ResourceIR, map[string]map[string]bool) {
 	if len(pathOps) == 0 {
 		return nil, nil
 	}
-	groups := transformer.InferResourceCRUD(pathOps)
+	groups := transformer.InferResourceCRUD(pathOps, usePutAsCreate)
 
 	var resources []ir.ResourceIR
 	consumed := make(map[string]map[string]bool)
@@ -1637,7 +1665,14 @@ func buildGroupedResources(spec *parser.Spec, providerName string, pathOps map[s
 			Description:     operationDescription(crudGroupDescriptionOp(spec, g), fmt.Sprintf("Manages the %s resource.", humanizeConstructName(name))),
 			SourceOperation: groupSourceOperation(g),
 		}
-		res.CRUDMapping.Create = resourceOperationMapping(spec, "POST", g.CollectionPath, parserOp(spec, g.CollectionPath, "POST"), envelopeOf(g.Create))
+		// The Create mapping is built from the resolved Create op's method and
+		// path so it is honest for both POST-create (method POST, collection path)
+		// and PUT-as-create (method PUT, instance path). g.Create.Method is POST
+		// and g.Create.Path is the collection path for a POST-create group, so
+		// existing specs are byte-identical; a PUT-as-create group carries the
+		// instance-path PUT here instead of a hard-coded POST on the collection.
+		createMethod, createPath := string(g.Create.Method), g.Create.Path
+		res.CRUDMapping.Create = resourceOperationMapping(spec, createMethod, createPath, parserOp(spec, createPath, createMethod), envelopeOf(g.Create))
 		res.CRUDMapping.Create.MediaType = mediaTypeOf(g.Create)
 		res.CRUDMapping.Create.ResponseInnerPath = detectResponseInnerPath(g.Create, g.Read)
 		res.CRUDMapping.Read = resourceOperationMapping(spec, "GET", g.InstancePath, parserOp(spec, g.InstancePath, "GET"), envelopeOf(g.Read))
@@ -1696,6 +1731,44 @@ func buildGroupedResources(spec *parser.Spec, providerName string, pathOps map[s
 
 	sort.Slice(resources, func(i, j int) bool { return resources[i].Name < resources[j].Name })
 	return resources, consumed
+}
+
+// emitPutAsCreateInfoDiagnostics surfaces an Info diagnostic for each surviving
+// resource whose Create was inferred from the instance-path PUT (PUT-as-create
+// upsert). inferredPutCreates is the set of create path templates that
+// buildGroupedResources resolved via a PUT; only resources still present in the
+// preview (i.e. not dropped by skip: true) and whose create path is in that set
+// receive the diagnostic. The emitted list is sorted by resource name so the
+// diagnostic order is deterministic for byte-identical generation.
+func emitPutAsCreateInfoDiagnostics(preview *ir.ProviderIR, inferredPutCreates map[string]bool, diags *diagnostics.Diagnostics) {
+	if len(inferredPutCreates) == 0 {
+		return
+	}
+	type putCreate struct {
+		name string
+		path string
+	}
+	var puts []putCreate
+	for _, r := range preview.Resources {
+		if r.CRUDMapping.Create.Method != string(transformer.MethodPut) {
+			continue
+		}
+		if !inferredPutCreates[r.CRUDMapping.Create.PathTemplate] {
+			continue
+		}
+		puts = append(puts, putCreate{name: r.Name, path: r.CRUDMapping.Create.PathTemplate})
+	}
+	sort.Slice(puts, func(i, j int) bool { return puts[i].name < puts[j].name })
+	for _, p := range puts {
+		*diags = append(*diags, diagnostics.Diagnostic{
+			Severity: diagnostics.Info,
+			Summary:  fmt.Sprintf("using PUT %s as Create (upsert)", p.path),
+			Detail: fmt.Sprintf(
+				"resource %s: no collection POST exists; the instance-path PUT is used as the Create (upsert) mapping. "+
+					"Set use_put_as_create: false to disable, or skip: true on this resource to drop it.",
+				p.name),
+		})
+	}
 }
 
 // resolveOperationByID returns the path, method, and transformer Operation for
@@ -2050,7 +2123,19 @@ func groupIsResource(g transformer.ResourceCRUD, pathOps map[string]map[transfor
 // transformer.HasFullCRUD; groupIsResource is the overlay that was missing.
 func groupEmitsFullCRUDResource(path, method string, pathOps map[string]map[transformer.HTTPMethod]transformer.Operation) bool {
 	hm := transformer.HTTPMethod(strings.ToUpper(method))
-	for _, g := range transformer.InferResourceCRUD(pathOps) {
+	// The classification gate deliberately runs CRUD inference with PUT-as-create
+	// DISABLED (false). This gate decides whether an operation NOT already
+	// consumed by buildGroupedResources should be a resource lifecycle step or an
+	// action. A PUT-as-create group is either emitted by buildGroupedResources
+	// (default-on, passing groupIsResource) — in which case its ops are consumed
+	// and this gate is never reached — or it is skipped (kill-switch, or the group
+	// is rejected by groupIsResource). In both skip cases the PUT should become an
+	// action, not a scaffolded Update-only orphan resource ("a scaffolded resource
+	// with an empty model is worse than a wired action"). Running with false makes
+	// the gate see no full-CRUD group for a PUT+GET+DELETE-no-POST triple, so the
+	// PUT classifies as an action — the correct outcome in every skip case. This
+	// also keeps the gate's behavior byte-identical to before PUT-as-create existed.
+	for _, g := range transformer.InferResourceCRUD(pathOps, false) {
 		if g.Create == nil || g.Read == nil || g.Delete == nil {
 			continue
 		}
@@ -3322,34 +3407,51 @@ func buildProviderIR(spec []byte, name, contentType string, cfg *config.Config) 
 
 // GenerateStarterConfig parses an OpenAPI document, builds a ProviderIR from it,
 // and returns a validated generator.yaml Config. If providerName is non-empty it
-// overrides the provider name derived from the spec title.
+// overrides the provider name derived from the spec title. usePutAsCreate threads
+// the PUT-as-create toggle into the IR build (true = default-on; false = the
+// kill-switch) and is recorded on the returned Config so the generated
+// generator.yaml is self-documenting and round-trips through `eidos generate`.
 //
 // The returned diagnostics are conversion warnings produced while normalizing
 // the OpenAPI document; callers should surface them to the user even when the
 // overall generation succeeds. Version detection diagnostics are returned as
 // part of the error instead.
-func GenerateStarterConfig(spec []byte, providerName string) (*config.Config, parser.Version, diagnostics.Diagnostics, error) {
-	return generateStarterConfig(spec, "", providerName)
+func GenerateStarterConfig(spec []byte, providerName string, usePutAsCreate bool) (*config.Config, parser.Version, diagnostics.Diagnostics, error) {
+	return generateStarterConfig(spec, "", providerName, usePutAsCreate)
 }
 
 // GenerateStarterConfigWithName is GenerateStarterConfig with parse errors
 // attributed to name (the spec's real path or URL) rather than the generic
 // "request.yaml".
-func GenerateStarterConfigWithName(spec []byte, name, providerName string) (*config.Config, parser.Version, diagnostics.Diagnostics, error) {
-	return generateStarterConfig(spec, name, providerName)
+func GenerateStarterConfigWithName(spec []byte, name, providerName string, usePutAsCreate bool) (*config.Config, parser.Version, diagnostics.Diagnostics, error) {
+	return generateStarterConfig(spec, name, providerName, usePutAsCreate)
 }
 
-func generateStarterConfig(spec []byte, name, providerName string) (*config.Config, parser.Version, diagnostics.Diagnostics, error) {
+// starterConfigToggle returns the config used to build the starter-config IR so
+// it reflects the PUT-as-create toggle. It is nil for the default-on case so
+// the IR build is byte-identical to a no-config `eidos generate`; for the
+// kill-switch it carries only UsePutAsCreate=false (every other buildIRPreview
+// cfg branch is nil-safe for an otherwise-empty config, so nothing else moves).
+func starterConfigToggle(usePutAsCreate bool) *config.Config {
+	if usePutAsCreate {
+		return nil
+	}
+	v := false
+	return &config.Config{UsePutAsCreate: &v}
+}
+
+func generateStarterConfig(spec []byte, name, providerName string, usePutAsCreate bool) (*config.Config, parser.Version, diagnostics.Diagnostics, error) {
 	var (
 		preview  *ir.ProviderIR
 		version  parser.Version
 		allDiags diagnostics.Diagnostics
 		err      error
 	)
+	toggle := starterConfigToggle(usePutAsCreate)
 	if name == "" {
-		preview, version, allDiags, err = BuildProviderIR(spec, nil)
+		preview, version, allDiags, err = BuildProviderIR(spec, toggle)
 	} else {
-		preview, version, allDiags, err = BuildProviderIRWithName(spec, name, "", nil)
+		preview, version, allDiags, err = BuildProviderIRWithName(spec, name, "", toggle)
 	}
 	if err != nil {
 		return nil, version, allDiags, err
@@ -3365,7 +3467,17 @@ func generateStarterConfig(spec []byte, name, providerName string) (*config.Conf
 	if err != nil {
 		return nil, version, allDiags, fmt.Errorf("failed to generate starter config: %w", err)
 	}
+	// Record the toggle on the returned config so the generated generator.yaml
+	// carries use_put_as_create explicitly (self-documenting default-on) and
+	// round-trips: feeding it back to `eidos generate --config` honors it.
+	cfg.UsePutAsCreate = boolPtr(usePutAsCreate)
 	return cfg, version, allDiags, nil
+}
+
+// boolPtr returns a pointer to b. It mirrors the helper in pkg/generator so the
+// *bool UsePutAsCreate field can be set without a local variable at each call.
+func boolPtr(b bool) *bool {
+	return &b
 }
 
 // diagnosticDetails renders a slice of diagnostics as a semicolon-separated

@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"runtime/debug"
@@ -58,7 +59,7 @@ func GenerateConfigTool() *mcp.Tool {
 			Type: "object",
 			Properties: map[string]*jsonschema.Schema{
 				"spec": {
-					Description: "OpenAPI spec as a JSON/YAML string or parsed object",
+					Description: "OpenAPI spec as inline JSON/YAML content, a parsed object, a local file path, a file:// URL, or an http(s):// URL (https-only; http requires EIDOS_SPEC_ALLOW_HTTP=1)",
 					OneOf: []*jsonschema.Schema{
 						{Type: "string"},
 						{Type: "object"},
@@ -274,7 +275,17 @@ func normalizeSpec(spec any) ([]byte, error) {
 	var specBytes []byte
 	switch v := spec.(type) {
 	case string:
-		specBytes = []byte(v)
+		// A string may be inline spec content OR a reference the CLI also
+		// accepts: a local file path, a file:// URL, or an http(s):// URL. Try
+		// to load it as a reference first; if it is not one, treat it as inline
+		// content so callers that pass the spec body still work.
+		if b, err := loadSpecRef(v); err == nil {
+			specBytes = b
+		} else if errors.Is(err, errNotASourceRef) {
+			specBytes = []byte(v)
+		} else {
+			return nil, err
+		}
 	case []byte:
 		specBytes = v
 	case json.RawMessage:

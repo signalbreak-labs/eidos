@@ -180,6 +180,88 @@ func TestManagedResourceSchema_PractitionerSetID(t *testing.T) {
 	}
 }
 
+// TestManagedResourceSchema_PutAsCreateForcesIdentifierRequired locks in the
+// PUT-as-create schema fix: when Create is a PUT (upsert), the identifier
+// attribute the practitioner must supply in the request URI is forced Required
+// (Computed=false, Optional=false) so the wired Create body substitutes a real
+// value into the path placeholder instead of a null Computed id. Two shapes are
+// covered: the state shape carries an "id" property (hasID), and it does not
+// (the path-parameter-named synthetic identifier). POST-create resources are
+// byte-identical (the gate is Create.Method == PUT).
+func TestManagedResourceSchema_PutAsCreateForcesIdentifierRequired(t *testing.T) {
+	t.Run("state shape has id property", func(t *testing.T) {
+		c := ResourceCRUD{
+			Name:           "alarm",
+			CollectionPath: "/alarms",
+			InstancePath:   "/alarms/{alarmId}",
+			Create: &Operation{
+				Method:        MethodPut,
+				Path:          "/alarms/{alarmId}",
+				RequestSchema: &SchemaSpec{Type: "object", Properties: map[string]SchemaSpec{"name": {Type: "string"}}},
+			},
+			Read: &Operation{
+				Method: MethodGet,
+				Path:   "/alarms/{alarmId}",
+				ResponseSchema: &SchemaSpec{
+					Type:     "object",
+					Required: []string{"id", "name"},
+					Properties: map[string]SchemaSpec{
+						"id":   {Type: "string"},
+						"name": {Type: "string"},
+					},
+				},
+			},
+			Delete: &Operation{Method: MethodDelete, Path: "/alarms/{alarmId}"},
+			ID:     IDInfo{Kind: IDSimple, ParameterNames: []string{"alarmId"}, AttributeName: "alarm_id", ImportFormat: "%s"},
+		}
+		schema, _ := ManagedResourceSchema(c)
+		id, ok := findAttr(schema.Attributes, "id")
+		if !ok {
+			t.Fatalf("no id attribute: %+v", schema.Attributes)
+		}
+		if !id.Required || id.Computed || id.Optional {
+			t.Errorf("PUT-as-create id must be Required only: got Required=%v Computed=%v Optional=%v", id.Required, id.Computed, id.Optional)
+		}
+	})
+
+	t.Run("state shape has no id, synthetic path-param identifier", func(t *testing.T) {
+		c := ResourceCRUD{
+			Name:           "alarm",
+			CollectionPath: "/alarms",
+			InstancePath:   "/alarms/{alarmId}",
+			Create: &Operation{
+				Method:        MethodPut,
+				Path:          "/alarms/{alarmId}",
+				RequestSchema: &SchemaSpec{Type: "object", Properties: map[string]SchemaSpec{"name": {Type: "string"}}},
+			},
+			Read: &Operation{
+				Method: MethodGet,
+				Path:   "/alarms/{alarmId}",
+				ResponseSchema: &SchemaSpec{
+					Type:     "object",
+					Required: []string{"name"},
+					Properties: map[string]SchemaSpec{
+						"name": {Type: "string"},
+					},
+				},
+			},
+			Delete: &Operation{Method: MethodDelete, Path: "/alarms/{alarmId}"},
+			ID:     IDInfo{Kind: IDSimple, ParameterNames: []string{"alarmId"}, AttributeName: "alarm_id", ImportFormat: "%s"},
+		}
+		schema, idAttr := ManagedResourceSchema(c)
+		if idAttr != "alarm_id" {
+			t.Errorf("idAttribute = %q, want \"alarm_id\"", idAttr)
+		}
+		id, ok := findAttr(schema.Attributes, "alarm_id")
+		if !ok {
+			t.Fatalf("no alarm_id attribute: %+v", schema.Attributes)
+		}
+		if !id.Required || id.Computed || id.Optional {
+			t.Errorf("PUT-as-create synthetic id must be Required only: got Required=%v Computed=%v Optional=%v", id.Required, id.Computed, id.Optional)
+		}
+	})
+}
+
 // TestManagedResourceSchema_BodylessResourceNoSyntheticID locks in the §3/#12
 // fix: a resource with no response or request body anywhere returns an empty
 // schema with no identifier, so it stays honestly scaffolded rather than wiring

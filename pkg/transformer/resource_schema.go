@@ -363,8 +363,59 @@ func ManagedResourceSchema(c ResourceCRUD) (ir.ObjectSchemaIR, string) {
 		}
 	}
 
+	// PUT-as-create (upsert): the practitioner must supply the identifier in the
+	// request URI, so the identifier attribute is Required (user-settable). A
+	// POST-create resource's id is server-assigned (Computed), but a PUT-as-create
+	// resource's id comes from the path the practitioner controls; the generated
+	// Create body substitutes the plan's identifier into the path placeholder, so
+	// a Computed id would emit a PUT /pets/ with a null value — a dishonest wired
+	// body. Forcing the identifier Required is what makes the wired body honest.
+	// This runs after the id-Computed logic above so it overrides it, and is gated
+	// on Create.Method == PUT so POST-create resources are byte-identical. The
+	// identifier is the "id" attribute when the state shape carries one (hasID),
+	// else the path-parameter-named attribute (idAttribute) or its synthetic.
+	if c.Create != nil && c.Create.Method == MethodPut {
+		forcePutAsCreateIdentifiers(&attrs, c, hasID, idAttribute)
+	}
+
 	sort.Slice(attrs, func(i, j int) bool { return attrs[i].Name < attrs[j].Name })
 	return ir.ObjectSchemaIR{Attributes: attrs}, resolvedID
+}
+
+// forcePutAsCreateIdentifiers marks every identifier attribute Required for a
+// PUT-as-create (upsert) resource. The practitioner supplies the identifier(s)
+// in the request URI, so each must be user-settable; a Computed identifier would
+// make the wired Create body substitute a null value into the path (a dishonest
+// body). A composite id (multiple path parameters, e.g. /x/{notifType}/{taskId})
+// has one identifier attribute per path parameter and ALL are forced Required —
+// forcing only one would leave the other placeholder null. A simple id forces
+// the single identifier: the "id" attribute when the state shape carries one
+// (hasID), else the path-parameter-named attribute (idAttribute) or its
+// synthetic. Gated on Create.Method == PUT by the caller, so POST-create
+// resources are byte-identical.
+func forcePutAsCreateIdentifiers(attrs *[]ir.AttributeIR, c ResourceCRUD, hasID bool, idAttribute string) {
+	var idNames []string
+	switch {
+	case c.ID.Kind == IDComposite:
+		idNames = make([]string, 0, len(c.ID.ParameterNames))
+		for _, p := range c.ID.ParameterNames {
+			idNames = append(idNames, SanitizeAttributeName(p))
+		}
+	case hasID:
+		idNames = []string{"id"}
+	default:
+		idNames = []string{idAttribute}
+	}
+	for _, idn := range idNames {
+		for i := range *attrs {
+			if (*attrs)[i].Name == idn {
+				(*attrs)[i].Required = true
+				(*attrs)[i].Optional = false
+				(*attrs)[i].Computed = false
+				break
+			}
+		}
+	}
 }
 
 // createFormDataParams returns the create operation's formData parameters

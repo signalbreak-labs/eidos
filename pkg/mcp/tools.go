@@ -74,7 +74,7 @@ func InspectTool() *sdkmcp.Tool {
 		InputSchema: &jsonschema.Schema{
 			Type: "object",
 			Properties: map[string]*jsonschema.Schema{
-				"spec":   {Type: "string", Description: "OpenAPI spec as a JSON/YAML string"},
+				"spec":   {Type: "string", Description: "OpenAPI spec as inline JSON/YAML content, a local file path, a file:// URL, or an http(s):// URL (https-only; http requires EIDOS_SPEC_ALLOW_HTTP=1)"},
 				"config": {Type: "string", Description: "Optional generator.yaml contents"},
 			},
 			Required: []string{"spec"},
@@ -103,7 +103,16 @@ func HandleInspect(ctx context.Context, _ *sdkmcp.CallToolRequest, args InspectA
 		return res, InspectResult{}, nil
 	}
 	resp := validateContext(ctx, specBytes)
-	result := InspectResult{Valid: resp.Valid, Diagnostics: resp.Diagnostics}
+	result := InspectResult{
+		Valid:       resp.Valid,
+		Diagnostics: nonNilDiags(resp.Diagnostics),
+		Resources:   []ResourceSummary{},
+		DataSources: []EntitySummary{},
+		Actions:     []EntitySummary{},
+		Ephemerals:  []EntitySummary{},
+		Lists:       []EntitySummary{},
+		Functions:   []EntitySummary{},
+	}
 	if resp.IRPreview != nil {
 		result.Resources = summarizeResources(resp.IRPreview.Resources)
 		result.DataSources = summarizeDataSources(resp.IRPreview.DataSources)
@@ -146,7 +155,7 @@ func GenerateTool() *sdkmcp.Tool {
 		InputSchema: &jsonschema.Schema{
 			Type: "object",
 			Properties: map[string]*jsonschema.Schema{
-				"spec":   {Type: "string", Description: "OpenAPI spec as a JSON/YAML string"},
+				"spec":   {Type: "string", Description: "OpenAPI spec as inline JSON/YAML content, a local file path, a file:// URL, or an http(s):// URL (https-only; http requires EIDOS_SPEC_ALLOW_HTTP=1)"},
 				"config": {Type: "string", Description: "Optional generator.yaml contents"},
 				"output": {Type: "string", Description: "Optional directory to write the generated provider to"},
 			},
@@ -178,7 +187,13 @@ func HandleGenerate(ctx context.Context, _ *sdkmcp.CallToolRequest, args Generat
 		return res, GenerateResult{}, nil
 	}
 	resp := validateContext(ctx, specBytes)
-	result := GenerateResult{Valid: resp.Valid, Diagnostics: resp.Diagnostics}
+	result := GenerateResult{
+		Valid:       resp.Valid,
+		Diagnostics: nonNilDiags(resp.Diagnostics),
+		Resources:   []ResourceSummary{},
+		DataSources: []EntitySummary{},
+		Actions:     []EntitySummary{},
+	}
 	if resp.IRPreview != nil {
 		result.Resources = summarizeResources(resp.IRPreview.Resources)
 		result.DataSources = summarizeDataSources(resp.IRPreview.DataSources)
@@ -232,7 +247,7 @@ func ValidateSchemasTool() *sdkmcp.Tool {
 		InputSchema: &jsonschema.Schema{
 			Type: "object",
 			Properties: map[string]*jsonschema.Schema{
-				"spec":   {Type: "string", Description: "OpenAPI spec as a JSON/YAML string"},
+				"spec":   {Type: "string", Description: "OpenAPI spec as inline JSON/YAML content, a local file path, a file:// URL, or an http(s):// URL (https-only; http requires EIDOS_SPEC_ALLOW_HTTP=1)"},
 				"config": {Type: "string", Description: "Optional generator.yaml contents"},
 			},
 			Required: []string{"spec"},
@@ -259,7 +274,11 @@ func HandleValidateSchemas(ctx context.Context, _ *sdkmcp.CallToolRequest, args 
 		return res, ValidateSchemasResult{}, nil
 	}
 	resp := validateContext(ctx, specBytes)
-	result := ValidateSchemasResult{Valid: resp.Valid, Diagnostics: resp.Diagnostics}
+	result := ValidateSchemasResult{
+		Valid:       resp.Valid,
+		Diagnostics: nonNilDiags(resp.Diagnostics),
+		Issues:      []SchemaIssue{},
+	}
 	if resp.IRPreview != nil {
 		for _, r := range resp.IRPreview.Resources {
 			result.Issues = append(result.Issues, schemaIssues("resource "+r.Name, r.Schema)...)
@@ -306,7 +325,7 @@ func OverridePreviewTool() *sdkmcp.Tool {
 		InputSchema: &jsonschema.Schema{
 			Type: "object",
 			Properties: map[string]*jsonschema.Schema{
-				"spec":   {Type: "string", Description: "OpenAPI spec as a JSON/YAML string"},
+				"spec":   {Type: "string", Description: "OpenAPI spec as inline JSON/YAML content, a local file path, a file:// URL, or an http(s):// URL (https-only; http requires EIDOS_SPEC_ALLOW_HTTP=1)"},
 				"config": {Type: "string", Description: "generator.yaml contents"},
 			},
 			Required: []string{"spec", "config"},
@@ -339,7 +358,12 @@ func HandleOverridePreview(ctx context.Context, _ *sdkmcp.CallToolRequest, args 
 		return res, OverridePreviewResult{}, nil
 	}
 	resp := validateContext(ctx, merged)
-	result := OverridePreviewResult{Valid: resp.Valid, Diagnostics: resp.Diagnostics}
+	result := OverridePreviewResult{
+		Valid:       resp.Valid,
+		Diagnostics: nonNilDiags(resp.Diagnostics),
+		Resources:   []ResourceSummary{},
+		Overrides:   []OverrideReport{},
+	}
 	if resp.IRPreview != nil {
 		result.Resources = summarizeResources(resp.IRPreview.Resources)
 	}
@@ -500,7 +524,7 @@ func attributeSchemaIssues(entity string, a ir.AttributeIR, ap string, depth int
 // reportOverrides reports which resource_overrides entries matched a generated
 // resource (by operation or schema name).
 func reportOverrides(configYAML string, preview *ir.ProviderIR) []OverrideReport {
-	var reports []OverrideReport
+	reports := make([]OverrideReport, 0)
 	cfg, err := config.LoadBytes([]byte(configYAML))
 	if err != nil {
 		return reports
@@ -544,18 +568,44 @@ func mergeConfigIntoSpec(specBytes []byte, configYAML string) ([]byte, error) {
 // planned file entries.
 func writeProvider(dir string, pir *ir.ProviderIR) ([]generator.FileEntry, error) {
 	return generator.Run(pir, generator.Options{
-		Mode:      generator.ModeWrite,
-		OutputDir: dir,
-		Force:     true,
+		Mode:           generator.ModeWrite,
+		OutputDir:      dir,
+		Force:          true,
+		CollectOptions: generator.CollectOptions{IncludeBuild: true},
 	})
 }
 
-// errorToolResult returns an MCP result carrying an error diagnostic.
+// nonNilDiags returns d if non-nil, else a non-nil empty slice, so tool outputs
+// never serialize a diagnostics array as JSON null. The MCP SDK validates tool
+// output against the declared OutputSchema, which requires array fields to be
+// arrays (not null); a nil Go slice marshals to null and is rejected.
+func nonNilDiags(d []api.DiagnosticJSON) []api.DiagnosticJSON {
+	if d == nil {
+		return []api.DiagnosticJSON{}
+	}
+	return d
+}
+
+// errorToolResult returns an MCP result carrying an error diagnostic. It emits
+// every array field any eidos/* tool's OutputSchema requires as an empty array
+// (plus the error in diagnostics), so the error path validates against every
+// tool's output schema — not just the success path. Extra fields not declared
+// on a given tool's schema are permitted (the schemas do not forbid additional
+// properties).
 func errorToolResult(err error) *sdkmcp.CallToolResult {
 	text := err.Error()
 	if data, marshalErr := json.Marshal(map[string]any{
-		"valid":       false,
-		"diagnostics": []api.DiagnosticJSON{{Severity: "error", Summary: err.Error()}},
+		"valid":               false,
+		"diagnostics":         []api.DiagnosticJSON{{Severity: "error", Summary: err.Error()}},
+		"resources":           []any{},
+		"data_sources":        []any{},
+		"actions":             []any{},
+		"ephemeral_resources": []any{},
+		"list_resources":      []any{},
+		"functions":           []any{},
+		"issues":              []any{},
+		"overrides":           []any{},
+		"file_count":          0,
 	}); marshalErr == nil {
 		text = string(data)
 	}

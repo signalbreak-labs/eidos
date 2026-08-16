@@ -607,3 +607,49 @@ func TestDefaultGoVersionMatchesRuntime(t *testing.T) {
 		t.Errorf("DefaultGoVersion = %q, want %q (from runtime %s); update DefaultGoVersion or the CI toolchain", DefaultGoVersion, want, ver)
 	}
 }
+
+func TestDynamicReleaseWorkflow_Defaults(t *testing.T) {
+	h := Harness{OutputDir: t.TempDir()}
+	if err := h.Generate([]File{DynamicReleaseWorkflow("", "")}); err != nil {
+		t.Fatalf("Generate() error = %v", err)
+	}
+	content := readFile(t, h.OutputDir, ".github/workflows/regenerate-and-release.yml")
+	for _, want := range []string{
+		"name: Regenerate and Release",
+		"workflow_dispatch:",
+		"inputs:",
+		"version:",
+		"container:",
+		"image: " + defaultDynamicReleaseImage,
+		"eidos generate --spec " + defaultDynamicReleaseSpecPath + " --skip-build --output .",
+		"git push origin",
+		"goreleaser release --clean",
+		"GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}",
+	} {
+		if !strings.Contains(content, want) {
+			t.Errorf("dynamic release workflow missing %q\ncontent:\n%s", want, content)
+		}
+	}
+	// Non-overlapping trigger: must not use tag-push (that belongs to release.yml).
+	if strings.Contains(content, "tags:") {
+		t.Errorf("dynamic release workflow must not be tag-triggered\ncontent:\n%s", content)
+	}
+	var parsed map[string]interface{}
+	if err := yaml.Unmarshal([]byte(content), &parsed); err != nil {
+		t.Fatalf("yaml.Unmarshal(regenerate-and-release.yml): %v\ncontent:\n%s", err, content)
+	}
+}
+
+func TestDynamicReleaseWorkflow_Overrides(t *testing.T) {
+	h := Harness{OutputDir: t.TempDir()}
+	if err := h.Generate([]File{DynamicReleaseWorkflow("ghcr.io/example/eidos:v0.4.2", "openapi.yaml")}); err != nil {
+		t.Fatalf("Generate() error = %v", err)
+	}
+	content := readFile(t, h.OutputDir, ".github/workflows/regenerate-and-release.yml")
+	if !strings.Contains(content, "image: ghcr.io/example/eidos:v0.4.2") {
+		t.Errorf("expected overridden image, got:\n%s", content)
+	}
+	if !strings.Contains(content, "eidos generate --spec openapi.yaml --skip-build") {
+		t.Errorf("expected overridden spec path, got:\n%s", content)
+	}
+}

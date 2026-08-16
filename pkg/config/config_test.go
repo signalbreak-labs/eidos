@@ -165,6 +165,7 @@ polymorphism:
           datasource_name: dog
 
 generate_terraform_tests: true
+use_put_as_create: false
 `
 	cfg, err := LoadBytes([]byte(yamlInput))
 	if err != nil {
@@ -258,6 +259,9 @@ generate_terraform_tests: true
 	}
 	if cfg.GenerateTerraformTests == nil || !*cfg.GenerateTerraformTests {
 		t.Error("generate_terraform_tests should be true")
+	}
+	if cfg.UsePutAsCreate == nil || *cfg.UsePutAsCreate {
+		t.Error("use_put_as_create should parse to a non-nil false (kill-switch)")
 	}
 }
 
@@ -1400,6 +1404,7 @@ generation:
           - owner*
   skip_tests: true
   skip_docs: true
+  skip_build: true
 `
 	cfg, err := LoadBytes([]byte(yamlInput))
 	if err != nil {
@@ -1423,6 +1428,38 @@ generation:
 	}
 	if !cfg.Generation.SkipTests || !cfg.Generation.SkipDocs {
 		t.Errorf("expected skip_tests and skip_docs to be true")
+	}
+	if !cfg.Generation.SkipBuild {
+		t.Errorf("expected skip_build to be true")
+	}
+}
+
+func TestLoadGenerationDynamicRelease(t *testing.T) {
+	const yamlInput = `
+provider:
+  name: test-api
+  version: 0.1.0
+generation:
+  dynamic_release:
+    enabled: true
+    image: ghcr.io/example/eidos:v0.4.2
+    spec_path: openapi.yaml
+`
+	cfg, err := LoadBytes([]byte(yamlInput))
+	if err != nil {
+		t.Fatalf("LoadBytes failed: %v", err)
+	}
+	if cfg.Generation.DynamicRelease == nil {
+		t.Fatal("expected dynamic_release to be set")
+	}
+	if !cfg.Generation.DynamicRelease.Enabled {
+		t.Errorf("expected dynamic_release.enabled to be true")
+	}
+	if cfg.Generation.DynamicRelease.Image != "ghcr.io/example/eidos:v0.4.2" {
+		t.Errorf("dynamic_release.image = %q", cfg.Generation.DynamicRelease.Image)
+	}
+	if cfg.Generation.DynamicRelease.SpecPath != "openapi.yaml" {
+		t.Errorf("dynamic_release.spec_path = %q", cfg.Generation.DynamicRelease.SpecPath)
 	}
 }
 
@@ -1611,4 +1648,94 @@ func TestDurationMarshalUnmarshal(t *testing.T) {
 	if parsed.Duration() != 5*time.Minute {
 		t.Errorf("unmarshaled duration got %v", parsed.Duration())
 	}
+}
+
+// TestLoad_UsePutAsCreateTriState verifies the use_put_as_create field's tri-state
+// semantics: absent (nil) means default-on, true means on, and false is the
+// kill-switch. The nil state must round-trip as absent (omitempty keeps the
+// emitted config minimal), while an explicit true/false survives a marshal +
+// reload round-trip.
+func TestLoad_UsePutAsCreateTriState(t *testing.T) {
+	t.Run("absent defaults to nil", func(t *testing.T) {
+		yamlInput := `
+provider:
+  name: mycloud
+  version: "0.1.0"
+`
+		cfg, err := LoadBytes([]byte(yamlInput))
+		if err != nil {
+			t.Fatalf("LoadBytes failed: %v", err)
+		}
+		if cfg.UsePutAsCreate != nil {
+			t.Errorf("use_put_as_create should be nil when absent, got %v", *cfg.UsePutAsCreate)
+		}
+		// omitempty: a nil *bool must not be emitted on marshal.
+		data, err := yaml.Marshal(cfg)
+		if err != nil {
+			t.Fatalf("Marshal failed: %v", err)
+		}
+		if strings.Contains(string(data), "use_put_as_create") {
+			t.Errorf("nil use_put_as_create should be omitted on marshal, got:\n%s", data)
+		}
+	})
+
+	t.Run("explicit true round-trips", func(t *testing.T) {
+		yamlInput := `
+provider:
+  name: mycloud
+  version: "0.1.0"
+use_put_as_create: true
+`
+		cfg, err := LoadBytes([]byte(yamlInput))
+		if err != nil {
+			t.Fatalf("LoadBytes failed: %v", err)
+		}
+		if cfg.UsePutAsCreate == nil || !*cfg.UsePutAsCreate {
+			t.Fatalf("use_put_as_create should parse to non-nil true, got %v", cfg.UsePutAsCreate)
+		}
+		data, err := yaml.Marshal(cfg)
+		if err != nil {
+			t.Fatalf("Marshal failed: %v", err)
+		}
+		if !strings.Contains(string(data), "use_put_as_create: true") {
+			t.Errorf("explicit true should round-trip, got:\n%s", data)
+		}
+		got, err := LoadBytes(data)
+		if err != nil {
+			t.Fatalf("round-trip LoadBytes failed: %v", err)
+		}
+		if got.UsePutAsCreate == nil || !*got.UsePutAsCreate {
+			t.Errorf("round-trip use_put_as_create should stay true, got %v", got.UsePutAsCreate)
+		}
+	})
+
+	t.Run("explicit false round-trips as kill-switch", func(t *testing.T) {
+		yamlInput := `
+provider:
+  name: mycloud
+  version: "0.1.0"
+use_put_as_create: false
+`
+		cfg, err := LoadBytes([]byte(yamlInput))
+		if err != nil {
+			t.Fatalf("LoadBytes failed: %v", err)
+		}
+		if cfg.UsePutAsCreate == nil || *cfg.UsePutAsCreate {
+			t.Fatalf("use_put_as_create should parse to non-nil false, got %v", cfg.UsePutAsCreate)
+		}
+		data, err := yaml.Marshal(cfg)
+		if err != nil {
+			t.Fatalf("Marshal failed: %v", err)
+		}
+		if !strings.Contains(string(data), "use_put_as_create: false") {
+			t.Errorf("explicit false should round-trip, got:\n%s", data)
+		}
+		got, err := LoadBytes(data)
+		if err != nil {
+			t.Fatalf("round-trip LoadBytes failed: %v", err)
+		}
+		if got.UsePutAsCreate == nil || *got.UsePutAsCreate {
+			t.Errorf("round-trip use_put_as_create should stay false, got %v", got.UsePutAsCreate)
+		}
+	})
 }

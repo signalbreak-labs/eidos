@@ -1,0 +1,73 @@
+openapi: 3.0.1
+info:
+  title: Upsert API
+  version: 1.0.0
+  description: A reference spec exercising PUT-as-create (upsert) inference.
+paths:
+  /alarms/{alarmId}:
+    get:
+      operationId: getAlarm
+      parameters:
+        - name: alarmId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: The alarm.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Alarm'
+    put:
+      operationId: upsertAlarm
+      parameters:
+        - name: alarmId
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AlarmInput'
+      responses:
+        '200':
+          description: The upserted alarm.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Alarm'
+    delete:
+      operationId: deleteAlarm
+      parameters:
+        - name: alarmId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '204':
+          description: Deleted.
+components:
+  schemas:
+    Alarm:
+      type: object
+      required:
+        - id
+        - name
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+    AlarmInput:
+      type: object
+      required:
+        - name
+      properties:
+        name:
+          type: string

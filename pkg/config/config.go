@@ -49,8 +49,18 @@ type Config struct {
 	Pagination             *PaginationConfig      `yaml:"pagination,omitempty" json:"pagination,omitempty"`
 	Polymorphism           *PolymorphismConfig    `yaml:"polymorphism,omitempty" json:"polymorphism,omitempty"`
 	GenerateTerraformTests *bool                  `yaml:"generate_terraform_tests,omitempty" json:"generate_terraform_tests,omitempty"`
-	Generation             GenerationConfig       `yaml:"generation,omitempty" json:"generation,omitempty"`
-	Spec                   SpecConfig             `yaml:"spec,omitempty" json:"spec,omitempty"`
+	// UsePutAsCreate is the kill-switch for PUT-as-create inference. When nil
+	// (the field is absent, the auto-generator's natural state) or true, a CRUD
+	// group with no collection POST but an instance PUT+GET+DELETE uses the PUT
+	// as the Create (upsert) — default-on. When false, PUT-as-create is disabled
+	// globally and those groups revert to the legacy scaffold behavior. It is a
+	// *bool so the absent field is distinguishable from an explicit false (the
+	// zero value of a plain bool), which is what makes "unset = on" legible. The
+	// per-resource escape hatch is skip: true, not generate_resource: false
+	// (GenerateResource is opt-in only and silently ignores false).
+	UsePutAsCreate *bool            `yaml:"use_put_as_create,omitempty" json:"use_put_as_create,omitempty"`
+	Generation     GenerationConfig `yaml:"generation,omitempty" json:"generation,omitempty"`
+	Spec           SpecConfig       `yaml:"spec,omitempty" json:"spec,omitempty"`
 
 	// Warnings holds non-fatal validation messages produced by Validate. Warnings
 	// are not serialized back to generator.yaml; they are runtime metadata for
@@ -450,6 +460,28 @@ type GenerationConfig struct {
 	Functions          ResourceGenerationConfig `yaml:"functions,omitempty" json:"functions,omitempty"`
 	SkipTests          bool                     `yaml:"skip_tests,omitempty" json:"skip_tests,omitempty"`
 	SkipDocs           bool                     `yaml:"skip_docs,omitempty" json:"skip_docs,omitempty"`
+	SkipBuild          bool                     `yaml:"skip_build,omitempty" json:"skip_build,omitempty"`
+	DynamicRelease     *DynamicReleaseConfig    `yaml:"dynamic_release,omitempty" json:"dynamic_release,omitempty"`
+}
+
+// DynamicReleaseConfig opts into generating a second GitHub Actions workflow
+// (`.github/workflows/regenerate-and-release.yml`) that regenerates the
+// provider from its OpenAPI spec and publishes a release in one
+// manually-dispatched run, using the eidos CI image. It complements the static
+// generated release.yml (which builds committed code on a v* tag push); the two
+// coexist with non-overlapping triggers (manual dispatch vs. tag push). The
+// regenerated code is committed to a release-specific branch so the default
+// branch keeps only the spec and the committed build scaffolding.
+type DynamicReleaseConfig struct {
+	// Enabled turns on generation of the regenerate-and-release workflow.
+	Enabled bool `yaml:"enabled" json:"enabled"`
+	// Image is the eidos CI image reference the workflow runs in. Defaults to
+	// ghcr.io/signalbreak-labs/eidos:latest when empty.
+	Image string `yaml:"image,omitempty" json:"image,omitempty"`
+	// SpecPath is the path to the OpenAPI spec, relative to the provider repo
+	// root, that the workflow regenerates from. Defaults to spec.yaml when
+	// empty.
+	SpecPath string `yaml:"spec_path,omitempty" json:"spec_path,omitempty"`
 }
 
 // ResourceGenerationConfig configures filtering and package splitting for a

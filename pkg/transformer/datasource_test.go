@@ -571,7 +571,7 @@ func TestInferDataSourcesPaginationFromResourceCRUD(t *testing.T) {
 		},
 	}
 
-	resources := InferResourceCRUD(pathOps)
+	resources := InferResourceCRUD(pathOps, false)
 	sources := InferDataSources(resources)
 
 	if len(sources) != 2 {
