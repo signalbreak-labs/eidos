@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log"
 	"runtime/debug"
+	"strings"
 	"sync"
 
 	"github.com/google/jsonschema-go/jsonschema"
@@ -305,6 +306,25 @@ func normalizeSpec(spec any) ([]byte, error) {
 		return nil, fmt.Errorf("spec exceeds maximum size of %d bytes", maxSpecSize)
 	}
 	return specBytes, nil
+}
+
+// normalizeConfig resolves a generator.yaml input the same way normalizeSpec
+// resolves a spec: a string may be inline YAML/JSON content, a local file path,
+// or a file:// URL. It tries to load the string as a file reference first; if it
+// is not one, it returns the string unchanged so callers that pass the config
+// body inline keep working. An empty config is returned empty (a no-op for
+// mergeConfigIntoSpec). This lets an LLM pass `config` by path or file:// URL
+// instead of only inline contents (M-76).
+func normalizeConfig(configYAML string) (string, error) {
+	if strings.TrimSpace(configYAML) == "" {
+		return "", nil
+	}
+	if b, err := loadConfigRef(configYAML); err == nil {
+		return string(b), nil
+	} else if !errors.Is(err, errNotASourceRef) {
+		return "", err
+	}
+	return configYAML, nil
 }
 
 // applyOperationFilters copies user-supplied operation filter lists into the

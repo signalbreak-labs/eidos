@@ -84,6 +84,57 @@ func readSpecFile(path string) ([]byte, error) {
 	return data, nil
 }
 
+// loadConfigRef loads generator.yaml bytes from a local file path or a file://
+// URL. It returns errNotASourceRef when the string is not a file reference so
+// the caller can fall back to inline-content handling. Unlike spec references,
+// remote http(s):// config URLs are not resolved: a generator.yaml is small and
+// local, and accepting remote URLs would widen the SSRF surface for no real
+// benefit — pass inline content or a local path instead.
+//
+// This mirrors loadSpecRef so an LLM can hand the `config` argument to the MCP
+// tools the same ways it hands the `spec` argument (a local file path or a
+// file:// URL), not just inline contents. Without it a path/URL passed as
+// `config` is treated as inline YAML, fails to parse, and the override is
+// silently dropped — which is why inspect/generate reported `resources: []`
+// while a config-driven CLI run produced the resource (M-76).
+func loadConfigRef(ref string) ([]byte, error) {
+	ref = strings.TrimSpace(ref)
+	if ref == "" {
+		return nil, errNotASourceRef
+	}
+
+	if u, err := url.Parse(ref); err == nil && strings.ToLower(u.Scheme) == "file" {
+		return readConfigFile(fileURLPath(u))
+	}
+
+	// Absolute or explicitly relative path references.
+	if strings.HasPrefix(ref, "/") || strings.HasPrefix(ref, "./") ||
+		strings.HasPrefix(ref, "../") || strings.HasPrefix(ref, "~/") {
+		return readConfigFile(expandHome(ref))
+	}
+
+	// A bare relative filename that resolves to an existing file (e.g.
+	// "generator.yaml") is treated as a config file reference. A string that is
+	// not an existing file falls through to inline-content handling, so a
+	// malformed inline config is reported as a config parse error rather than a
+	// missing file.
+	if info, err := os.Stat(ref); err == nil && !info.IsDir() {
+		return readConfigFile(ref)
+	}
+
+	return nil, errNotASourceRef
+}
+
+// readConfigFile reads a local generator.yaml file, expanding a leading ~ to
+// the user's home directory.
+func readConfigFile(path string) ([]byte, error) {
+	data, err := os.ReadFile(filepath.Clean(path))
+	if err != nil {
+		return nil, fmt.Errorf("failed to read config file %q: %w", path, err)
+	}
+	return data, nil
+}
+
 // expandHome replaces a leading ~/ with the user's home directory.
 func expandHome(p string) string {
 	if strings.HasPrefix(p, "~/") {

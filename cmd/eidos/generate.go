@@ -103,7 +103,7 @@ Terraform provider. Use --dry-run to preview what would be generated.`,
 	cmd.Flags().BoolVar(&flags.skipBuild, "skip-build", false,
 		"Skip the build/CI/release files (GNUmakefile, .goreleaser.yml, .github/workflows/release.yml, terraform-registry-manifest.json). Mirrors generation.skip_build.")
 	cmd.Flags().BoolVar(&flags.onlyBuild, "only-build", false,
-		"Generate only the build/CI/release files (GNUmakefile, .goreleaser.yml, .github/workflows/release.yml, terraform-registry-manifest.json) and nothing else. Mutually exclusive with --skip-build.")
+		"Generate only the build/CI/release files (GNUmakefile, .goreleaser.yml, .github/workflows/release.yml, terraform-registry-manifest.json) and nothing else. --dynamic-release additionally adds .github/workflows/regenerate-and-release.yml. Mutually exclusive with --skip-build.")
 	cmd.Flags().BoolVar(&flags.dynamicRelease, "dynamic-release", false,
 		"Also generate .github/workflows/regenerate-and-release.yml: a workflow that regenerates the provider from its spec and publishes a release using the eidos CI image. Mirrors generation.dynamic_release.enabled.")
 	flags.remote.register(cmd)
@@ -254,17 +254,36 @@ func collectOptionsFor(cfg *config.Config, flags *generateFlags) generator.Colle
 	if flags.skipBuild {
 		opts.IncludeBuild = false
 	}
-	if flags.onlyBuild {
-		return generator.CollectOptions{OnlyBuild: true}
-	}
 	// Dynamic release is opt-in via --dynamic-release or
-	// generation.dynamic_release.enabled. The image and spec_path come from the
-	// config block; the emitter applies its own defaults when they are empty.
+	// generation.dynamic_release.enabled. It applies to both full and
+	// --only-build runs: the regenerate-and-release workflow is part of the
+	// build/CI scaffolding set, so --only-build --dynamic-release emits it
+	// alongside the four static scaffolding files instead of silently dropping
+	// the flag (M-78). The image and spec_path come from the config block; the
+	// emitter applies its own defaults when they are empty.
 	if flags.dynamicRelease || (cfg != nil && cfg.Generation.DynamicRelease != nil && cfg.Generation.DynamicRelease.Enabled) {
 		opts.IncludeDynamicRelease = true
 		if cfg != nil && cfg.Generation.DynamicRelease != nil {
 			opts.DynamicReleaseImage = cfg.Generation.DynamicRelease.Image
 			opts.DynamicReleaseSpecPath = cfg.Generation.DynamicRelease.SpecPath
+		}
+	}
+	// When dynamic_release.spec_path is unset, fall back to the top-level
+	// spec.path so a remote spec URL configured there drives the regeneration
+	// workflow instead of the hardcoded "spec.yaml" default (which would not
+	// exist in the repo and would make the manual workflow fail at runtime).
+	// The emitter still applies its own default only when both are empty (M-79).
+	if opts.IncludeDynamicRelease && strings.TrimSpace(opts.DynamicReleaseSpecPath) == "" && cfg != nil {
+		opts.DynamicReleaseSpecPath = cfg.Spec.Path
+	}
+	if flags.onlyBuild {
+		// OnlyBuild emits exactly the build/CI/release scaffolding and nothing
+		// else, but still honors an opted-in dynamic release workflow.
+		return generator.CollectOptions{
+			OnlyBuild:              true,
+			IncludeDynamicRelease:  opts.IncludeDynamicRelease,
+			DynamicReleaseImage:    opts.DynamicReleaseImage,
+			DynamicReleaseSpecPath: opts.DynamicReleaseSpecPath,
 		}
 	}
 	// sign_release is the opt-out for default-on GPG signing. Thread the *bool

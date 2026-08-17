@@ -929,6 +929,67 @@ generation:
 	}
 }
 
+// TestGenerateCommand_OnlyBuildWithDynamicReleaseEmitsWorkflow verifies that
+// --only-build --dynamic-release emits the regenerate-and-release workflow
+// alongside the four static scaffolding files, instead of silently dropping
+// --dynamic-release (regression guard for M-78).
+func TestGenerateCommand_OnlyBuildWithDynamicReleaseEmitsWorkflow(t *testing.T) {
+	chdirWithSpec(t)
+	set := dryRunJSON(t, "--only-build", "--dynamic-release")
+	for _, p := range buildScaffoldingFiles {
+		if _, ok := set[p]; !ok {
+			t.Errorf("--only-build --dynamic-release should still emit %q, missing from: %v", p, set)
+		}
+	}
+	if _, ok := set[dynamicReleaseWorkflowPath]; !ok {
+		t.Errorf("--only-build --dynamic-release should emit %q, missing from: %v", dynamicReleaseWorkflowPath, set)
+	}
+	// Nothing else leaks through: only the scaffolding + the dynamic workflow.
+	if len(set) != len(buildScaffoldingFiles)+1 {
+		t.Errorf("--only-build --dynamic-release should emit exactly %d files, got %d: %v",
+			len(buildScaffoldingFiles)+1, len(set), set)
+	}
+}
+
+// TestGenerateCommand_DynamicReleaseFallsBackToSpecPath verifies that when
+// generation.dynamic_release.spec_path is unset, the regenerate-and-release
+// workflow uses the top-level spec.path instead of the hardcoded "spec.yaml"
+// default, so a configured (e.g. remote) spec URL drives the regeneration
+// (regression guard for M-79).
+func TestGenerateCommand_DynamicReleaseFallsBackToSpecPath(t *testing.T) {
+	tmp := t.TempDir()
+	spec := writeMinimalSpec(t, tmp)
+	const cfgYaml = `provider:
+  name: petapi
+  version: "0.1.0"
+spec:
+  path: my-spec.yaml
+  format: openapi3
+generation:
+  dynamic_release:
+    enabled: true
+`
+	configPath := filepath.Join(tmp, "generator.yaml")
+	if err := os.WriteFile(configPath, []byte(cfgYaml), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	outDir := filepath.Join(tmp, "out")
+	cmd, out := newTestCommand("generate", "--spec", spec, "--config", configPath, "--output", outDir, "--force")
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("generate failed: %v\noutput:\n%s", err, out.String())
+	}
+	wf, err := os.ReadFile(filepath.Join(outDir, dynamicReleaseWorkflowPath))
+	if err != nil {
+		t.Fatalf("read workflow: %v", err)
+	}
+	if !strings.Contains(string(wf), "--spec my-spec.yaml") {
+		t.Errorf("workflow should use spec.path fallback 'my-spec.yaml', got:\n%s", string(wf))
+	}
+	if strings.Contains(string(wf), "--spec spec.yaml") {
+		t.Errorf("workflow should not fall back to the hardcoded 'spec.yaml' default when spec.path is set, got:\n%s", string(wf))
+	}
+}
+
 // TestGenerateCommand_DoesNotClobberInputConfig verifies that when --output is
 // the same directory as the input --config, the generator skips emitting its
 // round-trip canonical generator.yaml so the user's hand-written source-of-truth

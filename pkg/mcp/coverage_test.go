@@ -1,7 +1,9 @@
 package mcp
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -10,6 +12,7 @@ import (
 
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"github.com/signalbreak-labs/eidos/pkg/generator"
 	"github.com/signalbreak-labs/eidos/pkg/ir"
 )
 
@@ -90,6 +93,60 @@ func TestHandleGenerate_InvalidSpec(t *testing.T) {
 	}
 	if out.FileCount != 0 {
 		t.Errorf("invalid spec must not write files, got file_count=%d", out.FileCount)
+	}
+}
+
+// TestHandleGenerate_DryRunStaleFilesNeverNil verifies that a dry-run with an
+// output dir (the success path) leaves StaleFiles as a non-nil slice so it
+// serializes as [] rather than null. A null stale_files is rejected by the SDK's
+// structured-output validation, which made a successful dry-run return an MCP
+// error (M-80).
+func TestHandleGenerate_DryRunStaleFilesNeverNil(t *testing.T) {
+	outDir := t.TempDir()
+	_, out, err := HandleGenerate(context.Background(), nil, GenerateArgs{Spec: petStoreSpec, Output: outDir, DryRun: true})
+	if err != nil {
+		t.Fatalf("HandleGenerate error: %v", err)
+	}
+	if !out.Valid {
+		t.Fatalf("expected valid result, got diagnostics: %+v", out.Diagnostics)
+	}
+	if out.StaleFiles == nil {
+		t.Fatalf("StaleFiles must be non-nil so it serializes as [] not null (M-80)")
+	}
+	b, err := json.Marshal(out)
+	if err != nil {
+		t.Fatalf("marshal result: %v", err)
+	}
+	if bytes.Contains(b, []byte(`"stale_files":null`)) {
+		t.Errorf("stale_files serialized as null (M-80): %s", b)
+	}
+}
+
+// TestHandleGenerate_EmitsDocsAndCoverageTests verifies MCP generate emits the
+// same complete provider the CLI does (docs, Go coverage tests) rather than a
+// bare build-only set, and that it does NOT write a canonical generator.yaml
+// into the output dir (clobber safety; the MCP caller owns the config) (M-81).
+func TestHandleGenerate_EmitsDocsAndCoverageTests(t *testing.T) {
+	outDir := t.TempDir()
+	_, out, err := HandleGenerate(context.Background(), nil, GenerateArgs{Spec: petStoreSpec, Output: outDir})
+	if err != nil {
+		t.Fatalf("HandleGenerate error: %v", err)
+	}
+	if !out.Valid {
+		t.Fatalf("expected valid result, got diagnostics: %+v", out.Diagnostics)
+	}
+	if _, err := os.Stat(filepath.Join(outDir, "docs", "index.md")); err != nil {
+		t.Errorf("MCP generate should emit docs/index.md (M-81): %v", err)
+	}
+	matches, err := filepath.Glob(filepath.Join(outDir, "internal", "provider", "*_test.go"))
+	if err != nil {
+		t.Fatalf("glob test files: %v", err)
+	}
+	if len(matches) == 0 {
+		t.Errorf("MCP generate should emit Go coverage tests under internal/provider (M-81)")
+	}
+	if _, err := os.Stat(filepath.Join(outDir, "generator.yaml")); err == nil {
+		t.Errorf("MCP generate should not write a canonical generator.yaml into the output dir (M-81)")
 	}
 }
 
@@ -252,7 +309,7 @@ func TestWriteProvider_WritesFiles(t *testing.T) {
 			},
 		}},
 	}
-	entries, err := writeProvider(t.TempDir(), pir)
+	entries, err := writeProvider(t.TempDir(), pir, generator.DefaultCollectOptions())
 	if err != nil {
 		t.Fatalf("writeProvider error: %v", err)
 	}

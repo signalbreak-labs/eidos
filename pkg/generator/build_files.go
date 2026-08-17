@@ -632,10 +632,16 @@ func FilesForProviderIR(provider *ir.ProviderIR, cfg BuildConfig, opts CollectOp
 	}
 
 	// OnlyBuild short-circuits to exactly the build/CI/release scaffolding,
-	// skipping the always-on core files so write mode emits the same four
-	// files record mode lists.
+	// skipping the always-on core files so write mode emits the same files
+	// record mode lists. An opted-in dynamic release workflow is still emitted
+	// so --only-build --dynamic-release produces the regenerate-and-release
+	// workflow alongside the static scaffolding (M-78).
 	if opts.OnlyBuild {
-		return releaseFiles(cfg), nil
+		files := releaseFiles(cfg)
+		if opts.IncludeDynamicRelease {
+			files = append(files, DynamicReleaseWorkflow(opts.DynamicReleaseImage, opts.DynamicReleaseSpecPath, cfg.SignRelease))
+		}
+		return files, nil
 	}
 
 	files := make([]File, 0)
