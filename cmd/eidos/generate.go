@@ -196,6 +196,24 @@ func runGenerate(cmd *cobra.Command, flags *generateFlags) error {
 
 	collectOpts := collectOptionsFor(cfg, flags)
 
+	// The generator re-emits a canonical generator.yaml from the IR (round-trip
+	// reproducibility). When --output is the same directory as the input --config,
+	// that emitted file would clobber the user's hand-written source-of-truth
+	// config. Detect the collision and skip the emitted config, warning so the
+	// user knows the canonical config was withheld rather than silently dropped
+	// (M-74). The non-collision case still writes the canonical config into the
+	// output directory.
+	if collides, err := configOutputCollidesWithInput(flags.config, flags.output); err != nil {
+		return err
+	} else if collides {
+		collectOpts.IncludeConfig = false
+		//nolint:errcheck // best-effort warning to stderr; I/O failure is not actionable here.
+		fmt.Fprintf(cmd.ErrOrStderr(),
+			"warning: skipping generated generator.yaml because --output would overwrite the input --config %q;"+
+				" the round-trip canonical config is not written. Use a separate --output directory to retain it.\n",
+			flags.config)
+	}
+
 	files, err := generator.Run(provider, generator.Options{
 		Mode:           mode,
 		OutputDir:      flags.output,
@@ -256,6 +274,32 @@ func collectOptionsFor(cfg *config.Config, flags *generateFlags) generator.Colle
 		opts.SignRelease = cfg.SignRelease
 	}
 	return opts
+}
+
+// configOutputCollidesWithInput reports whether the generator-emitted
+// generator.yaml (written to <outputDir>/generator.yaml) would overwrite the
+// user's input --config file. The emitted config is a round-trip canonical
+// re-serialization of the IR; when it lands on the input path it clobbers the
+// user's hand-written source-of-truth config (M-74).
+//
+// Returns false when either path is empty (no input config, or no write target
+// such as a dry-run without --output), so those paths keep emitting/listing the
+// canonical config. Paths are compared by their cleaned absolute form so
+// relative paths, ".", and trailing-slash variants all resolve consistently.
+func configOutputCollidesWithInput(configPath, outputDir string) (bool, error) {
+	if configPath == "" || outputDir == "" {
+		return false, nil
+	}
+	absConfig, err := filepath.Abs(configPath)
+	if err != nil {
+		return false, fmt.Errorf("failed to resolve config path %q: %w", configPath, err)
+	}
+	absOutput, err := filepath.Abs(outputDir)
+	if err != nil {
+		return false, fmt.Errorf("failed to resolve output directory %q: %w", outputDir, err)
+	}
+	emitted := filepath.Clean(filepath.Join(absOutput, "generator.yaml"))
+	return filepath.Clean(absConfig) == emitted, nil
 }
 
 // resolveGenerateSpec resolves the spec source for a generation run. --spec is

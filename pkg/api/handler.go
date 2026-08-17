@@ -383,6 +383,30 @@ func convertForVersion(root parser.Node, version parser.Version) (*parser.Spec, 
 	}
 }
 
+// ParseSpec parses raw OpenAPI spec bytes into a *parser.Spec without applying
+// a generator.yaml or building the grouped IR preview. It runs the same
+// normalize/detect/convert pipeline as validateContext, but stops short of
+// config extraction, override application, and IR grouping so callers that need
+// the raw operation/schema surface (eidos/lookup, eidos/suggest-resources) can
+// run transformer.OperationsFromSpecWithDiagnostics themselves.
+//
+// displayName attributes parse diagnostics to the caller's spec source (a path
+// or URL) so errors point at the real document. contentType is empty to let
+// loadRequestBody auto-detect JSON vs YAML by the first byte, matching the
+// no-content-type MCP path.
+func ParseSpec(specBytes []byte, displayName string) (*parser.Spec, diagnostics.Diagnostics, error) {
+	root, err := loadRequestBodyWithName(specBytes, "", displayName)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to parse spec: %w", err)
+	}
+	version, versionDiags := parser.DetectVersion(root)
+	spec, convertDiags, err := convertForVersion(root, version)
+	if err != nil {
+		return nil, versionDiags, err
+	}
+	return spec, append(versionDiags, convertDiags...), nil
+}
+
 func toDiagnosticJSON(ds diagnostics.Diagnostics) []DiagnosticJSON {
 	out := make([]DiagnosticJSON, 0, len(ds))
 	for _, d := range ds {
@@ -828,17 +852,8 @@ func applyConfigOverrides(preview *ir.ProviderIR, cfg *config.Config, providerNa
 			applyActionOverrideExtras(&preview.Actions[idx], ao)
 			continue
 		}
-		if path, method, ok := actionOverrideDoubleClaimed(ao, pathOps, consumed); ok {
-			*diags = append(*diags, diagnostics.Diagnostic{
-				Severity: diagnostics.Warning,
-				Summary:  "Action override references an operation already claimed by a resource",
-				Detail: fmt.Sprintf(
-					"Action override %q targets %s %s, which a resource already consumes. The operation "+
-						"can be claimed by exactly one construct, so the action is skipped. Remove the "+
-						"operation from action_overrides or from the resource's create/read/update/delete "+
-						"operations so the claim is unambiguous.",
-					ao.Operation, strings.ToUpper(method), path),
-			})
+		if path, method, ok := overrideOperationDoubleClaimed(ao.Operation, pathOps, consumed); ok {
+			*diags = append(*diags, doubleClaimedDiagnostic("Action", ao.Operation, path, method))
 			continue
 		}
 		preview.Actions = append(preview.Actions, actionFromOverride(ao, providerName))
@@ -846,21 +861,34 @@ func applyConfigOverrides(preview *ir.ProviderIR, cfg *config.Config, providerNa
 	for _, eo := range cfg.EphemeralOverrides {
 		if idx := matchingEphemeralIndex(preview.EphemeralResources, eo); idx >= 0 {
 			applyEphemeralOverrideExtras(&preview.EphemeralResources[idx], eo)
-		} else {
-			preview.EphemeralResources = append(preview.EphemeralResources, ephemeralFromOverride(eo, providerName))
+			continue
 		}
+		if path, method, ok := overrideOperationDoubleClaimed(eo.Operation, pathOps, consumed); ok {
+			*diags = append(*diags, doubleClaimedDiagnostic("Ephemeral resource", eo.Operation, path, method))
+			continue
+		}
+		preview.EphemeralResources = append(preview.EphemeralResources, ephemeralFromOverride(eo, providerName))
 	}
 	for _, lo := range cfg.ListResourceOverrides {
-		if matchingListResourceIndex(preview.ListResources, lo) < 0 {
-			preview.ListResources = append(preview.ListResources, listResourceFromOverride(lo, providerName))
+		if matchingListResourceIndex(preview.ListResources, lo) >= 0 {
+			continue
 		}
+		if path, method, ok := overrideOperationDoubleClaimed(lo.Operation, pathOps, consumed); ok {
+			*diags = append(*diags, doubleClaimedDiagnostic("List resource", lo.Operation, path, method))
+			continue
+		}
+		preview.ListResources = append(preview.ListResources, listResourceFromOverride(lo, providerName))
 	}
 	for _, fo := range cfg.FunctionOverrides {
 		if idx := matchingFunctionIndex(preview.Functions, fo); idx >= 0 {
 			applyFunctionOverrideExtras(&preview.Functions[idx], fo)
-		} else {
-			preview.Functions = append(preview.Functions, functionFromOverride(fo, providerName))
+			continue
 		}
+		if path, method, ok := overrideOperationDoubleClaimed(fo.Operation, pathOps, consumed); ok {
+			*diags = append(*diags, doubleClaimedDiagnostic("Function", fo.Operation, path, method))
+			continue
+		}
+		preview.Functions = append(preview.Functions, functionFromOverride(fo, providerName))
 	}
 
 	if err := transformer.ApplyOverrides(preview, cfg); err != nil {
@@ -872,19 +900,38 @@ func applyConfigOverrides(preview *ir.ProviderIR, cfg *config.Config, providerNa
 	}
 }
 
-// actionOverrideDoubleClaimed reports whether an action override's operation is
+// overrideOperationDoubleClaimed reports whether an override's operation is
 // already consumed by a resource (a grouped resource or a resource creation
 // override). The operation resolves in the spec but was claimed before
-// applyConfigOverrides ran, so appending an actionFromOverride would emit an
-// empty scaffold (no ConfigSchema, no InvokeMapping) for an operation the
-// resource already owns. Overrides that name a method+path or an operation with
-// no operationId leave ok=false — those legitimately declare a fresh construct.
-func actionOverrideDoubleClaimed(ao config.ActionOverride, pathOps map[string]map[transformer.HTTPMethod]transformer.Operation, consumed map[string]map[string]bool) (string, string, bool) {
-	path, method, op := resolveOperationByID(pathOps, ao.Operation)
+// applyConfigOverrides ran, so appending a *FromOverride would emit an empty
+// scaffold (no ConfigSchema / mapping) for an operation the resource already
+// owns. Overrides that name a method+path or an operation with no operationId
+// leave ok=false — those legitimately declare a fresh construct. The caller
+// labels the override family ("Action", "Ephemeral resource", ...) when building
+// the diagnostic.
+func overrideOperationDoubleClaimed(operationID string, pathOps map[string]map[transformer.HTTPMethod]transformer.Operation, consumed map[string]map[string]bool) (string, string, bool) {
+	path, method, op := resolveOperationByID(pathOps, operationID)
 	if op == nil || !isConsumed(consumed, path, method) {
 		return "", "", false
 	}
 	return path, method, true
+}
+
+// doubleClaimedDiagnostic builds the warning emitted when an override targets an
+// operation a resource already consumes. The operation can be claimed by exactly
+// one construct, so the override is skipped; the message tells the user how to
+// make the claim unambiguous.
+func doubleClaimedDiagnostic(kind, operationID, path, method string) diagnostics.Diagnostic {
+	return diagnostics.Diagnostic{
+		Severity: diagnostics.Warning,
+		Summary:  kind + " override references an operation already claimed by a resource",
+		Detail: fmt.Sprintf(
+			kind+" override %q targets %s %s, which a resource already consumes. The operation "+
+				"can be claimed by exactly one construct, so the override is skipped. Remove the "+
+				"operation from the override or from the resource's create/read/update/delete "+
+				"operations so the claim is unambiguous.",
+			operationID, strings.ToUpper(method), path),
+	}
 }
 
 // matchingActionIndex returns the index of the first action an override matches

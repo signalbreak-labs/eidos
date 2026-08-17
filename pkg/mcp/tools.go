@@ -6,10 +6,14 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"regexp"
 	"runtime/debug"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/google/jsonschema-go/jsonschema"
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
@@ -46,6 +50,22 @@ type InspectResult struct {
 	Ephemerals  []EntitySummary      `json:"ephemeral_resources"`
 	Lists       []EntitySummary      `json:"list_resources"`
 	Functions   []EntitySummary      `json:"functions"`
+	Counts      InspectCounts        `json:"counts"`
+}
+
+// InspectCounts surfaces reliable, explicit construct counts derived from the
+// config-aware IR preview so a caller does not have to infer them from array
+// lengths. WiredResources/ScaffoldedResources split the managed-resource count
+// by whether the full Create+Read+Delete mapping is wired.
+type InspectCounts struct {
+	Resources           int `json:"resources"`
+	DataSources         int `json:"data_sources"`
+	Actions             int `json:"actions"`
+	EphemeralResources  int `json:"ephemeral_resources"`
+	ListResources       int `json:"list_resources"`
+	Functions           int `json:"functions"`
+	WiredResources      int `json:"wired_resources"`
+	ScaffoldedResources int `json:"scaffolded_resources"`
 }
 
 // ResourceSummary describes one managed resource and its CRUD wiring.
@@ -82,13 +102,14 @@ func InspectTool() *sdkmcp.Tool {
 		OutputSchema: &jsonschema.Schema{
 			Type:        "object",
 			Description: "Result of the eidos/inspect tool call",
-			Required:    []string{"valid", "diagnostics", "resources", "data_sources", "actions"},
+			Required:    []string{"valid", "diagnostics", "resources", "data_sources", "actions", "counts"},
 			Properties: map[string]*jsonschema.Schema{
 				"valid":        {Type: "boolean"},
 				"diagnostics":  {Type: "array"},
 				"resources":    {Type: "array"},
 				"data_sources": {Type: "array"},
 				"actions":      {Type: "array"},
+				"counts":       {Type: "object"},
 			},
 		},
 	}
@@ -98,6 +119,16 @@ func InspectTool() *sdkmcp.Tool {
 func HandleInspect(ctx context.Context, _ *sdkmcp.CallToolRequest, args InspectArgs) (res *sdkmcp.CallToolResult, out InspectResult, err error) {
 	defer recoverHandler("eidos/inspect", inspectErrorResult, &res, &out)
 	specBytes, err := normalizeSpec(args.Spec)
+	if err != nil {
+		out = inspectErrorResult(err)
+		res, err = marshalToolResult(out)
+		return res, out, err
+	}
+	// Thread the optional generator.yaml through the pipeline so overrides
+	// (e.g. generate_resource) shape the IR preview. Without this, inspect
+	// reports a spec-only view and silently ignores the declared `config`
+	// input (M-73).
+	specBytes, err = mergeConfigIntoSpec(specBytes, args.Config)
 	if err != nil {
 		out = inspectErrorResult(err)
 		res, err = marshalToolResult(out)
@@ -122,6 +153,7 @@ func HandleInspect(ctx context.Context, _ *sdkmcp.CallToolRequest, args InspectA
 		result.Lists = summarizeLists(resp.IRPreview.ListResources)
 		result.Functions = summarizeFunctions(resp.IRPreview.Functions)
 	}
+	result.Counts = countConstructs(result)
 	out = result
 	res, err = marshalToolResult(result)
 	return res, out, err
@@ -136,45 +168,71 @@ type GenerateArgs struct {
 	Spec   string `json:"spec"`
 	Config string `json:"config,omitempty"`
 	Output string `json:"output,omitempty"`
+	// DryRun, when true, collects and returns the planned file list without
+	// writing anything to disk. When output is also set, the result additionally
+	// reports which planned files would overwrite an existing file and which
+	// files already in output would be left stale (not regenerated).
+	DryRun bool `json:"dry_run,omitempty"`
+	// Verify, when true and output is set (non-dry-run), runs `go mod tidy` +
+	// `go build ./...` in the output directory after writing and reports whether
+	// the generated provider compiles. Ignored in dry-run mode.
+	Verify bool `json:"verify,omitempty"`
+}
+
+// FileSummary describes one planned/written file.
+type FileSummary struct {
+	Path           string `json:"path"`
+	Reason         string `json:"reason,omitempty"`
+	WouldOverwrite bool   `json:"would_overwrite,omitempty"`
 }
 
 // GenerateResult is the JSON shape returned by eidos/generate.
 type GenerateResult struct {
-	Valid       bool                 `json:"valid"`
-	Diagnostics []api.DiagnosticJSON `json:"diagnostics"`
-	Resources   []ResourceSummary    `json:"resources"`
-	DataSources []EntitySummary      `json:"data_sources"`
-	Actions     []EntitySummary      `json:"actions"`
-	FileCount   int                  `json:"file_count"`
-	OutputDir   string               `json:"output_dir,omitempty"`
+	Valid        bool                 `json:"valid"`
+	Diagnostics  []api.DiagnosticJSON `json:"diagnostics"`
+	Resources    []ResourceSummary    `json:"resources"`
+	DataSources  []EntitySummary      `json:"data_sources"`
+	Actions      []EntitySummary      `json:"actions"`
+	Files        []FileSummary        `json:"files"`
+	StaleFiles   []string             `json:"stale_files"`
+	FileCount    int                  `json:"file_count"`
+	OutputDir    string               `json:"output_dir,omitempty"`
+	VerifyOK     bool                 `json:"verify_ok"`
+	VerifyOutput string               `json:"verify_output,omitempty"`
 }
 
 // GenerateTool returns the eidos/generate MCP tool definition.
 func GenerateTool() *sdkmcp.Tool {
 	return &sdkmcp.Tool{
 		Name:        "eidos/generate",
-		Description: "Run the eidos generation pipeline on an OpenAPI spec and return a manifest of what was generated (resources with CRUD wiring, data sources, actions, file count). When output is set, the provider files are written to that directory.",
+		Description: "Run the eidos generation pipeline on an OpenAPI spec and return a manifest of what was generated (resources with CRUD wiring, data sources, actions, file list). When output is set, the provider files are written to that directory. dry_run returns the planned file list without writing (plus overwrite/stale analysis when output is set). verify runs `go build ./...` in output after writing.",
 		InputSchema: &jsonschema.Schema{
 			Type: "object",
 			Properties: map[string]*jsonschema.Schema{
-				"spec":   {Type: "string", Description: "OpenAPI spec as inline JSON/YAML content, a local file path, a file:// URL, or an http(s):// URL (https-only; http requires EIDOS_SPEC_ALLOW_HTTP=1)"},
-				"config": {Type: "string", Description: "Optional generator.yaml contents"},
-				"output": {Type: "string", Description: "Optional directory to write the generated provider to"},
+				"spec":    {Type: "string", Description: "OpenAPI spec as inline JSON/YAML content, a local file path, a file:// URL, or an http(s):// URL (https-only; http requires EIDOS_SPEC_ALLOW_HTTP=1)"},
+				"config":  {Type: "string", Description: "Optional generator.yaml contents"},
+				"output":  {Type: "string", Description: "Optional directory to write the generated provider to"},
+				"dry_run": {Type: "boolean", Description: "Collect and return the planned file list without writing. When output is set, also reports would-overwrite and stale files."},
+				"verify":  {Type: "boolean", Description: "After writing (non-dry-run), run `go build ./...` in output and report whether the generated provider compiles."},
 			},
 			Required: []string{"spec"},
 		},
 		OutputSchema: &jsonschema.Schema{
 			Type:        "object",
 			Description: "Result of the eidos/generate tool call",
-			Required:    []string{"valid", "diagnostics", "resources", "data_sources", "actions", "file_count"},
+			Required:    []string{"valid", "diagnostics", "resources", "data_sources", "actions", "file_count", "files", "stale_files", "verify_ok"},
 			Properties: map[string]*jsonschema.Schema{
-				"valid":        {Type: "boolean"},
-				"diagnostics":  {Type: "array"},
-				"resources":    {Type: "array"},
-				"data_sources": {Type: "array"},
-				"actions":      {Type: "array"},
-				"file_count":   {Type: "integer"},
-				"output_dir":   {Type: "string"},
+				"valid":         {Type: "boolean"},
+				"diagnostics":   {Type: "array"},
+				"resources":     {Type: "array"},
+				"data_sources":  {Type: "array"},
+				"actions":       {Type: "array"},
+				"file_count":    {Type: "integer"},
+				"files":         {Type: "array"},
+				"stale_files":   {Type: "array"},
+				"output_dir":    {Type: "string"},
+				"verify_ok":     {Type: "boolean"},
+				"verify_output": {Type: "string"},
 			},
 		},
 	}
@@ -189,6 +247,14 @@ func HandleGenerate(ctx context.Context, _ *sdkmcp.CallToolRequest, args Generat
 		res, err = marshalToolResult(out)
 		return res, out, err
 	}
+	// Honor the optional generator.yaml so resource/action summaries and the
+	// written provider reflect overrides, not just spec-only inference (M-73).
+	specBytes, err = mergeConfigIntoSpec(specBytes, args.Config)
+	if err != nil {
+		out = generateErrorResult(err)
+		res, err = marshalToolResult(out)
+		return res, out, err
+	}
 	resp := validateContext(ctx, specBytes)
 	result := GenerateResult{
 		Valid:       resp.Valid,
@@ -196,21 +262,78 @@ func HandleGenerate(ctx context.Context, _ *sdkmcp.CallToolRequest, args Generat
 		Resources:   []ResourceSummary{},
 		DataSources: []EntitySummary{},
 		Actions:     []EntitySummary{},
+		Files:       []FileSummary{},
+		StaleFiles:  []string{},
 	}
 	if resp.IRPreview != nil {
 		result.Resources = summarizeResources(resp.IRPreview.Resources)
 		result.DataSources = summarizeDataSources(resp.IRPreview.DataSources)
 		result.Actions = summarizeActions(resp.IRPreview.Actions)
 	}
-	if strings.TrimSpace(args.Output) != "" && resp.Valid && resp.IRPreview != nil {
-		entries, err := writeProvider(args.Output, resp.IRPreview)
-		if err != nil {
+	output := strings.TrimSpace(args.Output)
+
+	// Without a valid IR preview there is nothing to plan or write.
+	if !resp.Valid || resp.IRPreview == nil {
+		out = result
+		res, err = marshalToolResult(result)
+		return res, out, err
+	}
+
+	if args.DryRun {
+		// Record-only: collect the planned file list without touching disk.
+		entries, runErr := generator.Run(resp.IRPreview, generator.Options{
+			Mode:           generator.ModeRecord,
+			CollectOptions: generator.CollectOptions{IncludeBuild: true},
+		})
+		if runErr != nil {
 			result.Diagnostics = append(result.Diagnostics, api.DiagnosticJSON{
-				Severity: "error", Summary: "Provider generation failed", Detail: err.Error(),
+				Severity: "error", Summary: "Provider plan failed", Detail: runErr.Error(),
 			})
 		} else {
 			result.FileCount = len(entries)
-			result.OutputDir = args.Output
+			result.Files = fileSummaries(entries, output)
+			if output != "" {
+				result.OutputDir = output
+				stale, sErr := staleFilesInOutput(output, entries)
+				if sErr != nil {
+					result.Diagnostics = append(result.Diagnostics, api.DiagnosticJSON{
+						Severity: "warning", Summary: "Could not scan output directory for stale files", Detail: sErr.Error(),
+					})
+				} else {
+					result.StaleFiles = stale
+				}
+			}
+		}
+	} else if output != "" {
+		entries, runErr := writeProvider(output, resp.IRPreview)
+		if runErr != nil {
+			result.Diagnostics = append(result.Diagnostics, api.DiagnosticJSON{
+				Severity: "error", Summary: "Provider generation failed", Detail: runErr.Error(),
+			})
+		} else {
+			result.FileCount = len(entries)
+			result.OutputDir = output
+			// WouldOverwrite is not meaningful after a forced write, so the
+			// written files are listed without it.
+			result.Files = fileSummaries(entries, "")
+			stale, sErr := staleFilesInOutput(output, entries)
+			if sErr != nil {
+				result.Diagnostics = append(result.Diagnostics, api.DiagnosticJSON{
+					Severity: "warning", Summary: "Could not scan output directory for stale files", Detail: sErr.Error(),
+				})
+			} else {
+				result.StaleFiles = stale
+			}
+			if args.Verify {
+				ok, vOut := runVerify(ctx, output)
+				result.VerifyOK = ok
+				result.VerifyOutput = truncateForJSON(vOut, maxVerifyOutput)
+				if !ok {
+					result.Diagnostics = append(result.Diagnostics, api.DiagnosticJSON{
+						Severity: "error", Summary: "Post-generation verification failed", Detail: result.VerifyOutput,
+					})
+				}
+			}
 		}
 	}
 	out = result
@@ -273,6 +396,15 @@ func ValidateSchemasTool() *sdkmcp.Tool {
 func HandleValidateSchemas(ctx context.Context, _ *sdkmcp.CallToolRequest, args ValidateSchemasArgs) (res *sdkmcp.CallToolResult, out ValidateSchemasResult, err error) {
 	defer recoverHandler("eidos/validate-schemas", validateSchemasErrorResult, &res, &out)
 	specBytes, err := normalizeSpec(args.Spec)
+	if err != nil {
+		out = validateSchemasErrorResult(err)
+		res, err = marshalToolResult(out)
+		return res, out, err
+	}
+	// Honor the optional generator.yaml so schema issues are reported against
+	// the override-shaped IR (e.g. resources promoted via generate_resource),
+	// not just spec-only inference (M-73).
+	specBytes, err = mergeConfigIntoSpec(specBytes, args.Config)
 	if err != nil {
 		out = validateSchemasErrorResult(err)
 		res, err = marshalToolResult(out)
@@ -384,6 +516,28 @@ func HandleOverridePreview(ctx context.Context, _ *sdkmcp.CallToolRequest, args 
 // ---------------------------------------------------------------------------
 // helpers
 // ---------------------------------------------------------------------------
+
+// countConstructs derives the InspectCounts summary from the populated result
+// slices. WiredResources/ScaffoldedResources split the managed-resource count
+// by the Wired flag (Create+Read+Delete all mapped).
+func countConstructs(r InspectResult) InspectCounts {
+	c := InspectCounts{
+		Resources:          len(r.Resources),
+		DataSources:        len(r.DataSources),
+		Actions:            len(r.Actions),
+		EphemeralResources: len(r.Ephemerals),
+		ListResources:      len(r.Lists),
+		Functions:          len(r.Functions),
+	}
+	for _, res := range r.Resources {
+		if res.Wired {
+			c.WiredResources++
+		} else {
+			c.ScaffoldedResources++
+		}
+	}
+	return c
+}
 
 func summarizeResources(resources []ir.ResourceIR) []ResourceSummary {
 	out := make([]ResourceSummary, 0, len(resources))
@@ -561,8 +715,13 @@ func reportOverrides(configYAML string, preview *ir.ProviderIR) []OverrideReport
 
 // mergeConfigIntoSpec injects a generator.yaml config string into a spec body
 // the way the HTTP validate handler expects (a top-level "config" field). The
-// spec may be JSON or YAML; the merged body is re-serialized as JSON.
+// spec may be JSON or YAML; the merged body is re-serialized as JSON. An empty
+// config is a no-op: the spec is returned unchanged so the no-config path
+// behaves exactly as before (no re-serialization, no parse round-trip).
 func mergeConfigIntoSpec(specBytes []byte, configYAML string) ([]byte, error) {
+	if strings.TrimSpace(configYAML) == "" {
+		return specBytes, nil
+	}
 	var doc map[string]any
 	if err := json.Unmarshal(specBytes, &doc); err != nil {
 		if err2 := yaml.Unmarshal(specBytes, &doc); err2 != nil {
@@ -582,6 +741,118 @@ func writeProvider(dir string, pir *ir.ProviderIR) ([]generator.FileEntry, error
 		Force:          true,
 		CollectOptions: generator.CollectOptions{IncludeBuild: true},
 	})
+}
+
+// fileSummaries maps planned file entries to FileSummary records. When outputDir
+// is non-empty (dry-run), each entry's WouldOverwrite is set by statting the
+// target path so the caller can see which existing files a write would clobber.
+// After a forced write the files already exist, so outputDir is passed empty and
+// WouldOverwrite stays false.
+func fileSummaries(entries []generator.FileEntry, outputDir string) []FileSummary {
+	out := make([]FileSummary, 0, len(entries))
+	for _, e := range entries {
+		fs := FileSummary{Path: e.Path, Reason: e.Reason}
+		if outputDir != "" {
+			fs.WouldOverwrite = pathExists(filepath.Join(outputDir, e.Path))
+		}
+		out = append(out, fs)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Path < out[j].Path })
+	return out
+}
+
+func pathExists(p string) bool {
+	_, err := os.Stat(p)
+	return err == nil
+}
+
+// staleFilesInOutput walks outputDir and returns the regular files present there
+// that the planned generation would NOT produce, sorted deterministically. These
+// are pre-existing files that a regeneration would leave behind (e.g. a resource
+// file from a previous run whose resource was since removed from the spec). The
+// .git directory and dot-prefixed entries are skipped to reduce noise. A missing
+// outputDir yields an empty slice (nothing is stale yet).
+func staleFilesInOutput(outputDir string, planned []generator.FileEntry) ([]string, error) {
+	info, err := os.Stat(outputDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return []string{}, nil
+		}
+		return nil, err
+	}
+	if !info.IsDir() {
+		return nil, fmt.Errorf("output path %q is not a directory", outputDir)
+	}
+	plannedSet := make(map[string]bool, len(planned))
+	for _, e := range planned {
+		plannedSet[filepath.ToSlash(e.Path)] = true
+	}
+	var stale []string
+	walkErr := filepath.WalkDir(outputDir, func(path string, d os.DirEntry, werr error) error {
+		if werr != nil {
+			return werr
+		}
+		rel, rErr := filepath.Rel(outputDir, path)
+		if rErr != nil {
+			return rErr
+		}
+		rel = filepath.ToSlash(rel)
+		if rel == "." {
+			return nil
+		}
+		base := d.Name()
+		if d.IsDir() {
+			if base == ".git" || strings.HasPrefix(base, ".") {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if strings.HasPrefix(base, ".") {
+			return nil
+		}
+		if !plannedSet[rel] {
+			stale = append(stale, rel)
+		}
+		return nil
+	})
+	if walkErr != nil {
+		return stale, walkErr
+	}
+	sort.Strings(stale)
+	return stale, nil
+}
+
+// maxVerifyOutput caps the captured `go build` output embedded in the result so
+// a verbose build failure cannot balloon the MCP response.
+const maxVerifyOutput = 4000
+
+// runVerify runs `go mod tidy` then `go build ./...` in dir and reports whether
+// the generated provider compiles. It is the first production use of os/exec in
+// the repo; the build is bounded by a context timeout. A missing go toolchain
+// surfaces as a non-nil error (clean diagnostic), not a panic.
+func runVerify(ctx context.Context, dir string) (bool, string) {
+	verifyCtx, cancel := context.WithTimeout(ctx, 5*time.Minute)
+	defer cancel()
+	tidy := exec.CommandContext(verifyCtx, "go", "mod", "tidy")
+	tidy.Dir = dir
+	if out, err := tidy.CombinedOutput(); err != nil {
+		return false, fmt.Sprintf("go mod tidy: %v\n%s", err, out)
+	}
+	build := exec.CommandContext(verifyCtx, "go", "build", "./...")
+	build.Dir = dir
+	if out, err := build.CombinedOutput(); err != nil {
+		return false, fmt.Sprintf("go build ./...: %v\n%s", err, out)
+	}
+	return true, ""
+}
+
+// truncateForJSON caps a string at n bytes, appending an ellipsis when truncated,
+// so embedded build output stays bounded.
+func truncateForJSON(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[:n] + "..."
 }
 
 // nonNilDiags returns d if non-nil, else a non-nil empty slice, so tool outputs
@@ -628,6 +899,8 @@ func generateErrorResult(err error) GenerateResult {
 		Resources:   []ResourceSummary{},
 		DataSources: []EntitySummary{},
 		Actions:     []EntitySummary{},
+		Files:       []FileSummary{},
+		StaleFiles:  []string{},
 	}
 }
 

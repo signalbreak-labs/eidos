@@ -3,6 +3,8 @@ package mcp
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -256,5 +258,150 @@ func TestWriteProvider_WritesFiles(t *testing.T) {
 	}
 	if len(entries) == 0 {
 		t.Error("expected provider files to be planned")
+	}
+}
+
+// TestHandleInspect_Counts asserts the explicit counts block matches the
+// resource/data-source/action slices and the wired/scaffolded split. The pet
+// store fixture yields one wired managed resource and nothing else.
+func TestHandleInspect_Counts(t *testing.T) {
+	_, out, err := HandleInspect(context.Background(), nil, InspectArgs{Spec: petStoreSpec})
+	if err != nil {
+		t.Fatalf("HandleInspect error: %v", err)
+	}
+	if !out.Valid {
+		t.Fatalf("expected valid inspect result, got diagnostics: %+v", out.Diagnostics)
+	}
+	if out.Counts.Resources != len(out.Resources) {
+		t.Errorf("counts.resources=%d != len(resources)=%d", out.Counts.Resources, len(out.Resources))
+	}
+	if out.Counts.DataSources != len(out.DataSources) {
+		t.Errorf("counts.data_sources=%d != len(data_sources)=%d", out.Counts.DataSources, len(out.DataSources))
+	}
+	if out.Counts.Actions != len(out.Actions) {
+		t.Errorf("counts.actions=%d != len(actions)=%d", out.Counts.Actions, len(out.Actions))
+	}
+	if out.Counts.WiredResources+out.Counts.ScaffoldedResources != out.Counts.Resources {
+		t.Errorf("wired+scaffolded=%d != resources=%d", out.Counts.WiredResources+out.Counts.ScaffoldedResources, out.Counts.Resources)
+	}
+	if out.Counts.Resources != 1 || out.Counts.WiredResources != 1 {
+		t.Errorf("expected 1 wired resource, got counts=%+v (resources=%+v)", out.Counts, out.Resources)
+	}
+}
+
+// TestHandleGenerate_DryRunFlagFileListAndStale asserts dry_run returns the
+// planned file list without writing, flags pre-existing planned files as
+// would-overwrite, and lists unrelated files in --output as stale.
+func TestHandleGenerate_DryRunFlagFileListAndStale(t *testing.T) {
+	outDir := t.TempDir()
+
+	// Empty output dir: planned files listed, none overwrite, none stale.
+	_, out, err := HandleGenerate(context.Background(), nil, GenerateArgs{Spec: petStoreSpec, DryRun: true, Output: outDir})
+	if err != nil {
+		t.Fatalf("HandleGenerate error: %v", err)
+	}
+	if !out.Valid {
+		t.Fatalf("expected valid result, got diagnostics: %+v", out.Diagnostics)
+	}
+	if out.FileCount == 0 || len(out.Files) != out.FileCount {
+		t.Fatalf("expected planned files, got count=%d files=%d", out.FileCount, len(out.Files))
+	}
+	for _, f := range out.Files {
+		if f.WouldOverwrite {
+			t.Errorf("empty dir: %q should not be a would-overwrite", f.Path)
+		}
+	}
+	if len(out.StaleFiles) != 0 {
+		t.Errorf("empty dir: expected no stale files, got %v", out.StaleFiles)
+	}
+
+	// Pre-create one planned file (to trigger would-overwrite) and one unrelated
+	// file (to surface as stale), then re-run the dry-run.
+	plannedPath := filepath.Join(outDir, filepath.FromSlash(out.Files[0].Path))
+	if err := os.MkdirAll(filepath.Dir(plannedPath), 0o750); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(plannedPath, []byte("old"), 0o600); err != nil {
+		t.Fatalf("write planned: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(outDir, "leftover.go"), []byte("old"), 0o600); err != nil {
+		t.Fatalf("write leftover: %v", err)
+	}
+
+	_, out2, err := HandleGenerate(context.Background(), nil, GenerateArgs{Spec: petStoreSpec, DryRun: true, Output: outDir})
+	if err != nil {
+		t.Fatalf("HandleGenerate error: %v", err)
+	}
+	if !out2.Files[0].WouldOverwrite {
+		t.Errorf("expected %q to be flagged would-overwrite", out2.Files[0].Path)
+	}
+	found := false
+	for _, s := range out2.StaleFiles {
+		if s == "leftover.go" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected leftover.go in stale files, got %v", out2.StaleFiles)
+	}
+	// Dry-run must not have written anything: the pre-created planned file is
+	// unchanged.
+	b, err := os.ReadFile(plannedPath)
+	if err != nil || string(b) != "old" {
+		t.Errorf("dry-run overwrote %q (got %q)", plannedPath, string(b))
+	}
+}
+
+// TestHandleGenerate_DryRunFlagNoOutput asserts dry_run without output still
+// returns the planned file list (no overwrite/stale analysis).
+func TestHandleGenerate_DryRunFlagNoOutput(t *testing.T) {
+	_, out, err := HandleGenerate(context.Background(), nil, GenerateArgs{Spec: petStoreSpec, DryRun: true})
+	if err != nil {
+		t.Fatalf("HandleGenerate error: %v", err)
+	}
+	if !out.Valid {
+		t.Fatalf("expected valid result, got diagnostics: %+v", out.Diagnostics)
+	}
+	if out.FileCount == 0 || len(out.Files) == 0 {
+		t.Fatalf("expected planned files without output, got count=%d files=%d", out.FileCount, len(out.Files))
+	}
+	if out.OutputDir != "" {
+		t.Errorf("dry_run without output should not set output_dir, got %q", out.OutputDir)
+	}
+	for _, f := range out.Files {
+		if f.WouldOverwrite {
+			t.Errorf("no output: %q should not be would-overwrite", f.Path)
+		}
+	}
+}
+
+// skipIfNetworkRestrictedMCP skips the verify test when the local Go environment
+// is configured to avoid remote module fetches, since `go mod tidy` for the
+// generated provider needs to resolve terraform-plugin-framework et al.
+func skipIfNetworkRestrictedMCP(t *testing.T) {
+	t.Helper()
+	if goflags := os.Getenv("GOFLAGS"); strings.Contains(goflags, "-mod=vendor") {
+		t.Skipf("GOFLAGS=%q contains -mod=vendor; skipping network-bound verify test", goflags)
+	}
+	if proxy := os.Getenv("GOPROXY"); strings.TrimSpace(proxy) == "off" {
+		t.Skipf("GOPROXY=%q; skipping network-bound verify test", proxy)
+	}
+}
+
+// TestHandleGenerate_VerifyCompiles asserts verify=true runs `go build ./...`
+// in the output dir after writing and reports verify_ok=true for a spec that
+// generates a compilable provider. Skipped when the Go environment is offline.
+func TestHandleGenerate_VerifyCompiles(t *testing.T) {
+	skipIfNetworkRestrictedMCP(t)
+	outDir := t.TempDir()
+	_, out, err := HandleGenerate(context.Background(), nil, GenerateArgs{Spec: petStoreSpec, Output: outDir, Verify: true})
+	if err != nil {
+		t.Fatalf("HandleGenerate error: %v", err)
+	}
+	if !out.Valid {
+		t.Fatalf("expected valid result, got diagnostics: %+v", out.Diagnostics)
+	}
+	if !out.VerifyOK {
+		t.Fatalf("expected verify_ok=true, got false; verify_output=%s diagnostics=%+v", out.VerifyOutput, out.Diagnostics)
 	}
 }

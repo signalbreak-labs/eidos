@@ -123,7 +123,7 @@ Eidos is under active development. The architecture, intermediate representation
 | `eidos generate --dry-run` | Implemented | Produces a file list and summary from the real parsed `ProviderIR`. |
 | `eidos generate` (write mode) | Implemented | Writes generated files to `--output`, with overwrite guards controlled by `--force`. |
 | `eidos generate-config` | Implemented | Emits a starter `generator.yaml` from a spec. |
-| `eidos api` / `eidos mcp` | Implemented | Validation API and MCP server are functional; the MCP server advertises five tools (`eidos/generate-config`, `eidos/inspect`, `eidos/generate`, `eidos/validate-schemas`, `eidos/override-preview`); the API server uses `MaxHeaderBytes`, access logging, and panic recovery. |
+| `eidos api` / `eidos mcp` | Implemented | Validation API and MCP server are functional; the MCP server advertises seven tools (`eidos/generate-config`, `eidos/inspect`, `eidos/generate`, `eidos/validate-schemas`, `eidos/override-preview`, `eidos/lookup`, `eidos/suggest-resources`); the API server uses `MaxHeaderBytes`, access logging, and panic recovery. |
 | Generated provider file list | Implemented | The generator records and writes the full set of files a provider needs. |
 | Generated resource CRUD bodies | Partial | `Create`/`Read`/`Update`/`Delete` are wired to the generated API client when the resource has a complete create/read/delete operation mapping (update optional); the provider `Configure` method constructs the client and the optional `endpoint` provider attribute overrides the API base URL. Resources with incomplete mappings keep honest runtime diagnostics. Request/response mapping is generic JSON↔model conversion; query/header/cookie params are wired. Request bodies are encoded per the selected media type — JSON (default), `application/x-www-form-urlencoded` (primitive `formData`), `multipart/form-data` (binary `formData`, read from the model field's path), and `application/xml` (`mapToXML`, best-effort element-per-field) — via `transformer.RequestBodyKind`; unsupported media types stay honestly scaffolded. |
 | Generated action / ephemeral / list / function bodies | Mostly wired | Ephemeral `Open` is wired, and `Renew`/`Close` wire when their mappings resolve (parameters are passed via ephemeral private state). Action `Invoke` is wired, and `ModifyPlan`/`ValidateConfig` wire when an explicit `modify_plan_operation`/`validate_config_operation` mapping is declared in `generator.yaml`. List resources wire when the list mapping resolves (identity from the paired instance path parameters or the item `id`), streaming results via the generated client with pagination. Provider-defined functions stay honestly scaffolded by design (no remote endpoint). Unresolvable mappings keep honest runtime diagnostics. |
@@ -1130,15 +1130,17 @@ The endpoint is implemented as a normal `net/http` handler in `cmd/eidos/api.go`
 
 Eidos exposes a **Model Context Protocol (MCP) server** over stdio that lets an
 MCP-compatible agent or IDE drive the whole workflow without codebase access
-(live in `pkg/mcp`, wired by `cmd/eidos/mcp.go`). It advertises five tools:
+(live in `pkg/mcp`, wired by `cmd/eidos/mcp.go`). It advertises seven tools:
 
 | Tool | Purpose |
 |------|---------|
 | `eidos/generate-config` | Scaffold a `generator.yaml` from a supplied OpenAPI spec (or spec fragment) without invoking the full CLI pipeline. |
-| `eidos/inspect` | Report what eidos would generate — every resource with its CRUD mapping completeness and wired-vs-scaffolded status, plus data sources, actions, ephemeral resources, list resources, and functions. |
-| `eidos/generate` | Run parse → transform → generate and return a manifest; optionally writes the provider files to a caller-supplied output directory. |
+| `eidos/inspect` | Report what eidos would generate — every resource with its CRUD mapping completeness and wired-vs-scaffolded status, plus data sources, actions, ephemeral resources, list resources, and functions, and an explicit `counts` block. |
+| `eidos/generate` | Run parse → transform → generate and return a manifest; optionally writes the provider files to a caller-supplied output directory. `dry_run` returns the planned file list (with would-overwrite and stale-file analysis) without writing; `verify` runs `go build ./...` in the output after writing. |
 | `eidos/validate-schemas` | Report which generated schemas terraform-plugin-framework would reject (dynamic-element collections, a nested `DynamicAttribute`, invalid attribute names, `Computed`+`Required`, reserved root names). |
 | `eidos/override-preview` | Return the IR preview *after* `generator.yaml` overrides plus a per-entry report of which `resource_overrides` matched (surfacing silent no-ops). |
+| `eidos/lookup` | Look up an operation by `operationId` (forward: path, method, path params, request/response schema names) and/or a schema by name (reverse: every operation that accepts/returns it) over the raw spec. |
+| `eidos/suggest-resources` | Propose CRUD groupings inference dropped (collection POST + instance GET, no DELETE on the instance) as ready-to-paste `resource_overrides` entries, scanning for a near-miss delete (a non-DELETE verb op on a sub-path of the instance) to wire as `delete_operation`. |
 
 The full reference (parameters and return shapes) is in
 `docs/usage.md` §`eidos mcp`. The config-scaffolding tool works as follows:
@@ -3232,6 +3234,9 @@ upstream constraint changes or a product decision is made.
   `ManagedResourceSchema` to flatten a single level of nested `metadata` into
   top-level path-param attributes (and would exercise the list body's nested-
   `metadata` identity probing).
+- **`eidos/suggest-resources` does not mirror `skip_operations`/`include_operations` into its grouping pass.** It groups from the raw spec (via `api.ParseSpec` + `OperationsFromSpecWithDiagnostics`) while the "already claimed" set comes from the config-aware IR preview (`validateContext`), which is the only pass that applies `FilterSpecOperations`. A near-miss delete the user dropped via `skip_operations` may therefore still be proposed; applying the override then yields a resource with a scaffolded delete (the op resolves to nil on the filtered pathOps that `applyResourceCreationOverrides` searches). The suggestion is advisory and this is the contrived case of disabling the very operation that would serve as a delete.
+- **`eidos/suggest-resources` parses the spec twice.** Raw pathOps for grouping and the config-aware pass for the consumed set are run separately because `validateContext` does not expose raw pathOps. This is a cost on very large specs (e.g. Kubernetes), not a correctness issue.
+- **`eidos/generate` `verify` is network- and toolchain-bound.** It runs `go mod tidy` + `go build ./...` in `output` (5-minute timeout) to confirm the generated provider compiles, which needs the Go toolchain on `PATH` and network access to resolve provider dependencies. On failure `verify_ok` is false with the build output surfaced in `diagnostics`; it never touches the eidos repo's `go.mod`/`toolchain` line (it runs only in the generated `output` directory).
 
 ### 23.3 Residual risk & investigation areas
 
