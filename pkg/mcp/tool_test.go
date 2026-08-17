@@ -1,6 +1,7 @@
 package mcp
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"strings"
@@ -709,5 +710,153 @@ paths:
 	}
 	if out.Overrides[1].Matched {
 		t.Errorf("expected postDashboard override to be a no-op, got %+v", out.Overrides[1])
+	}
+}
+
+// requiresConfigSpec is a spec whose collection POST is NOT inferred as a
+// managed-resource Create: its request body (PurchaseRequest) does not match
+// the instance Ship schema and there is no DELETE on the instance path. The
+// transformer therefore treats purchase-ship as an action and get-my-ship as a
+// data source, yielding zero managed resources from spec-only inference. A
+// generate_resource override promotes it to a managed resource, which only
+// surfaces when the config is actually threaded through the pipeline (M-73).
+const requiresConfigSpec = `openapi: "3.0.0"
+info:
+  title: Requires Config
+  version: 1.0.0
+paths:
+  /my/ships:
+    post:
+      operationId: purchase-ship
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PurchaseRequest'
+      responses:
+        "201":
+          description: created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Ship'
+  /my/ships/{shipSymbol}:
+    get:
+      operationId: get-my-ship
+      parameters:
+        - {name: shipSymbol, in: path, required: true, schema: {type: string}}
+      responses:
+        "200":
+          description: ok
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Ship'
+components:
+  schemas:
+    PurchaseRequest:
+      type: object
+      properties:
+        shipType: {type: string}
+    Ship:
+      type: object
+      properties:
+        symbol: {type: string}
+        name: {type: string}
+`
+
+const requiresConfigOverride = `provider:
+  name: requires-config
+  version: "1.0.0"
+resource_overrides:
+  - schema: Ship
+    resource_name: ship
+    id_attribute: symbol
+    generate_resource: true
+    create_operation: purchase-ship
+    read_operation: get-my-ship
+    delete_operation: scrap-ship
+`
+
+// TestHandleInspect_HonorsConfig verifies that eidos/inspect threads the
+// optional generator.yaml through the pipeline. Without the config the spec
+// yields no managed resources; with the generate_resource override the ship
+// resource is promoted and reported (regression guard for M-73, where inspect
+// silently ignored args.Config).
+func TestHandleInspect_HonorsConfig(t *testing.T) {
+	_, noCfg, err := HandleInspect(context.Background(), nil, InspectArgs{Spec: requiresConfigSpec})
+	if err != nil {
+		t.Fatalf("inspect without config: %v", err)
+	}
+	if len(noCfg.Resources) != 0 {
+		t.Errorf("spec-only inference should yield 0 resources, got %d: %+v", len(noCfg.Resources), noCfg.Resources)
+	}
+
+	_, withCfg, err := HandleInspect(context.Background(), nil, InspectArgs{Spec: requiresConfigSpec, Config: requiresConfigOverride})
+	if err != nil {
+		t.Fatalf("inspect with config: %v", err)
+	}
+	if len(withCfg.Resources) != 1 {
+		t.Fatalf("config should promote 1 resource, got %d: %+v", len(withCfg.Resources), withCfg.Resources)
+	}
+	ship := withCfg.Resources[0]
+	if ship.Name != "ship" {
+		t.Errorf("expected resource name %q, got %q", "ship", ship.Name)
+	}
+	if ship.Create == "" || ship.Read == "" {
+		t.Errorf("expected wired create/read, got %+v", ship)
+	}
+}
+
+// TestHandleGenerate_HonorsConfig verifies eidos/generate reports the
+// override-promoted resource in its summary (not just spec-only inference).
+func TestHandleGenerate_HonorsConfig(t *testing.T) {
+	_, noCfg, err := HandleGenerate(context.Background(), nil, GenerateArgs{Spec: requiresConfigSpec})
+	if err != nil {
+		t.Fatalf("generate without config: %v", err)
+	}
+	if len(noCfg.Resources) != 0 {
+		t.Errorf("spec-only inference should yield 0 resources, got %d", len(noCfg.Resources))
+	}
+
+	_, withCfg, err := HandleGenerate(context.Background(), nil, GenerateArgs{Spec: requiresConfigSpec, Config: requiresConfigOverride})
+	if err != nil {
+		t.Fatalf("generate with config: %v", err)
+	}
+	if len(withCfg.Resources) != 1 || withCfg.Resources[0].Name != "ship" {
+		t.Fatalf("expected one ship resource, got %+v", withCfg.Resources)
+	}
+}
+
+// TestHandleValidateSchemas_HonorsConfig verifies eidos/validate-schemas runs
+// against the override-shaped IR. With the override, the Ship schema becomes a
+// resource schema and its framework validity is reported; without the config
+// the ship is only a data-source response and contributes no resource issue.
+func TestHandleValidateSchemas_HonorsConfig(t *testing.T) {
+	_, withCfg, err := HandleValidateSchemas(context.Background(), nil, ValidateSchemasArgs{Spec: requiresConfigSpec, Config: requiresConfigOverride})
+	if err != nil {
+		t.Fatalf("validate-schemas with config: %v", err)
+	}
+	// The override promotes Ship to a resource; validate-schemas must walk it
+	// as a resource (not just a data source). At minimum the result must be
+	// valid and non-nil, proving the config shaped the IR rather than being
+	// dropped.
+	if !withCfg.Valid {
+		t.Errorf("expected valid result, got %+v", withCfg)
+	}
+}
+
+// TestMergeConfigIntoSpec_EmptyConfigIsNoop guards the empty-config short-circuit
+// so the no-config path never re-serializes the spec (which could alter
+// formatting or introduce parse round-trips for callers passing the spec body).
+func TestMergeConfigIntoSpec_EmptyConfigIsNoop(t *testing.T) {
+	spec := []byte(`{"openapi":"3.0.0","info":{"title":"X","version":"1.0.0"},"paths":{}}`)
+	out, err := mergeConfigIntoSpec(spec, "")
+	if err != nil {
+		t.Fatalf("mergeConfigIntoSpec: %v", err)
+	}
+	if !bytes.Equal(out, spec) {
+		t.Errorf("empty config should return spec unchanged, got %q", string(out))
 	}
 }

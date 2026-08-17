@@ -221,10 +221,11 @@ Start the Model Context Protocol server over stdio.
 eidos mcp
 ```
 
-The server advertises five tools that let an MCP host (or an LLM without
+The server advertises seven tools that let an MCP host (or an LLM without
 codebase access) drive the whole workflow: inspect what a spec yields, run the
-generator, check generated schemas for framework validity, and preview the
-effect of `generator.yaml` overrides.
+generator, check generated schemas for framework validity, preview the effect of
+`generator.yaml` overrides, look up operations and schemas, and propose
+non-inferred CRUD groupings as ready-to-paste `resource_overrides`.
 
 ### `eidos/generate-config`
 
@@ -251,11 +252,15 @@ Parse a spec and report what eidos would generate, before generating anything.
 | `spec` | `string` | **yes** | OpenAPI spec as a JSON/YAML string. |
 | `config` | `string` | no | Optional `generator.yaml` contents. |
 
-Returns `valid`, `diagnostics`, and per-entity summaries: `resources` (each with
+Returns `valid`, `diagnostics`, per-entity summaries: `resources` (each with
 its `create`/`read`/`update`/`delete` operation mapping and `wired` status),
 `data_sources`, `actions`, `ephemeral_resources`, `list_resources`, and
-`functions`. Use this to decide what is provisionable — and which operations
-need an override — before authoring a config.
+`functions`, and an explicit `counts` block (`resources`/`data_sources`/
+`actions`/`ephemeral_resources`/`list_resources`/`functions` plus a
+`wired_resources`/`scaffolded_resources` split) so counts are surfaced reliably
+rather than inferred from array lengths. Use this to decide what is
+provisionable — and which operations need an override — before authoring a
+config.
 
 ### `eidos/generate`
 
@@ -266,11 +271,19 @@ Run the full generation pipeline and return a manifest.
 | `spec` | `string` | **yes** | OpenAPI spec as a JSON/YAML string. |
 | `config` | `string` | no | Optional `generator.yaml` contents. |
 | `output` | `string` | no | Optional directory to write the generated provider to. |
+| `dry_run` | `boolean` | no | Collect the planned file list without writing (forces record mode even when `output` is set). |
+| `verify` | `boolean` | no | After writing, run `go mod tidy` + `go build ./...` in `output` and report success/failure. Requires `output`; needs the Go toolchain on PATH and network access to resolve provider dependencies. |
 
 Returns `valid`, `diagnostics`, the generated `resources`/`data_sources`/
-`actions` summaries, and `file_count` (`output_dir` when `output` was set). When
-`output` is supplied, the provider files are written to that directory (the
-server runs locally over stdio, so local writes are allowed).
+`actions` summaries, `file_count` (`output_dir` when `output` was set), and:
+
+- `files` — one `FileSummary` per planned file (`path`, `reason`, `would_overwrite`). Populated in both dry-run and write modes; `would_overwrite` is only meaningful in dry-run (after a forced write the files already exist).
+- `stale_files` — existing files in `output` not produced by this generation (sorted, forward-slash relative paths; `.git` and dotfiles skipped), so a caller can see what a write would leave behind. Empty when `output` is not set.
+- `verify_ok` / `verify_output` — present when `verify` is set; `verify_ok` is false with the build output in `diagnostics` on failure.
+
+When `output` is supplied (and `dry_run` is not), the provider files are written
+to that directory (the server runs locally over stdio, so local writes are
+allowed).
 
 ### `eidos/validate-schemas`
 
@@ -300,6 +313,50 @@ plus a per-entry report of which `resource_overrides` matched.
 Returns `valid`, `diagnostics`, the resulting `resources`, and `overrides` — one
 entry per override with `matched` and a `note` explaining any that had no effect
 (so a silent no-op, e.g. an override whose operation is not present, is visible).
+
+### `eidos/lookup`
+
+Look up an OpenAPI operation by `operationId` (forward) and/or a schema by name
+(reverse) over the raw spec. Overrides do not change operations or schemas, so
+`config` is not accepted.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `spec` | `string` | **yes** | OpenAPI spec as a JSON/YAML string. |
+| `operation_id` | `string` | no* | Operation ID to look up (forward direction). |
+| `schema` | `string` | no* | Schema name (the `$ref` final segment) to look up (reverse direction). |
+
+\* At least one of `operation_id` or `schema` is required; both may be set to
+answer the two directions in one call.
+
+Returns `valid`, `diagnostics`, and:
+
+- `operation` — the forward answer for the looked-up operation: `path`, `method`, `path_params` (name/required/type), `request_body_schema`, `request_media_type`, `response_schema`, `response_envelope`. `null` (with a warning diagnostic) when the operationId is not found.
+- `schema_usage` — every operation that accepts the schema as a request body (`role: "request"`) or returns it as a response (`role: "response"`), sorted deterministically by path then method. Empty (non-nil) when the schema is not used.
+
+### `eidos/suggest-resources`
+
+Propose CRUD groupings that resource inference dropped — a collection POST +
+instance GET with no DELETE-method delete on the instance — as ready-to-paste
+`resource_overrides` entries. It scans for a near-miss delete: a non-DELETE verb
+operation on a sub-path of the instance (e.g. `POST /my/ships/{id}/scrap`,
+operationId `scrap-ship`) or any operation whose operationId leads with a delete
+verb (`scrap`, `retire`, `cancel`, …), and wires it as `delete_operation` with
+`delete_via_action: true`. A `config` declaring the resource (inferred or via
+`resource_overrides`) suppresses its suggestion.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `spec` | `string` | **yes** | OpenAPI spec as a JSON/YAML string. |
+| `config` | `string` | no | Optional `generator.yaml` contents. Resources already declared here are excluded from suggestions, and `use_put_as_create` is honored. |
+
+Returns `valid`, `diagnostics`, and `suggestions` — one per candidate group, each
+with `resource_name`, `collection_path`, `instance_path`, `create_operation`/
+`read_operation`/`update_operation`/`delete_operation`, `delete_via_action`,
+`completeness` (`create+read`, `create+read+update`, `create+read+delete`, …),
+`reason`, and `override_yaml` (a ready-to-paste `resource_overrides:` snippet with
+`generate_resource: true` and the CRUD operation ids). Output is deterministic
+(sorted by resource name).
 
 ## `generator.yaml` reference
 
@@ -1125,11 +1182,14 @@ argument.
 - Polymorphism: top-level `oneOf`/`anyOf` reach the IR as unions (the `dynamic_union` strategy renders a discriminated union as a `SingleNestedAttribute` with a `DiscriminatorValidator`; `split_resources` replaces a top-level polymorphic resource with one resource per variant). Nested `oneOf`/`anyOf` (inside properties or collection elements) render as Dynamic attributes with a fail-loud `warnCompositionNotModeled` warning — the flat Terraform attribute model cannot represent alternatives. The OpenAPI `discriminator` is only a validator: create/update bodies use generic JSON↔model conversion and do not switch on the discriminator property when encoding/decoding a variant, so a discriminated union round-trip is generic JSON, not variant-aware. `EnumValues` is not rendered as a `stringvalidator` (the allowed-keys check is covered by `DiscriminatorValidator`).
 - Security: when an operation declares more than one security requirement (any one suffices), eidos applies AND of all declared schemes and emits a warning — a non-interactive Terraform provider cannot reliably try/fallback across OR alternatives, and the warn-and-AND choice is stricter than OR and fail-loud. The OAuth2 `implicit` flow has no interceptor (interactive browser redirect; deprecated in OAuth 2.1) and `Configure` warns at runtime when configured.
 - Actions have no result surface: terraform-plugin-framework v1.19.0's `action.InvokeResponse` exposes only `Diagnostics` and `SendProgress` (no `Result` field), and `action/schema` attributes cannot be `Computed`, so a generated action that returns a value (e.g. an auth `register` action's token) reports success/failure but does not decode the response body. This is an upstream framework limitation, not a generator gap; no broken code is emitted.
-- `generator.yaml` must not claim one operation in both `resource_overrides` and `action_overrides`: a resource already owns the operation, so the duplicate action override is skipped with a fail-loud `Warning` naming the operation and its method+path (`Action override references an operation already claimed by a resource`).
+- `generator.yaml` must not claim one operation in both `resource_overrides` and a non-resource override (`action_overrides`, `ephemeral_resource_overrides`, `list_resource_overrides`, or `function_overrides`): a resource already owns the operation, so the duplicate override is skipped with a fail-loud `Warning` naming the operation and its method+path (`Action override references an operation already claimed by a resource`, `Ephemeral resource override references …`, `List resource override references …`, `Function override references …`).
 - Terraform State Stores (experimental in Terraform 1.15+) are not generated; eidos tracks the feature and waits for GA.
 - The generated mock server is intentionally a deterministic, single-resource lifecycle prover (hardcoded `example-id`, first-segment routes, no nested routes); the live acceptance tests (`testfixtures/live`, `TF_ACC=1`) run against a local deterministic mock server and never run in CI by design.
 - nested `metadata` wrapper flattening is not implemented: the reference mycloud spec exposes the path parameters (`name`, `workspace`) as top-level properties instead. A future enhancement could extend `ManagedResourceSchema` to flatten a single level of nested `metadata` into top-level path-param attributes.
 - Entities whose create path differs from their read/delete path (e.g. MyCloud dashboards: create on `POST /dashboards/db`, read/delete on `/dashboards/uid/{uid}`) are not inferred as managed resources. They are reachable via an explicit `resource_overrides` entry with `generate_resource: true` plus `create_operation`/`read_operation`/`update_operation`/`delete_operation` (see [§`resource_overrides`](#resource_overrides)). The remaining caveat is a read response that nests the id under a wrapper object (e.g. `dashboard.uid`) rather than at the top level.
+- `eidos/suggest-resources` groups from the raw spec, while the "already claimed" set comes from the config-aware IR preview. `skip_operations`/`include_operations` are applied only in the config-aware pass, so a near-miss delete the user dropped via `skip_operations` may still be proposed; applying the override then yields a resource with a scaffolded delete (the op resolves to nil on the filtered pathOps). The suggestion is advisory — the user judges it — and the dropped op is the contrived case where a user disables the very operation they would use as a delete.
+- `eidos/suggest-resources` parses and transforms the spec twice (raw pathOps for grouping, plus the config-aware pass for the consumed set) because the config-aware pipeline does not expose raw pathOps. This is a cost on very large specs (e.g. Kubernetes), not a correctness issue.
+- `eidos/generate` `verify` runs `go mod tidy` + `go build ./...` in `output` with a 5-minute timeout. It needs the Go toolchain on `PATH` and network access to resolve provider dependencies (terraform-plugin-framework et al.); without them, `verify_ok` is false with the build error in `diagnostics`.
 
 See [`PROJECT_DESIGN.md`](PROJECT_DESIGN.md#11-implementation-status) for a feature-level implementation matrix of what is currently usable versus scaffolded, and
 [`PROJECT_DESIGN.md`](PROJECT_DESIGN.md#23-remaining-gaps--accepted-limitations) §23 for the canonical register of remaining gaps and accepted limitations.

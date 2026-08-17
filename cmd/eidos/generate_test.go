@@ -928,3 +928,120 @@ generation:
 		t.Errorf("dynamic_release.enabled should emit %q, missing from: %v", dynamicReleaseWorkflowPath, set)
 	}
 }
+
+// TestGenerateCommand_DoesNotClobberInputConfig verifies that when --output is
+// the same directory as the input --config, the generator skips emitting its
+// round-trip canonical generator.yaml so the user's hand-written source-of-truth
+// config is preserved byte-for-byte (regression guard for M-74).
+func TestGenerateCommand_DoesNotClobberInputConfig(t *testing.T) {
+	tmp := t.TempDir()
+	spec := writeMinimalSpec(t, tmp)
+	const inputConfig = "provider:\n  name: petapi\n  version: \"0.1.0\"\n# hand-written source of truth\n"
+	configPath := filepath.Join(tmp, "generator.yaml")
+	if err := os.WriteFile(configPath, []byte(inputConfig), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	cmd, out := newTestCommand("generate", "--spec", spec, "--config", configPath, "--output", tmp, "--force")
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("generate failed: %v\noutput:\n%s", err, out.String())
+	}
+
+	got, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("read config: %v", err)
+	}
+	if string(got) != inputConfig {
+		t.Errorf("input generator.yaml was clobbered by the round-trip emission.\nwant:\n%s\ngot:\n%s", inputConfig, string(got))
+	}
+	if !strings.Contains(out.String(), "skipping generated generator.yaml") {
+		t.Errorf("expected skip warning in output, got:\n%s", out.String())
+	}
+	if !strings.Contains(out.String(), configPath) {
+		t.Errorf("expected warning to name the input config path %q, got:\n%s", configPath, out.String())
+	}
+}
+
+// TestGenerateCommand_WritesCanonicalConfigToSeparateOutputDir verifies the
+// non-collision path is preserved: when --output differs from the --config
+// directory, the round-trip canonical generator.yaml is still written into the
+// output directory.
+func TestGenerateCommand_WritesCanonicalConfigToSeparateOutputDir(t *testing.T) {
+	tmp := t.TempDir()
+	spec := writeMinimalSpec(t, tmp)
+	configDir := filepath.Join(tmp, "cfg")
+	if err := os.MkdirAll(configDir, 0o750); err != nil {
+		t.Fatalf("mkdir config dir: %v", err)
+	}
+	configPath := filepath.Join(configDir, "generator.yaml")
+	if err := os.WriteFile(configPath, []byte("provider:\n  name: petapi\n  version: \"0.1.0\"\n"), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	outDir := filepath.Join(tmp, "out")
+
+	cmd, out := newTestCommand("generate", "--spec", spec, "--config", configPath, "--output", outDir, "--force")
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("generate failed: %v\noutput:\n%s", err, out.String())
+	}
+
+	emitted := filepath.Join(outDir, "generator.yaml")
+	data, err := os.ReadFile(emitted)
+	if err != nil {
+		t.Fatalf("expected canonical generator.yaml at %q: %v", emitted, err)
+	}
+	if !strings.Contains(string(data), "provider:") {
+		t.Errorf("expected canonical config to contain provider section, got:\n%s", string(data))
+	}
+	if strings.Contains(out.String(), "skipping generated generator.yaml") {
+		t.Errorf("canonical config should not be skipped when output dir differs from config dir, got:\n%s", out.String())
+	}
+}
+
+// TestConfigOutputCollidesWithInput unit-tests the collision helper directly,
+// covering the relative-path, dot, and empty-argument edge cases.
+func TestConfigOutputCollidesWithInput(t *testing.T) {
+	tmp := t.TempDir()
+	absConfig := filepath.Join(tmp, "generator.yaml")
+
+	cases := []struct {
+		name      string
+		config    string
+		output    string
+		collides  bool
+		wantError bool
+	}{
+		{"exact match", absConfig, tmp, true, false},
+		{"separate dirs", absConfig, filepath.Join(tmp, "out"), false, false},
+		{"empty config", "", tmp, false, false},
+		{"empty output", absConfig, "", false, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := configOutputCollidesWithInput(tc.config, tc.output)
+			if tc.wantError {
+				if err == nil {
+					t.Fatal("expected error, got nil")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if got != tc.collides {
+				t.Errorf("collides = %v, want %v", got, tc.collides)
+			}
+		})
+	}
+
+	// Relative collision: chdir into tmp so "generator.yaml" == <tmp>/generator.yaml.
+	t.Run("relative both in cwd", func(t *testing.T) {
+		t.Chdir(tmp)
+		got, err := configOutputCollidesWithInput("generator.yaml", ".")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !got {
+			t.Errorf("expected collision when config and output both resolve to %q, got false", absConfig)
+		}
+	})
+}

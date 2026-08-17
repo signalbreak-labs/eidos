@@ -634,6 +634,100 @@ func TestValidate_ActionOverrideUnclaimedStillEmitted(t *testing.T) {
 	}
 }
 
+// petsCRUDSpec is the shared fixture for the non-action double-claim tests: a
+// complete /pets resource (POST + GET/{id} + DELETE/{id}) so createPet, getPet,
+// and deletePet are all consumed by the grouped resource. An override of a
+// different kind that targets one of those operations is a double claim.
+// overrideYAML is a snippet appended after the provider block (real newlines,
+// JSON-escaped before splicing so the embedded config string stays valid JSON).
+func petsCRUDSpec(t *testing.T, overrideYAML string) []byte {
+	t.Helper()
+	configYAML := "provider:\n  name: double_claim_api\n  version: \"1.0.0\"\n" + overrideYAML
+	configJSON, err := json.Marshal(configYAML)
+	if err != nil {
+		t.Fatalf("marshal config: %v", err)
+	}
+	tmpl := `{
+		"openapi": "3.0.1",
+		"info": {"title": "Double Claim API", "version": "1.0.0"},
+		"config": __CONFIG__,
+		"paths": {
+			"/pets": {
+				"post": {"operationId": "createPet", "responses": {"201": {"description": "created"}}}
+			},
+			"/pets/{id}": {
+				"get": {"operationId": "getPet", "responses": {"200": {"description": "ok"}}},
+				"delete": {"operationId": "deletePet", "responses": {"204": {"description": "deleted"}}}
+			}
+		}
+	}`
+	return []byte(strings.Replace(tmpl, "__CONFIG__", string(configJSON), 1))
+}
+
+// assertDoubleClaimWarning checks that resp carries exactly one warning naming
+// the kind and operation, and that no construct of the given kind with that
+// source operation was emitted.
+func assertDoubleClaimWarning(t *testing.T, resp ValidateResponse, kind, op, emittedKind string, emitted []string) {
+	t.Helper()
+	if !resp.Valid {
+		t.Fatalf("expected valid response (warning, not error), got diagnostics: %+v", resp.Diagnostics)
+	}
+	if resp.IRPreview == nil {
+		t.Fatal("expected an IR preview")
+	}
+	var saw bool
+	var count int
+	for _, d := range resp.Diagnostics {
+		if d.Severity == diagnostics.Warning.String() && strings.Contains(d.Summary, kind+" override references an operation already claimed by a resource") {
+			count++
+			if strings.Contains(d.Detail, op) {
+				saw = true
+			}
+		}
+	}
+	if !saw {
+		t.Errorf("expected a %q double-claim warning naming %q, got diagnostics: %+v", kind, op, resp.Diagnostics)
+	}
+	if count != 1 {
+		t.Errorf("expected exactly one %q double-claim warning, got %d", kind, count)
+	}
+	for _, name := range emitted {
+		if name == op {
+			t.Errorf("double-claimed operation must not become a %s, got one with SourceOperation %q", emittedKind, name)
+		}
+	}
+}
+
+func TestValidate_EphemeralOverrideDoubleClaimedWarnsAndSkips(t *testing.T) {
+	body := petsCRUDSpec(t, "ephemeral_resource_overrides:\n  - operation: getPet\n    name: get_pet\n")
+	resp := Validate(body)
+	emitted := make([]string, 0, len(resp.IRPreview.EphemeralResources))
+	for _, e := range resp.IRPreview.EphemeralResources {
+		emitted = append(emitted, e.SourceOperation)
+	}
+	assertDoubleClaimWarning(t, resp, "Ephemeral resource", "getPet", "ephemeral resource", emitted)
+}
+
+func TestValidate_FunctionOverrideDoubleClaimedWarnsAndSkips(t *testing.T) {
+	body := petsCRUDSpec(t, "function_overrides:\n  - operation: getPet\n    name: get_pet\n")
+	resp := Validate(body)
+	emitted := make([]string, 0, len(resp.IRPreview.Functions))
+	for _, f := range resp.IRPreview.Functions {
+		emitted = append(emitted, f.SourceOperation)
+	}
+	assertDoubleClaimWarning(t, resp, "Function", "getPet", "function", emitted)
+}
+
+func TestValidate_ListResourceOverrideDoubleClaimedWarnsAndSkips(t *testing.T) {
+	body := petsCRUDSpec(t, "list_resource_overrides:\n  - resource: pets\n    operation: getPet\n")
+	resp := Validate(body)
+	emitted := make([]string, 0, len(resp.IRPreview.ListResources))
+	for _, l := range resp.IRPreview.ListResources {
+		emitted = append(emitted, l.SourceOperation)
+	}
+	assertDoubleClaimWarning(t, resp, "List resource", "getPet", "list resource", emitted)
+}
+
 // TestValidate_MultiBearerSchemesQualifyAuthAttributes asserts that a spec
 // declaring several HTTP bearer schemes yields distinct, scheme-qualified
 // provider-config attributes (e.g. account_token + agent_token) instead of
