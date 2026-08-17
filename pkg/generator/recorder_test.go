@@ -495,6 +495,58 @@ func TestDynamicReleaseOptIn(t *testing.T) {
 	}
 }
 
+// TestOnlyBuildWithDynamicRelease verifies that --only-build honors
+// IncludeDynamicRelease: the regenerate-and-release workflow is emitted in both
+// record and write paths alongside the static scaffolding, and record/write
+// parity holds. Without M-78, OnlyBuild short-circuited before the dynamic
+// workflow and the flag was silently dropped (regression guard for M-78).
+func TestOnlyBuildWithDynamicRelease(t *testing.T) {
+	provider := &ir.ProviderIR{Name: "mycloud", Version: "0.1.0"}
+	cfg := BuildConfigFromIR(provider)
+
+	opts := CollectOptions{OnlyBuild: true, IncludeDynamicRelease: true}
+
+	recordPaths := pathsFrom(CollectFromProviderIR(provider, opts))
+	wf, err := FilesForProviderIR(provider, cfg, opts)
+	if err != nil {
+		t.Fatalf("FilesForProviderIR only-build+dynamic: %v", err)
+	}
+	writePaths := pathsFromFile(wf)
+
+	// The four static scaffolding files are present.
+	for _, p := range []string{"GNUmakefile", ".goreleaser.yml", ".github/workflows/release.yml", "terraform-registry-manifest.json"} {
+		if !contains(recordPaths, p) {
+			t.Errorf("record path missing scaffolding %q: %v", p, recordPaths)
+		}
+		if !contains(writePaths, p) {
+			t.Errorf("write path missing scaffolding %q: %v", p, writePaths)
+		}
+	}
+	// The dynamic workflow is present in both paths.
+	if !contains(recordPaths, dynamicReleaseWorkflowPath) {
+		t.Errorf("record path missing dynamic release workflow under --only-build: %v", recordPaths)
+	}
+	if !contains(writePaths, dynamicReleaseWorkflowPath) {
+		t.Errorf("write path missing dynamic release workflow under --only-build: %v", writePaths)
+	}
+	// Nothing else leaks through: only the scaffolding + the dynamic workflow.
+	if len(recordPaths) != 5 {
+		t.Errorf("record path should emit exactly 5 files, got %d: %v", len(recordPaths), recordPaths)
+	}
+	// record/write parity.
+	recordSet, writeSet := setOf(recordPaths), setOf(writePaths)
+	for p := range recordSet {
+		if _, ok := writeSet[p]; !ok {
+			t.Errorf("recorded but not written under --only-build: %s", p)
+		}
+	}
+	for p := range writeSet {
+		if _, ok := recordSet[p]; !ok {
+			t.Errorf("written but not recorded under --only-build: %s", p)
+		}
+	}
+}
+
 func contains(haystack []string, needle string) bool {
 	for _, s := range haystack {
 		if s == needle {

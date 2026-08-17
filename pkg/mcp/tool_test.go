@@ -860,3 +860,39 @@ func TestMergeConfigIntoSpec_EmptyConfigIsNoop(t *testing.T) {
 		t.Errorf("empty config should return spec unchanged, got %q", string(out))
 	}
 }
+
+// TestGenerateArgs_UnmarshalJSON_DryRunCamelCase verifies that a camelCase
+// "dryRun" key (as LLMs commonly send despite the snake_case schema) sets
+// DryRun, so the tool plans instead of silently writing a provider tree (M-75).
+func TestGenerateArgs_UnmarshalJSON_DryRunCamelCase(t *testing.T) {
+	cases := map[string]bool{
+		`{"spec":"x","dryRun":true}`:                 true,
+		`{"spec":"x","dry_run":true}`:                true,
+		`{"spec":"x","dryRun":false}`:                false,
+		`{"spec":"x","dry_run":false}`:               false,
+		`{"spec":"x"}`:                               false,
+		`{"spec":"x","dryRun":true,"dry_run":false}`: true, // either true wins
+	}
+	for body, want := range cases {
+		var a GenerateArgs
+		if err := json.Unmarshal([]byte(body), &a); err != nil {
+			t.Errorf("Unmarshal(%s): %v", body, err)
+			continue
+		}
+		if a.DryRun != want {
+			t.Errorf("Unmarshal(%s): DryRun = %v, want %v", body, a.DryRun, want)
+		}
+	}
+}
+
+// TestGenerateArgs_UnmarshalJSON_RoundTripsFields verifies the custom
+// UnmarshalJSON still populates the non-DryRun fields.
+func TestGenerateArgs_UnmarshalJSON_RoundTripsFields(t *testing.T) {
+	var a GenerateArgs
+	if err := json.Unmarshal([]byte(`{"spec":"s","config":"c","output":"o","verify":true,"dry_run":true}`), &a); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if a.Spec != "s" || a.Config != "c" || a.Output != "o" || !a.Verify || !a.DryRun {
+		t.Errorf("fields not round-tripped: %+v", a)
+	}
+}

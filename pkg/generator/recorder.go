@@ -168,8 +168,10 @@ type CollectOptions struct {
 	// (go.mod, README.md, main.go, provider/client packages). This supports a
 	// workflow where the provider code is regenerated dynamically in CI and the
 	// release scaffolding is checked in once and managed separately. When true
-	// it overrides every other Include* flag. OnlyBuild does not imply
-	// IncludeBuild; it emits the scaffolding directly.
+	// it overrides every other Include* flag except IncludeDynamicRelease, which
+	// is still honored so --only-build --dynamic-release emits the
+	// regenerate-and-release workflow alongside the static scaffolding (M-78).
+	// OnlyBuild does not imply IncludeBuild; it emits the scaffolding directly.
 	OnlyBuild bool
 	// IncludeDynamicRelease emits the generated
 	// .github/workflows/regenerate-and-release.yml workflow that regenerates the
@@ -213,9 +215,13 @@ func CollectFromProviderIR(provider *ir.ProviderIR, opts CollectOptions) []FileE
 	rec := NewRecorder()
 	// OnlyBuild short-circuits to exactly the build/CI/release scaffolding,
 	// skipping the always-on core files so record and write modes emit the
-	// same four files.
+	// same files. An opted-in dynamic release workflow is still recorded so
+	// --only-build --dynamic-release stays in lockstep with write mode (M-78).
 	if opts.OnlyBuild {
 		collectBuildFiles(rec)
+		if opts.IncludeDynamicRelease {
+			rec.Record(".github/workflows/regenerate-and-release.yml", "dynamic regenerate-and-release workflow (opt-in)")
+		}
 		rec.Sort()
 		return rec.Entries()
 	}
