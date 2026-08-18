@@ -145,6 +145,15 @@ func resourceMatchesOverride(r ir.ResourceIR, override config.ResourceOverride) 
 	return false
 }
 
+// ResourceOverrideMatches reports whether a resource override targets a
+// resource. It mirrors the matching applyResourceOverrides uses, exported so the
+// API layer can re-resolve matched resources after override application (e.g.
+// for the resource_overrides.generate_datasource opt-in) without duplicating the
+// matching rules.
+func ResourceOverrideMatches(r ir.ResourceIR, override config.ResourceOverride) bool {
+	return resourceMatchesOverride(r, override)
+}
+
 // normalizeName trims surrounding whitespace, strips underscores, and lowercases
 // a name so that minor formatting differences (e.g. snake_case vs camelCase or
 // PascalCase) do not prevent a match. It is used for schema/name and operation
@@ -340,6 +349,12 @@ func setAttributeFlag(obj *ir.ObjectSchemaIR, names []string, flag string) error
 	return setAttributeFlagAtPath(obj, names, flag, nil)
 }
 
+// setAttributeFlagAtPath sets the flag on matching attributes at any depth: the
+// object's own attributes and blocks, plus every nested schema reachable from
+// an attribute (nested object/list/set attributes, union variants, conditional
+// and dependent schemas). Without the nested-attribute recursion an override
+// like computed_attributes: ["nested_field"] for a field nested under an object
+// attribute matched nothing and returned nil silently (N-20).
 func setAttributeFlagAtPath(obj *ir.ObjectSchemaIR, names []string, flag string, path []string) error {
 	if obj == nil {
 		return nil
@@ -380,7 +395,79 @@ func setAttributeFlagAtPath(obj *ir.ObjectSchemaIR, names []string, flag string,
 			return err
 		}
 	}
+
+	// Recurse into each attribute's schema so a name nested under an object
+	// attribute, inside a list/set element, or under a union variant is reached.
+	// This mirrors applyWriteOnlyRecursive's traversal (writeonly.go), which
+	// already covers these nodes; the two walks must stay in step so every flag
+	// override and the write-only pass behave identically on nested schemas.
+	for i := range obj.Attributes {
+		if err := setAttributeFlagRecursiveSchema(&obj.Attributes[i].Schema, names, flag, append(path, obj.Attributes[i].Name)); err != nil {
+			return err
+		}
+	}
 	return nil
+}
+
+// setAttributeFlagRecursiveSchema applies setAttributeFlagAtPath to every nested
+// schema node reachable from schema: object schemas (attributes/blocks),
+// collection element types, union variants, and the conditional/dependent/
+// pattern/property-name/unevaluated nodes. It mirrors applyWriteOnlyRecursive so
+// computed/sensitive/force_new overrides reach the same nodes write-only
+// processing does (N-20).
+func setAttributeFlagRecursiveSchema(schema *ir.SchemaIR, names []string, flag string, path []string) error {
+	if schema == nil {
+		return nil
+	}
+
+	if len(schema.Attributes) > 0 || len(schema.Blocks) > 0 {
+		obj := ir.ObjectSchemaIR{
+			Attributes:        schema.Attributes,
+			Blocks:            schema.Blocks,
+			DependentRequired: schema.DependentRequired,
+		}
+		if err := setAttributeFlagAtPath(&obj, names, flag, path); err != nil {
+			return err
+		}
+		schema.Attributes = obj.Attributes
+		schema.Blocks = obj.Blocks
+	}
+
+	// recurse applies setAttributeFlagRecursiveSchema to each child node in turn,
+	// returning the first error. Collecting the reachable children into a slice
+	// keeps the per-node nil checks flat (one loop) instead of a chain of ifs, so
+	// the function stays under the cognitive-complexity budget while covering the
+	// same node set as applyWriteOnlyRecursive (N-20).
+	recurse := func(children ...*ir.SchemaIR) error {
+		for _, c := range children {
+			if c == nil {
+				continue
+			}
+			if err := setAttributeFlagRecursiveSchema(c, names, flag, path); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+
+	var children []*ir.SchemaIR
+	if schema.Collection != nil {
+		children = append(children, &schema.Collection.ElementType)
+	}
+	if schema.Union != nil {
+		for i := range schema.Union.Variants {
+			children = append(children, &schema.Union.Variants[i])
+		}
+	}
+	children = append(children, schema.Not, schema.IfSchema, schema.ThenSchema, schema.ElseSchema)
+	for _, dep := range schema.DependentSchemas {
+		children = append(children, dep)
+	}
+	for _, pp := range schema.PatternProperties {
+		children = append(children, pp)
+	}
+	children = append(children, schema.PropertyNames, schema.UnevaluatedProperties)
+	return recurse(children...)
 }
 
 func attributeNameMatches(attrName, target string) bool {

@@ -14,10 +14,19 @@ import (
 
 // FunctionFile returns the generated internal/provider/function_<name>.go file
 // for a Terraform plugin-framework provider-defined function built from the
-// supplied FunctionIR.
+// supplied FunctionIR. Like every other entity file, it routes AST construction
+// through renderEntitySafely, converting a render panic into an ErrorFile rather
+// than letting it crash the whole eidos generate run (N-23) — the documented
+// contract in harness.go applies to functions too.
 func FunctionFile(fn ir.FunctionIR) File {
 	path := filepath.Join("internal", "provider", fmt.Sprintf("function_%s.go", naming.SnakeCase(fn.Name)))
-	return GoCodeAST(path, generateFunctionFile(fn))
+	file, err := renderEntitySafely(func() (*ast.File, error) {
+		return generateFunctionFile(fn), nil
+	})
+	if err != nil {
+		return ErrorFile(path, err)
+	}
+	return GoCodeAST(path, file)
 }
 
 // FunctionFiles returns the generated function files for every FunctionIR in
@@ -267,6 +276,9 @@ func functionParameterForSchema(name string, s ir.SchemaIR, description, markdow
 			elems = append(elems, astgen.KeyValue("ElementType", functionAttrType(elem)))
 			return astgen.CompositeLit(astgen.QualExpr("function", "MapParameter"), elems...)
 		}
+		// An unknown collection kind falls through to the dynamic default below:
+		// representing the parameter as a typed String would silently mislabel
+		// its shape (N-27).
 	}
 
 	if s.Type != "" {
@@ -282,6 +294,15 @@ func functionParameterForSchema(name string, s ir.SchemaIR, description, markdow
 		case ir.TypeDynamic:
 			return astgen.CompositeLit(astgen.QualExpr("function", "DynamicParameter"), elems...)
 		}
+		// An unknown primitive type falls through to the dynamic default below
+		// (N-27).
+	}
+
+	// Union types (oneOf/anyOf) have no first-class function parameter. Render as
+	// Dynamic so the signature honestly accepts any type instead of silently
+	// degrading the union to String (N-27).
+	if s.Union != nil {
+		return astgen.CompositeLit(astgen.QualExpr("function", "DynamicParameter"), elems...)
 	}
 
 	if isFunctionObjectLike(s) {
@@ -289,11 +310,12 @@ func functionParameterForSchema(name string, s ir.SchemaIR, description, markdow
 		return astgen.CompositeLit(astgen.QualExpr("function", "ObjectParameter"), elems...)
 	}
 
-	// Default to a string parameter when the IR provides no recognizable type
+	// Default to a dynamic parameter when the IR provides no recognizable type
 	// information (empty primitive type, unknown collection kind, or no object
-	// attributes). This keeps generated code compilable while surfacing the
-	// parameter shape; malformed IR should be caught earlier in the pipeline.
-	return astgen.CompositeLit(astgen.QualExpr("function", "StringParameter"), elems...)
+	// attributes). DynamicParameter accepts any value, so the generated function
+	// signature stays honest about the parameter shape rather than silently
+	// degrading an unrecognized shape to String (N-27).
+	return astgen.CompositeLit(astgen.QualExpr("function", "DynamicParameter"), elems...)
 }
 
 // functionReturnExpr returns an ast.Expr for a function.Return value.
@@ -308,6 +330,9 @@ func functionReturnExpr(s ir.SchemaIR) ast.Expr {
 		case ir.Map:
 			return astgen.CompositeLit(astgen.QualExpr("function", "MapReturn"), astgen.KeyValue("ElementType", functionAttrType(elem)))
 		}
+		// An unknown collection kind falls through to the dynamic default below:
+		// representing the return as a typed String would silently mislabel its
+		// shape (N-27).
 	}
 
 	if s.Type != "" {
@@ -323,6 +348,15 @@ func functionReturnExpr(s ir.SchemaIR) ast.Expr {
 		case ir.TypeDynamic:
 			return astgen.CompositeLit(astgen.QualExpr("function", "DynamicReturn"))
 		}
+		// An unknown primitive type falls through to the dynamic default below
+		// (N-27).
+	}
+
+	// Union types (oneOf/anyOf) have no first-class function return. Render as
+	// Dynamic so the signature honestly accepts any result type instead of
+	// silently degrading the union to String (N-27).
+	if s.Union != nil {
+		return astgen.CompositeLit(astgen.QualExpr("function", "DynamicReturn"))
 	}
 
 	if isFunctionObjectLike(s) {
@@ -332,11 +366,12 @@ func functionReturnExpr(s ir.SchemaIR) ast.Expr {
 		)
 	}
 
-	// Default to a string return when the IR provides no recognizable type
+	// Default to a dynamic return when the IR provides no recognizable type
 	// information (empty primitive type, unknown collection kind, or no object
-	// attributes). This keeps generated code compilable; malformed IR should be
-	// caught earlier in the pipeline.
-	return astgen.CompositeLit(astgen.QualExpr("function", "StringReturn"))
+	// attributes). DynamicReturn accepts any value, so the generated function
+	// signature stays honest about the return shape rather than silently
+	// degrading an unrecognized shape to String (N-27).
+	return astgen.CompositeLit(astgen.QualExpr("function", "DynamicReturn"))
 }
 
 // functionAttrType maps an IR schema to its Terraform Plugin Framework attr.Type.
@@ -360,6 +395,14 @@ func functionAttrType(s ir.SchemaIR) ast.Expr {
 				astgen.KeyValue("ElemType", functionAttrType(elem)),
 			)
 		}
+		// An unknown collection kind falls through to the dynamic default below
+		// (N-27).
+	}
+
+	// Union types have no first-class attr.Type; DynamicType is the honest
+	// representation of a value that may be any variant (N-27).
+	if s.Union != nil {
+		return astgen.QualExpr("types", "DynamicType")
 	}
 
 	if isFunctionObjectLike(s) {
@@ -382,7 +425,9 @@ func functionAttrType(s ir.SchemaIR) ast.Expr {
 		return astgen.QualExpr("types", "DynamicType")
 	}
 
-	return astgen.QualExpr("types", "StringType")
+	// Unknown primitive type: DynamicType accepts any value, keeping the element
+	// type honest instead of silently degrading to StringType (N-27).
+	return astgen.QualExpr("types", "DynamicType")
 }
 
 // functionAttributeTypesMap builds map[string]attr.Type{...} from a schema's

@@ -3,13 +3,16 @@ package generator
 import (
 	"bytes"
 	"context"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/signalbreak-labs/eidos/pkg/generator/internal/schema"
 	"github.com/signalbreak-labs/eidos/pkg/ir"
 )
 
@@ -456,34 +459,235 @@ func TestProviderFile_RejectsUnknownNestingMode(t *testing.T) {
 }
 
 // TestProviderFile_RecoversValidatorPanic locks in the M-56 fix: a hostile
-// provider config attribute that triggers a renderer panic (a fractional
-// exclusiveMinimum on an integer schema panics in validateIntBound) must
-// surface as a generation error, not crash the process. Before the recover
+// provider config attribute that triggers a validator-builder panic (a
+// fractional exclusiveMinimum on an integer schema panics in validateIntBound)
+// must surface as a generation error, not crash the process. Before the recover
 // wrapper, FilesForProviderIR could terminate the generator on such IR.
+//
+// N-31 tightens the classification: a panic wrapping
+// schema.ErrInvalidValidatorConstraint is surfaced as an "invalid validator
+// constraint" (a spec problem, e.g. multipleOf: 2.5 on an integer or an
+// RE2-invalid patternProperties pattern) rather than a generic "renderer panic"
+// that is indistinguishable from a genuine generator bug, and errors.Is
+// matches the sentinel through the render boundary.
 func TestProviderFile_RecoversValidatorPanic(t *testing.T) {
 	frac := 0.5
-	pir := sampleProviderIR()
-	pir.ConfigSchema.Attributes = append(pir.ConfigSchema.Attributes, ir.AttributeIR{
-		Name:     "count",
-		Optional: true,
-		Schema: ir.SchemaIR{
-			Type:             ir.TypeInt,
-			ExclusiveMinimum: &frac,
-		},
-	})
-
-	// ProviderFile must not panic; it must return an error mentioning the panic.
-	defer func() {
-		if rec := recover(); rec != nil {
-			t.Fatalf("ProviderFile panicked instead of returning an error: %v", rec)
-		}
-	}()
-	_, err := ProviderFile(pir)
-	if err == nil {
-		t.Fatal("expected error for fractional integer exclusiveMinimum, got nil")
+	patternProperties := map[string]*ir.SchemaIR{
+		"(": {Type: ir.TypeString}, // invalid RE2: unclosed group
 	}
-	if !strings.Contains(err.Error(), "renderer panic") {
-		t.Fatalf("expected error to mention renderer panic, got: %v", err)
+	hostile := []struct {
+		name string
+		attr ir.AttributeIR
+	}{
+		{
+			name: "fractional integer exclusiveMinimum",
+			attr: ir.AttributeIR{
+				Name:     "count",
+				Optional: true,
+				Schema: ir.SchemaIR{
+					Type:             ir.TypeInt,
+					ExclusiveMinimum: &frac,
+				},
+			},
+		},
+		{
+			name: "RE2-invalid patternProperties pattern",
+			attr: ir.AttributeIR{
+				Name:     "labels",
+				Optional: true,
+				Schema: ir.SchemaIR{
+					Collection: &ir.CollectionType{
+						Kind:        ir.Map,
+						ElementType: ir.SchemaIR{Type: ir.TypeString},
+					},
+					PatternProperties: patternProperties,
+				},
+			},
+		},
+	}
+
+	for _, tc := range hostile {
+		t.Run(tc.name, func(t *testing.T) {
+			pir := sampleProviderIR()
+			pir.ConfigSchema.Attributes = append(pir.ConfigSchema.Attributes, tc.attr)
+
+			// ProviderFile must not panic; it must return an error that is
+			// classified as an invalid spec constraint, not a renderer bug.
+			defer func() {
+				if rec := recover(); rec != nil {
+					t.Fatalf("ProviderFile panicked instead of returning an error: %v", rec)
+				}
+			}()
+			_, err := ProviderFile(pir)
+			if err == nil {
+				t.Fatal("expected error for hostile validator constraint, got nil")
+			}
+			if !strings.Contains(err.Error(), "invalid validator constraint") {
+				t.Fatalf("expected error to mention invalid validator constraint, got: %v", err)
+			}
+			if strings.Contains(err.Error(), "renderer panic") {
+				t.Fatalf("expected error NOT to be mislabeled as a renderer panic, got: %v", err)
+			}
+			if !errors.Is(err, schema.ErrInvalidValidatorConstraint) {
+				t.Fatalf("expected %v to wrap schema.ErrInvalidValidatorConstraint (N-31)", err)
+			}
+		})
+	}
+}
+
+// TestProviderFile_ValidatorImportRegistered is a regression test for M-8: the
+// provider file must register the schema/validator import exactly when a
+// provider config attribute or block emits a Validators field
+// (validator.Int64ExclusiveMinimumValidator etc.). Pre-fix, the import gate
+// functions existed but were never called from generateProviderFile, so an
+// integral exclusiveMinimum on a config attribute rendered the validator
+// reference with no import and the generated provider did not compile.
+func TestProviderFile_ValidatorImportRegistered(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping network-bound compile test in -short mode")
+	}
+	skipIfNetworkRestricted(t)
+
+	exclMin := float64(1)
+	pir := ir.ProviderIR{
+		Name:        "mycloud",
+		TypeName:    "mycloud",
+		Description: "Generated provider for MyCloud.",
+		ConfigSchema: ir.ObjectSchemaIR{
+			Attributes: []ir.AttributeIR{
+				{
+					Name:     "count",
+					Optional: true,
+					Schema: ir.SchemaIR{
+						Type:             ir.TypeInt,
+						ExclusiveMinimum: &exclMin,
+					},
+				},
+			},
+		},
+	}
+
+	pf, err := ProviderFile(pir)
+	if err != nil {
+		t.Fatalf("ProviderFile() error = %v", err)
+	}
+	var buf bytes.Buffer
+	if err := pf.Render(&buf); err != nil {
+		t.Fatalf("Render() error = %v", err)
+	}
+	got := buf.String()
+
+	if !strings.Contains(got, `"github.com/hashicorp/terraform-plugin-framework/schema/validator"`) {
+		t.Errorf("provider file with constrained config attribute must import schema/validator (M-8):\n%s", got)
+	}
+	// The validator package qualifier is used in the Validators slice type
+	// ([]validator.Int64), not on the constructor call itself.
+	if !strings.Contains(got, "[]validator.Int64{Int64ExclusiveMinimumValidator(1)}") {
+		t.Errorf("provider file with constrained config attribute must reference the validator package in a Validators field:\n%s", got)
+	}
+
+	// The generated module must build cleanly (import present and used).
+	tmp := t.TempDir()
+	cfg := BuildConfig{ProviderName: pir.Name, Namespace: pir.Name}
+	h := Harness{OutputDir: tmp}
+	files := append(BuildFiles(cfg), pf)
+	// The custom validators file defines the referenced validator constructor.
+	files = append(files, ValidatorsFile(pir))
+	if err := h.Generate(files); err != nil {
+		t.Fatalf("Generate() error = %v", err)
+	}
+	ctx, cancel := contextWithTimeout(t, 5*time.Minute)
+	defer cancel()
+	tidyCmd := exec.CommandContext(ctx, "go", "mod", "tidy")
+	tidyCmd.Dir = tmp
+	if out, err := tidyCmd.CombinedOutput(); err != nil {
+		t.Fatalf("go mod tidy failed: %v\n%s", err, out)
+	}
+	cmd := exec.CommandContext(ctx, "go", "build", "./internal/provider")
+	cmd.Dir = tmp
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("go build failed for provider with validator import (M-8 regression): %v\n%s", err, out)
+	}
+}
+
+// TestProviderFile_DigitLeadingNamesCompile is a regression test for M-10:
+// digit-leading provider/resource/data source/function names must produce valid
+// Go identifiers. Pre-fix, PascalCase("2fa") == "2fa" was used un-sanitized for
+// struct names, so Name: "2fa" rendered "2faProvider"/"2faResource" and the
+// generated provider failed to parse ("expected ')', found faProvider").
+func TestProviderFile_DigitLeadingNamesCompile(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping network-bound compile test in -short mode")
+	}
+	skipIfNetworkRestricted(t)
+
+	pir := ir.ProviderIR{
+		Name:        "2fa",
+		TypeName:    "2fa",
+		Description: "Generated provider for 2FA.",
+		Resources: []ir.ResourceIR{
+			{Name: "2fa_token", TypeName: "2fa_token"},
+		},
+		DataSources: []ir.DataSourceIR{
+			{Name: "2fa_tokens", TypeName: "2fa_tokens"},
+		},
+	}
+
+	pf, err := ProviderFile(pir)
+	if err != nil {
+		t.Fatalf("ProviderFile() error = %v", err)
+	}
+	var buf bytes.Buffer
+	if err := pf.Render(&buf); err != nil {
+		t.Fatalf("Render() error = %v", err)
+	}
+	got := buf.String()
+	// The sanitized struct names must appear and the raw digit-leading forms must
+	// not (they are invalid Go identifiers).
+	for _, want := range []string{
+		"X2faProvider",
+		"X2faProviderModel",
+		"X2faTokenResource",
+		"X2faTokensDataSource",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("generated provider missing sanitized struct name %q (M-10):\n%s", want, got)
+		}
+	}
+	// Word-boundary match so the sanitized X2faProvider does not false-positive:
+	// the boundary between the X and the 2 is not a word boundary, so the bare
+	// invalid identifier 2faProvider (not preceded by a letter/digit) must not
+	// appear anywhere in the file.
+	for _, bad := range []string{`\b2faProvider\b`, `\b2faTokenResource\b`, `\b2faTokensDataSource\b`} {
+		if regexp.MustCompile(bad).MatchString(got) {
+			t.Errorf("generated provider must not contain the invalid identifier %q (M-10):\n%s", bad, got)
+		}
+	}
+
+	// The generated module must build cleanly: provider + resource files, where
+	// the digit-leading names flow into struct, model, and file-path derivation.
+	resourceOnly := ir.ProviderIR{
+		Name:        "2fa",
+		TypeName:    "2fa",
+		Description: "Generated provider for 2FA.",
+		Resources: []ir.ResourceIR{
+			{Name: "2fa_token", TypeName: "2fa_token"},
+		},
+	}
+	tmp := generateResourceModule(t, resourceOnly)
+	ctx, cancel := contextWithTimeout(t, 5*time.Minute)
+	defer cancel()
+	tidyCmd := exec.CommandContext(ctx, "go", "mod", "tidy")
+	tidyCmd.Dir = tmp
+	if out, err := tidyCmd.CombinedOutput(); err != nil {
+		t.Fatalf("go mod tidy failed: %v\n%s", err, out)
+	}
+	cmd := exec.CommandContext(ctx, "go", "build", "./internal/provider")
+	cmd.Dir = tmp
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("go build failed for digit-leading provider/resource names (M-10 regression): %v\n%s", err, out)
 	}
 }
 

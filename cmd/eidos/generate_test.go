@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -10,7 +11,38 @@ import (
 	"strings"
 	"syscall"
 	"testing"
+
+	"github.com/spf13/cobra"
+
+	"github.com/signalbreak-labs/eidos/pkg/config"
 )
+
+// TestRecoverCommand covers N-65: a panic in a command's RunE body is converted
+// into a returned error (so Cobra exits non-zero) and logged to stderr, rather
+// than crashing the process. Non-panicking runs pass their error through.
+func TestRecoverCommand(t *testing.T) {
+	t.Run("panic becomes error", func(t *testing.T) {
+		cmd := &cobra.Command{Use: "test-cmd"}
+		var stderr bytes.Buffer
+		cmd.SetErr(&stderr)
+		err := recoverCommand(cmd, func() error {
+			panic("boom")
+		})
+		if err == nil || !strings.Contains(err.Error(), "boom") {
+			t.Fatalf("expected panic-converted error, got %v", err)
+		}
+		if !strings.Contains(stderr.String(), "internal panic") {
+			t.Errorf("expected stderr to log the panic, got %q", stderr.String())
+		}
+	})
+	t.Run("normal error passes through", func(t *testing.T) {
+		cmd := &cobra.Command{Use: "test-cmd"}
+		want := fmt.Errorf("ordinary failure")
+		if got := recoverCommand(cmd, func() error { return want }); !errors.Is(got, want) {
+			t.Fatalf("expected the original error, got %v", got)
+		}
+	})
+}
 
 func TestGenerateCommand_NoDryRun(t *testing.T) {
 	tmp := t.TempDir()
@@ -884,6 +916,41 @@ func TestGenerateCommand_OnlyBuildAndSkipBuildMutuallyExclusive(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "mutually exclusive") {
 		t.Errorf("expected mutually-exclusive error, got %q", err.Error())
+	}
+}
+
+// TestCollectOptionsFor_SignReleaseOptOutViaOnlyBuild asserts sign_release:
+// false is threaded through the --only-build path (N-39). Before the fix, the
+// only-build branch rebuilt a fresh CollectOptions without SignRelease, so the
+// explicit opt-out was silently dropped and FilesForProviderIR defaulted the
+// release scaffolding back to signed.
+func TestCollectOptionsFor_SignReleaseOptOutViaOnlyBuild(t *testing.T) {
+	cfg, err := config.LoadBytes([]byte(`provider:
+  name: test-api
+  version: 0.1.0
+sign_release: false
+`))
+	if err != nil {
+		t.Fatalf("LoadBytes: %v", err)
+	}
+	opts := collectOptionsFor(cfg, &generateFlags{onlyBuild: true})
+	if !opts.OnlyBuild {
+		t.Fatal("OnlyBuild = false, want true")
+	}
+	if opts.SignRelease == nil {
+		t.Fatal("SignRelease = nil, want non-nil (sign_release: false must thread through --only-build)")
+	}
+	if *opts.SignRelease {
+		t.Fatal("SignRelease = true, want false (sign_release: false opt-out was dropped)")
+	}
+
+	// The non-only-build path keeps threading the opt-out too.
+	opts = collectOptionsFor(cfg, &generateFlags{})
+	if opts.OnlyBuild {
+		t.Fatal("OnlyBuild = true, want false")
+	}
+	if opts.SignRelease == nil || *opts.SignRelease {
+		t.Fatalf("SignRelease = %v, want non-nil false", opts.SignRelease)
 	}
 }
 

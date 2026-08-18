@@ -1,6 +1,7 @@
 package schema
 
 import (
+	"errors"
 	"fmt"
 	"go/ast"
 	"go/token"
@@ -1233,22 +1234,35 @@ func MapValidatorExprs(s ir.SchemaIR) []ast.Expr {
 	return exprs
 }
 
+// ErrInvalidValidatorConstraint is the sentinel wrapped by validator-builder
+// panics that stem from spec constraints the generator cannot render honestly —
+// a fractional bound on an integer schema (`multipleOf: 2.5` is legal JSON
+// Schema) or a patternProperties regular expression that is not a valid RE2
+// (ECMA-262 patterns reach generation unvalidated). The render-recovery
+// wrappers recognize it and label the failure as an invalid spec constraint
+// with its location-agnostic detail instead of a generic "renderer panic" that
+// is indistinguishable from a genuine generator bug (N-31).
+var ErrInvalidValidatorConstraint = errors.New("invalid validator constraint")
+
 // validateIntBound ensures a numeric bound intended for an integer validator is
 // an integral float, preventing silent truncation of fractional JSON Schema
-// values.
+// values. The panic wraps ErrInvalidValidatorConstraint so the recovery layer
+// can surface it as a spec-constraint failure rather than a renderer bug.
 func validateIntBound(name string, v float64) {
 	if v != math.Trunc(v) {
-		panic(fmt.Sprintf("non-integer bound %v for %s on integer schema would be silently truncated", v, name))
+		panic(fmt.Errorf("%w: non-integer bound %v for %s on integer schema would be silently truncated", ErrInvalidValidatorConstraint, v, name))
 	}
 }
 
 // validatePatternProperties compiles each patternProperties regular expression
 // at generation time so that invalid patterns are surfaced before provider
-// initialization instead of panicking at runtime.
+// initialization instead of panicking at runtime. The panic wraps
+// ErrInvalidValidatorConstraint so the recovery layer classifies it as a
+// spec-constraint failure rather than a renderer bug.
 func validatePatternProperties(patterns map[string]*ir.SchemaIR) {
 	for pattern := range patterns {
 		if _, err := regexp.Compile(pattern); err != nil {
-			panic(fmt.Sprintf("invalid patternProperties pattern %q: %v", pattern, err))
+			panic(fmt.Errorf("%w: invalid patternProperties pattern %q: %w", ErrInvalidValidatorConstraint, pattern, err))
 		}
 	}
 }

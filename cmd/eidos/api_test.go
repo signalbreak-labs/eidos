@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -158,6 +159,41 @@ func TestAPICommand_InvalidPort(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestAPICommand_IPv6HostBinds covers N-64: `--host ::1` must bind via
+// net.JoinHostPort ("[::1]:<port>") instead of producing the old "::1:<port>"
+// string that net.Listen rejected with "too many colons in address". On hosts
+// without IPv6 the bind fails with an address-family error, which is accepted;
+// the regression being guarded is the malformed address string.
+func TestAPICommand_IPv6HostBinds(t *testing.T) {
+	ln, err := (&net.ListenConfig{}).Listen(context.Background(), "tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Skipf("no free port available: %v", err)
+	}
+	port := ln.Addr().(*net.TCPAddr).Port
+	if err := ln.Close(); err != nil {
+		t.Fatalf("close port probe: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+	cmd, _ := newTestCommand("api", "--host", "::1", "--port", strconv.Itoa(port))
+	cmd.SetContext(ctx)
+
+	err = cmd.Execute()
+	if err == nil {
+		return // bound and shut down cleanly
+	}
+	if strings.Contains(err.Error(), "too many colons") {
+		t.Fatalf("IPv6 host produced the old malformed-address error: %v", err)
+	}
+	if strings.Contains(err.Error(), "address family") || strings.Contains(err.Error(), "invalid argument") ||
+		strings.Contains(err.Error(), "no suitable address") {
+		t.Logf("IPv6 unavailable on this host; bind failed as expected: %v", err)
+		return
+	}
+	t.Fatalf("unexpected error binding ::1: %v", err)
 }
 
 func TestServeGracefully(t *testing.T) {

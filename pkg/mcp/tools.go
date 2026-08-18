@@ -1,6 +1,7 @@
 package mcp
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -118,7 +119,7 @@ func InspectTool() *sdkmcp.Tool {
 // HandleInspect implements eidos/inspect.
 func HandleInspect(ctx context.Context, _ *sdkmcp.CallToolRequest, args InspectArgs) (res *sdkmcp.CallToolResult, out InspectResult, err error) {
 	defer recoverHandler("eidos/inspect", inspectErrorResult, &res, &out)
-	specBytes, err := normalizeSpec(args.Spec)
+	specBytes, err := normalizeSpec(ctx, args.Spec)
 	if err != nil {
 		out = inspectErrorResult(err)
 		res, err = marshalToolResult(out)
@@ -129,7 +130,7 @@ func HandleInspect(ctx context.Context, _ *sdkmcp.CallToolRequest, args InspectA
 	// reports a spec-only view and silently ignores the declared `config`
 	// input (M-73). The config may be inline content, a local file path, or a
 	// file:// URL (M-76).
-	configYAML, err := normalizeConfig(args.Config)
+	configYAML, err := normalizeConfig(ctx, args.Config)
 	if err != nil {
 		out = inspectErrorResult(err)
 		res, err = marshalToolResult(out)
@@ -184,6 +185,12 @@ type GenerateArgs struct {
 	// `go build ./...` in the output directory after writing and reports whether
 	// the generated provider compiles. Ignored in dry-run mode.
 	Verify bool `json:"verify,omitempty"`
+	// Force, when true and output is set (non-dry-run), overwrites existing files
+	// in the output directory. Defaults to false so a write never silently
+	// clobbers a hand-edited provider directory — mirroring the CLI's --force
+	// (N-52). Without it, a write that would overwrite existing files fails loud
+	// with the same refusal as the CLI.
+	Force bool `json:"force,omitempty"`
 }
 
 // UnmarshalJSON accepts both the schema's snake_case "dry_run" key and the
@@ -199,6 +206,7 @@ func (a *GenerateArgs) UnmarshalJSON(data []byte) error {
 		DryRun      bool   `json:"dry_run,omitempty"`
 		DryRunCamel bool   `json:"dryRun,omitempty"`
 		Verify      bool   `json:"verify,omitempty"`
+		Force       bool   `json:"force,omitempty"`
 	}
 	if err := json.Unmarshal(data, &raw); err != nil {
 		return err
@@ -208,6 +216,7 @@ func (a *GenerateArgs) UnmarshalJSON(data []byte) error {
 	a.Output = raw.Output
 	a.DryRun = raw.DryRun || raw.DryRunCamel
 	a.Verify = raw.Verify
+	a.Force = raw.Force
 	return nil
 }
 
@@ -245,7 +254,8 @@ func GenerateTool() *sdkmcp.Tool {
 				"config":  {Type: "string", Description: "Optional generator.yaml as inline YAML/JSON content, a local file path, or a file:// URL. When set, overrides shape the generated provider and summaries."},
 				"output":  {Type: "string", Description: "Optional directory to write the generated provider to"},
 				"dry_run": {Type: "boolean", Description: "Collect and return the planned file list without writing. When output is set, also reports would-overwrite and stale files."},
-				"verify":  {Type: "boolean", Description: "After writing (non-dry-run), run `go build ./...` in output and report whether the generated provider compiles."},
+				"verify":  {Type: "boolean", Description: "After writing (non-dry-run), run `go build ./...` in output and report whether the generated provider compiles. Verify runs synchronously inside the tool call and is bounded by a 5-minute timeout; the MCP server serializes handler invocation, so no other tool call is serviced while it runs (N-61)."},
+				"force":   {Type: "boolean", Description: "Overwrite existing files in output (default false). Without force, a write that would overwrite an existing file fails with a diagnostic, like the CLI's --force."},
 			},
 			Required: []string{"spec"},
 		},
@@ -273,7 +283,7 @@ func GenerateTool() *sdkmcp.Tool {
 // HandleGenerate implements eidos/generate.
 func HandleGenerate(ctx context.Context, _ *sdkmcp.CallToolRequest, args GenerateArgs) (res *sdkmcp.CallToolResult, out GenerateResult, err error) {
 	defer recoverHandler("eidos/generate", generateErrorResult, &res, &out)
-	specBytes, err := normalizeSpec(args.Spec)
+	specBytes, err := normalizeSpec(ctx, args.Spec)
 	if err != nil {
 		out = generateErrorResult(err)
 		res, err = marshalToolResult(out)
@@ -283,7 +293,7 @@ func HandleGenerate(ctx context.Context, _ *sdkmcp.CallToolRequest, args Generat
 	// written provider reflect overrides, not just spec-only inference (M-73).
 	// The config may be inline content, a local file path, or a file:// URL
 	// (M-76).
-	configYAML, err := normalizeConfig(args.Config)
+	configYAML, err := normalizeConfig(ctx, args.Config)
 	if err != nil {
 		out = generateErrorResult(err)
 		res, err = marshalToolResult(out)
@@ -328,6 +338,19 @@ func HandleGenerate(ctx context.Context, _ *sdkmcp.CallToolRequest, args Generat
 		return res, out, err
 	}
 
+	if !args.DryRun && output == "" {
+		// Fail loud when the caller forgot both flags, mirroring the CLI's
+		// "--output is required for full provider generation" (N-51). A silent
+		// success with file_count: 0 reads as "nothing to generate" and the
+		// provider never reaches disk.
+		result.Diagnostics = append(result.Diagnostics, api.DiagnosticJSON{
+			Severity: "error", Summary: "Neither dry_run nor output was set",
+			Detail: "eidos/generate requires either dry_run (plan-only) or output (a directory to write the provider to); pass output to generate files, or dry_run to preview them",
+		})
+		out = result
+		res, err = marshalToolResult(result)
+		return res, out, err
+	}
 	if args.DryRun {
 		// Record-only: collect the planned file list without touching disk.
 		entries, runErr := generator.Run(resp.IRPreview, generator.Options{
@@ -354,7 +377,7 @@ func HandleGenerate(ctx context.Context, _ *sdkmcp.CallToolRequest, args Generat
 			}
 		}
 	} else if output != "" {
-		entries, runErr := writeProvider(output, resp.IRPreview, genOpts)
+		entries, runErr := writeProvider(output, resp.IRPreview, genOpts, args.Force)
 		if runErr != nil {
 			result.Diagnostics = append(result.Diagnostics, api.DiagnosticJSON{
 				Severity: "error", Summary: "Provider generation failed", Detail: runErr.Error(),
@@ -374,6 +397,11 @@ func HandleGenerate(ctx context.Context, _ *sdkmcp.CallToolRequest, args Generat
 				result.StaleFiles = stale
 			}
 			if args.Verify {
+				// runVerify blocks until `go mod tidy` + `go build ./...` finish
+				// (up to the 5-minute timeout). The MCP SDK invokes handlers
+				// sequentially per connection, so while this runs no other tool
+				// call is serviced on the same connection — callers should treat
+				// verify as an explicitly-slow operation (N-61).
 				ok, vOut := runVerify(ctx, output)
 				result.VerifyOK = ok
 				result.VerifyOutput = truncateForJSON(vOut, maxVerifyOutput)
@@ -444,7 +472,7 @@ func ValidateSchemasTool() *sdkmcp.Tool {
 // HandleValidateSchemas implements eidos/validate-schemas.
 func HandleValidateSchemas(ctx context.Context, _ *sdkmcp.CallToolRequest, args ValidateSchemasArgs) (res *sdkmcp.CallToolResult, out ValidateSchemasResult, err error) {
 	defer recoverHandler("eidos/validate-schemas", validateSchemasErrorResult, &res, &out)
-	specBytes, err := normalizeSpec(args.Spec)
+	specBytes, err := normalizeSpec(ctx, args.Spec)
 	if err != nil {
 		out = validateSchemasErrorResult(err)
 		res, err = marshalToolResult(out)
@@ -454,7 +482,7 @@ func HandleValidateSchemas(ctx context.Context, _ *sdkmcp.CallToolRequest, args 
 	// the override-shaped IR (e.g. resources promoted via generate_resource),
 	// not just spec-only inference (M-73). The config may be inline content, a
 	// local file path, or a file:// URL (M-76).
-	configYAML, err := normalizeConfig(args.Config)
+	configYAML, err := normalizeConfig(ctx, args.Config)
 	if err != nil {
 		out = validateSchemasErrorResult(err)
 		res, err = marshalToolResult(out)
@@ -541,7 +569,7 @@ func OverridePreviewTool() *sdkmcp.Tool {
 // HandleOverridePreview implements eidos/override-preview.
 func HandleOverridePreview(ctx context.Context, _ *sdkmcp.CallToolRequest, args OverridePreviewArgs) (res *sdkmcp.CallToolResult, out OverridePreviewResult, err error) {
 	defer recoverHandler("eidos/override-preview", overridePreviewErrorResult, &res, &out)
-	specBytes, err := normalizeSpec(args.Spec)
+	specBytes, err := normalizeSpec(ctx, args.Spec)
 	if err != nil {
 		out = overridePreviewErrorResult(err)
 		res, err = marshalToolResult(out)
@@ -550,7 +578,7 @@ func HandleOverridePreview(ctx context.Context, _ *sdkmcp.CallToolRequest, args 
 	// The config may be inline content, a local file path, or a file:// URL
 	// (M-76). It is required for this tool; normalizeConfig resolves a
 	// reference and otherwise returns the inline body unchanged.
-	configYAML, err := normalizeConfig(args.Config)
+	configYAML, err := normalizeConfig(ctx, args.Config)
 	if err != nil {
 		out = overridePreviewErrorResult(err)
 		res, err = marshalToolResult(out)
@@ -770,6 +798,16 @@ func reportOverrides(configYAML string, preview *ir.ProviderIR) ([]OverrideRepor
 		})
 		return reports, diags
 	}
+	// Surface config validation warnings (both schema and operation set on an
+	// override, env-var collisions). cfg.Warnings carries yaml:"-" so the
+	// generator.yaml round-trip cannot hold them; without this they would be
+	// written by config.Validate and immediately lost (M-16).
+	for _, w := range cfg.Warnings {
+		diags = append(diags, api.DiagnosticJSON{
+			Severity: "warning",
+			Summary:  w,
+		})
+	}
 	matched := func(ro config.ResourceOverride) bool {
 		for _, r := range preview.Resources {
 			if ro.Operation != "" && strings.EqualFold(strings.ReplaceAll(r.SourceOperation, "_", ""), strings.ReplaceAll(ro.Operation, "_", "")) {
@@ -800,23 +838,46 @@ func mergeConfigIntoSpec(specBytes []byte, configYAML string) ([]byte, error) {
 	if strings.TrimSpace(configYAML) == "" {
 		return specBytes, nil
 	}
-	var doc map[string]any
-	if err := json.Unmarshal(specBytes, &doc); err != nil {
-		if err2 := yaml.Unmarshal(specBytes, &doc); err2 != nil {
-			return nil, fmt.Errorf("spec must be JSON or YAML: %w", errors.Join(err, err2))
-		}
+	doc, err := decodeSpecMap(specBytes)
+	if err != nil {
+		return nil, err
 	}
 	doc["config"] = configYAML
 	return json.Marshal(doc)
 }
 
+// decodeSpecMap decodes a spec into a generic map, preserving integer precision:
+// json.Decoder with UseNumber keeps integral values as json.Number so an int64
+// bound like "maximum": 9223372036854775807 survives the config-merge round-trip
+// instead of silently degrading to float64 (which rounds past 2^53). The YAML
+// fallback is unaffected — yaml.v3 already decodes integers as int64 (N-50).
+func decodeSpecMap(data []byte) (map[string]any, error) {
+	dec := json.NewDecoder(bytes.NewReader(data))
+	dec.UseNumber()
+	var doc map[string]any
+	if err := dec.Decode(&doc); err != nil {
+		var out map[string]any
+		if err2 := yaml.Unmarshal(data, &out); err2 != nil {
+			return nil, fmt.Errorf("spec must be JSON or YAML: %w", errors.Join(err, err2))
+		}
+		return out, nil
+	}
+	// json.Decoder decodes a single value; reject trailing content so this path
+	// rejects malformed input the same way json.Unmarshal did.
+	if dec.More() {
+		return nil, fmt.Errorf("spec must be a single JSON or YAML document")
+	}
+	return doc, nil
+}
+
 // generateCollectOptions builds the CollectOptions for an MCP generate run. It
 // mirrors the CLI's collectOptionsFor so an MCP generate produces the same
 // complete provider (docs, examples, Go coverage tests, build scaffolding) as
-// the CLI, honoring the config's generation.skip_* toggles. The canonical
-// generator.yaml is not emitted (IncludeConfig=false): the MCP caller already
-// supplies the config, and writing it back risks clobbering a hand-written
-// source-of-truth config (M-81, cf. the CLI's M-74 collision guard).
+// the CLI, honoring the config's generation.skip_* toggles and the
+// sign_release opt-out (N-39). The canonical generator.yaml is not emitted
+// (IncludeConfig=false): the MCP caller already supplies the config, and
+// writing it back risks clobbering a hand-written source-of-truth config
+// (M-81, cf. the CLI's M-74 collision guard).
 func generateCollectOptions(configYAML string) generator.CollectOptions {
 	opts := generator.DefaultCollectOptions()
 	if strings.TrimSpace(configYAML) != "" {
@@ -830,6 +891,9 @@ func generateCollectOptions(configYAML string) generator.CollectOptions {
 			if cfg.Generation.SkipBuild {
 				opts.IncludeBuild = false
 			}
+			if cfg.SignRelease != nil {
+				opts.SignRelease = cfg.SignRelease
+			}
 		}
 	}
 	opts.IncludeConfig = false
@@ -838,12 +902,16 @@ func generateCollectOptions(configYAML string) generator.CollectOptions {
 
 // writeProvider runs the generator in write mode into dir and returns the
 // planned file entries. The CollectOptions match the dry-run path so record and
-// write modes emit the same set of files.
-func writeProvider(dir string, pir *ir.ProviderIR, opts generator.CollectOptions) ([]generator.FileEntry, error) {
+// write modes emit the same set of files. force mirrors the CLI's --force: when
+// false, a write that would overwrite an existing file fails loud instead of
+// clobbering it (N-52). Previously this wrote with Force always true, so an MCP
+// caller (or a prompt-injected request) could silently overwrite a hand-edited
+// provider directory — or any writable path it pointed output at.
+func writeProvider(dir string, pir *ir.ProviderIR, opts generator.CollectOptions, force bool) ([]generator.FileEntry, error) {
 	return generator.Run(pir, generator.Options{
 		Mode:           generator.ModeWrite,
 		OutputDir:      dir,
-		Force:          true,
+		Force:          force,
 		CollectOptions: opts,
 	})
 }

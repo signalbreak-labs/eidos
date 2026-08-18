@@ -708,7 +708,7 @@ naming:
   transform: snake_case
 ```
 
-Allowed `transform` values: `snake_case` (default), `camelCase`, `PascalCase`.
+`transform` accepts only `snake_case` (the default). `camelCase` and `PascalCase` are rejected at validation time: inferred Terraform names are always normalized to snake_case, so no other transform is implemented (N-46).
 
 ### `skip_operations` / `include_operations`
 

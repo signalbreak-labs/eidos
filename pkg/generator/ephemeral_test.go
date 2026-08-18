@@ -2,6 +2,7 @@ package generator
 
 import (
 	"bytes"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -9,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/signalbreak-labs/eidos/pkg/generator/astgen"
 	"github.com/signalbreak-labs/eidos/pkg/ir"
 )
 
@@ -772,6 +774,43 @@ func TestEphemeralMergedBlocks(t *testing.T) {
 	}
 }
 
+// TestEphemeralBlockExpr_NestingModes verifies that ephemeral blocks map each
+// supported nesting mode to the correct ephemeralschema block type and that an
+// unrecognized mode panics (N-24). Before the fix, the default case silently
+// fell back to SingleNestedBlock — diverging from resource/datasource/action,
+// which fail closed on unknown nesting so an unexpected IR shape surfaces
+// instead of producing a wrong schema.
+func TestEphemeralBlockExpr_NestingModes(t *testing.T) {
+	cases := []struct {
+		name      string
+		mode      ir.BlockNestingMode
+		want      string
+		wantPanic bool
+		wantErr   error
+	}{
+		{name: "list", mode: ir.NestingList, want: "ephemeralschema.ListNestedBlock"},
+		{name: "set", mode: ir.NestingSet, want: "ephemeralschema.SetNestedBlock"},
+		{name: "single", mode: ir.NestingSingle, want: "ephemeralschema.SingleNestedBlock"},
+		{name: "unknown", mode: "unknown", wantPanic: true, wantErr: ErrUnknownEphemeralBlockNesting},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			runWithPanicCheck(t, tc.wantPanic, tc.wantErr, fmt.Sprintf("ephemeralBlockExpr(%q)", tc.mode), func() {
+				block := ir.BlockIR{Name: "meta", NestingMode: tc.mode, Schema: ir.ObjectSchemaIR{Attributes: []ir.AttributeIR{{Name: "k", Schema: ir.SchemaIR{Type: ir.TypeString}}}}}
+				stmt := ephemeralBlockExpr(block, "mycloud_temporary_credential")
+				got, err := astgen.RenderExpr(stmt)
+				if err != nil {
+					t.Fatalf("RenderExpr() error = %v", err)
+				}
+				if !strings.Contains(string(got), tc.want) {
+					t.Errorf("ephemeralBlockExpr(%q) = %q, want substring %q", tc.mode, string(got), tc.want)
+				}
+			})
+		})
+	}
+}
+
 // TestEphemeralMergedAttributes_TypeConflict verifies that merging config and
 // result attributes with incompatible types degrades the merged attribute to a
 // dynamic type instead of panicking (G2): the plugin-framework ephemeral schema
@@ -817,6 +856,44 @@ func TestEphemeralMergedAttributes_TypeConflict(t *testing.T) {
 	}
 }
 
+// TestEphemeralModel_TypeConflictDegradesToDynamic asserts the N-22 fix: when
+// config and result schemas disagree on an attribute's shape, the merged schema
+// degrades the attribute to DynamicAttribute AND the model field must be
+// types.Dynamic to match — a typed field under a DynamicAttribute fails state
+// decoding at runtime.
+func TestEphemeralModel_TypeConflictDegradesToDynamic(t *testing.T) {
+	er := ir.EphemeralResourceIR{
+		Name:     "temporary_credential",
+		TypeName: "mycloud_temporary_credential",
+		ConfigSchema: ir.ObjectSchemaIR{
+			Attributes: []ir.AttributeIR{
+				{Name: "duration", Optional: true, Schema: ir.SchemaIR{Type: ir.TypeInt}},
+			},
+		},
+		ResultSchema: ir.ObjectSchemaIR{
+			Attributes: []ir.AttributeIR{
+				{Name: "duration", Schema: ir.SchemaIR{Type: ir.TypeString}},
+			},
+		},
+	}
+
+	file := EphemeralFile(er, testClientImport)
+	var buf bytes.Buffer
+	if err := file.Render(&buf); err != nil {
+		t.Fatalf("Render() error = %v", err)
+	}
+	got := buf.String()
+
+	// The schema attribute degrades to DynamicAttribute.
+	if !strings.Contains(got, "ephemeralschema.DynamicAttribute") {
+		t.Errorf("conflicting attribute must render as DynamicAttribute\n--- body ---\n%s", got)
+	}
+	// The model field must be types.Dynamic to match.
+	if !strings.Contains(got, "Duration types.Dynamic") {
+		t.Errorf("conflicting attribute model field must be types.Dynamic\n--- body ---\n%s", got)
+	}
+}
+
 // TestEphemeralAttributeExpr_Panic verifies that an unsupported attribute schema
 // causes ephemeralAttributeExpr to panic and that the panic message includes the
 // resource and attribute names.
@@ -848,8 +925,9 @@ func TestEphemeralFile_BlockDeprecated(t *testing.T) {
 		ConfigSchema: ir.ObjectSchemaIR{
 			Blocks: []ir.BlockIR{
 				{
-					Name:       "legacy_block",
-					Deprecated: true,
+					Name:        "legacy_block",
+					NestingMode: ir.NestingSingle,
+					Deprecated:  true,
 					Schema: ir.ObjectSchemaIR{
 						Attributes: []ir.AttributeIR{
 							{Name: "key", Schema: ir.SchemaIR{Type: ir.TypeString}},

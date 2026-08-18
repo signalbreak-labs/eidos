@@ -309,7 +309,7 @@ func TestWriteProvider_WritesFiles(t *testing.T) {
 			},
 		}},
 	}
-	entries, err := writeProvider(t.TempDir(), pir, generator.DefaultCollectOptions())
+	entries, err := writeProvider(t.TempDir(), pir, generator.DefaultCollectOptions(), true)
 	if err != nil {
 		t.Fatalf("writeProvider error: %v", err)
 	}

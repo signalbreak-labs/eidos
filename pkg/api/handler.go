@@ -194,13 +194,26 @@ func ValidateContext(ctx context.Context, body []byte) ValidateResponse {
 func validateContext(ctx context.Context, body []byte, contentType string) ValidateResponse {
 	var resp ValidateResponse
 
-	if err := ctx.Err(); err != nil {
-		resp.Diagnostics = append(resp.Diagnostics, DiagnosticJSON{
-			Severity: diagnostics.Error.String(),
-			Summary:  "Request canceled",
-			Detail:   err.Error(),
-		})
-		resp.Valid = false
+	// checkCtx aborts the pipeline early when the caller's context is canceled
+	// (a client disconnect or the server's WriteTimeout), so an aborted request
+	// stops doing wasted work instead of running every stage to completion
+	// (N-54; the prior code only honored ctx at entry). It is called between
+	// stages rather than wrapping them, because the parse/convert/validate and
+	// IR-preview stages are the expensive ones and each is a single call.
+	checkCtx := func() bool {
+		if err := ctx.Err(); err != nil {
+			resp.Diagnostics = append(resp.Diagnostics, DiagnosticJSON{
+				Severity: diagnostics.Error.String(),
+				Summary:  "Request canceled",
+				Detail:   err.Error(),
+			})
+			resp.Valid = false
+			return true
+		}
+		return false
+	}
+
+	if checkCtx() {
 		return resp
 	}
 
@@ -214,9 +227,15 @@ func validateContext(ctx context.Context, body []byte, contentType string) Valid
 		resp.Valid = false
 		return resp
 	}
+	if checkCtx() {
+		return resp
+	}
 
 	cfgStr, root, configDiags := extractConfig(root)
 	resp.Diagnostics = append(resp.Diagnostics, configDiags...)
+	if checkCtx() {
+		return resp
+	}
 
 	version, versionDiags := parser.DetectVersion(root)
 	resp.Diagnostics = append(resp.Diagnostics, toDiagnosticJSON(versionDiags)...)
@@ -233,6 +252,9 @@ func validateContext(ctx context.Context, body []byte, contentType string) Valid
 		validationDiags := parser.Validate(root, spec, version)
 		resp.Diagnostics = append(resp.Diagnostics, toDiagnosticJSON(validationDiags)...)
 	}
+	if checkCtx() {
+		return resp
+	}
 
 	var cfg *config.Config
 	if cfgStr != "" {
@@ -245,7 +267,20 @@ func validateContext(ctx context.Context, body []byte, contentType string) Valid
 			})
 		} else {
 			cfg = parsedCfg
+			// Surface config validation warnings (both schema and operation set on
+			// an override, env-var collisions). cfg.Warnings carries yaml:"-" so the
+			// generator.yaml round-trip cannot hold them; without this they would be
+			// written by config.Validate and immediately lost (M-16).
+			for _, w := range parsedCfg.Warnings {
+				resp.Diagnostics = append(resp.Diagnostics, DiagnosticJSON{
+					Severity: diagnostics.Warning.String(),
+					Summary:  w,
+				})
+			}
 		}
+	}
+	if checkCtx() {
+		return resp
 	}
 
 	resp.Valid = !hasErrors(resp.Diagnostics)
@@ -293,6 +328,31 @@ func loadRequestBodyWithName(body []byte, contentType, name string) (parser.Node
 	return loadRequestBody(body, contentType, name, name)
 }
 
+// looksLikeSpecRoot reports whether node is a mapping whose top level carries an
+// OpenAPI/Swagger version key. It gates the N-56 YAML fallback: the block YAML
+// parser cannot parse a `{`-leading flow-style document root and instead reads
+// "{openapi" as a literal key, so without this check a mis-parsed document would
+// be accepted as a spec and fail confusingly downstream (version detection).
+func looksLikeSpecRoot(node parser.Node) bool {
+	m, ok := node.(*parser.MapNode)
+	if !ok {
+		return false
+	}
+	for _, e := range m.Entries {
+		if e.Key == nil {
+			continue
+		}
+		key, ok := e.Key.Value.(string)
+		if !ok {
+			continue
+		}
+		if key == "openapi" || key == "swagger" {
+			return true
+		}
+	}
+	return false
+}
+
 func loadRequestBody(body []byte, contentType, yamlName, jsonName string) (parser.Node, error) {
 	trimmed := bytes.TrimSpace(body)
 	if len(trimmed) == 0 {
@@ -307,7 +367,26 @@ func loadRequestBody(body []byte, contentType, yamlName, jsonName string) (parse
 		return parser.LoadFileAsYAML(yamlName, body)
 	}
 	if strings.Contains(ct, "json") || trimmed[0] == '{' || trimmed[0] == '[' {
-		return parser.LoadFileAsJSON(jsonName, body)
+		// Content-Type / first byte only decides the *first* attempt. A YAML
+		// spec sent with Content-Type: application/json (a mislabeled HTTP
+		// response, or a client that always tags bodies as JSON) would otherwise
+		// be rejected outright, so on a JSON parse failure we retry as YAML —
+		// which is a superset of JSON and can never mis-parse a document that was
+		// genuinely JSON (N-56).
+		jsonNode, jsonErr := parser.LoadFileAsJSON(jsonName, body)
+		if jsonErr == nil {
+			return jsonNode, nil
+		}
+		yamlNode, yamlErr := parser.LoadFileAsYAML(yamlName, body)
+		if yamlErr == nil && looksLikeSpecRoot(yamlNode) {
+			return yamlNode, nil
+		}
+		// The YAML attempt is rejected unless it produced a recognizable OpenAPI
+		// root. Without that guard a `{`-leading flow-style document that the
+		// block parser mis-reads (e.g. `{openapi: 3.0.0}` -> a literal "{openapi"
+		// key) would sail through as garbage; and a genuinely broken JSON body
+		// should report the JSON error, which is the more precise diagnosis.
+		return nil, jsonErr
 	}
 	return parser.LoadFileAsYAML(yamlName, body)
 }
@@ -707,7 +786,9 @@ func buildIRPreview(spec *parser.Spec, version parser.Version, cfg *config.Confi
 	// instance path's template parameters name the promoted list resource's
 	// identity attributes.
 	listPaths := make(map[string][]string)
-	for _, l := range transformer.InferListResources(transformer.InferResourceCRUD(pathOps, usePutAsCreate)) {
+	for _, l := range transformer.InferListResourcesWithDiagnostics(
+		transformer.InferResourceCRUDWithDiagnostics(pathOps, usePutAsCreate, &previewDiags),
+		&previewDiags) {
 		listPaths[l.CollectionPath] = instancePathParams(l.InstancePath)
 	}
 
@@ -765,6 +846,18 @@ func buildIRPreview(spec *parser.Spec, version parser.Version, cfg *config.Confi
 	// loud here with a diagnostic naming both source operations instead of
 	// surfacing a confusing "duplicate output path" error from the generator.
 	previewDiags = append(previewDiags, checkDuplicateConstructNames(preview)...)
+
+	// Enforce the IR schema invariants (SchemaIR.Validate) on the fully
+	// assembled provider, post-overrides (N-48). A transformer or override bug
+	// that produces e.g. both Type and Collection on one node must fail loud
+	// here instead of surfacing as an unrelated generated-code compile error.
+	for _, verr := range ir.ValidateProviderIR(preview) {
+		previewDiags = append(previewDiags, diagnostics.Diagnostic{
+			Severity: diagnostics.Error,
+			Summary:  "invalid IR schema (transformer/override produced a schema that violates IR invariants)",
+			Detail:   verr.Error(),
+		})
+	}
 
 	return preview, previewDiags
 }
@@ -847,6 +940,24 @@ func applyConfigOverrides(preview *ir.ProviderIR, cfg *config.Config, providerNa
 	if cfg == nil {
 		return
 	}
+	// resource_overrides entries that match no resource are a silent no-op in the
+	// CLI generate path: a typo'd schema: or operation: vanishes with no signal
+	// (M-18). This pre-scan runs before transformer.ApplyOverrides, so
+	// override-created resources (applyResourceCreationOverrides already ran) are
+	// present and a skip:true entry whose resource still exists is not flagged.
+	for _, ro := range cfg.ResourceOverrides {
+		if resourceOverrideMatchesAny(preview.Resources, ro) {
+			continue
+		}
+		*diags = append(*diags, diagnostics.Diagnostic{
+			Severity: diagnostics.Warning,
+			Summary:  "resource override did not match any generated resource",
+			Detail: fmt.Sprintf(
+				"resource_overrides entry %s matched no resource; it is ignored. Check the schema or operation name (the MCP override-preview tool reports per-entry match/no-match).",
+				overrideSeedLabel(ro),
+			),
+		})
+	}
 	for _, ao := range cfg.ActionOverrides {
 		if idx := matchingActionIndex(preview.Actions, ao); idx >= 0 {
 			applyActionOverrideExtras(&preview.Actions[idx], ao)
@@ -898,6 +1009,143 @@ func applyConfigOverrides(preview *ir.ProviderIR, cfg *config.Config, providerNa
 			Detail:   err.Error(),
 		})
 	}
+
+	// resource_overrides.generate_datasource emits a data source mirroring a
+	// matched managed resource (M-17). Run after ApplyOverrides so renames and
+	// skip:true opt-outs are authoritative: a skipped resource must not emit, and
+	// the data source must match the resource's final name.
+	applyGenerateDatasourceOverrides(preview, providerName, pathOps, cfg.ResourceOverrides, cfg, diags)
+}
+
+// applyGenerateDatasourceOverrides emits a data source mirroring each managed
+// resource whose matching resource_override sets generate_datasource: true
+// (M-17). The resource's read operation is consumed by its CRUD group, so no
+// standalone data source is inferred for it; this re-emits the read as a
+// practitioner-facing data source. The schema is the read-shaped data source
+// schema (path/query params as inputs, response properties as Computed outputs)
+// built from the resolved read operation, mirroring dataSourceFromOperation.
+//
+// The emitted data source carries the resource's SourceOperation (not the read
+// operation's) so the round-trip config generator can recognize it as
+// resource-derived: convertResources re-emits generate_datasource + datasource_name
+// and convertDatasources skips it, so a normalized generator.yaml reproduces the
+// same data source instead of silently dropping it (G8).
+func applyGenerateDatasourceOverrides(preview *ir.ProviderIR, providerName string, pathOps map[string]map[transformer.HTTPMethod]transformer.Operation, overrides []config.ResourceOverride, cfg *config.Config, diags *diagnostics.Diagnostics) {
+	if preview == nil {
+		return
+	}
+	for _, ro := range overrides {
+		if ro.GenerateDatasource == nil || !*ro.GenerateDatasource {
+			continue
+		}
+		var matched *ir.ResourceIR
+		for i := range preview.Resources {
+			if transformer.ResourceOverrideMatches(preview.Resources[i], ro) {
+				matched = &preview.Resources[i]
+				break
+			}
+		}
+		if matched == nil {
+			*diags = append(*diags, diagnostics.Diagnostic{
+				Severity: diagnostics.Warning,
+				Summary:  "generate_datasource: true did not match a resource",
+				Detail:   fmt.Sprintf("resource_overrides entry %q matched no generated resource; no data source was emitted", overrideSeedLabel(ro)),
+			})
+			continue
+		}
+		ds := datasourceFromResource(providerName, *matched, ro, pathOps, diags)
+		if ds == nil {
+			*diags = append(*diags, diagnostics.Diagnostic{
+				Severity: diagnostics.Warning,
+				Summary:  "generate_datasource: true but the resource has no wired read operation",
+				Detail:   fmt.Sprintf("resource %q has no read operation (or its read cannot be resolved), so no data source was emitted", matched.Name),
+			})
+			continue
+		}
+		// Apply the datasource naming prefix after ApplyOverrides ran, so a
+		// generated data source honors datasource_prefix the way inferred ones do.
+		if cfg != nil && cfg.Naming != nil && strings.TrimSpace(cfg.Naming.DatasourcePrefix) != "" {
+			ds.Name = cfg.Naming.DatasourcePrefix + ds.Name
+			ds.FullName = cfg.Naming.DatasourcePrefix + ds.FullName
+			ds.TypeName = cfg.Naming.DatasourcePrefix + ds.TypeName
+		}
+		if dataSourceAlreadyExists(preview.DataSources, *ds) {
+			continue
+		}
+		preview.DataSources = append(preview.DataSources, *ds)
+	}
+}
+
+// resourceOverrideMatchesAny reports whether any provider resource matches the
+// override, using the same rules applyResourceOverrides applies.
+func resourceOverrideMatchesAny(resources []ir.ResourceIR, ro config.ResourceOverride) bool {
+	for _, r := range resources {
+		if transformer.ResourceOverrideMatches(r, ro) {
+			return true
+		}
+	}
+	return false
+}
+
+// overrideSeedLabel renders a resource override's matching key for diagnostics.
+func overrideSeedLabel(ro config.ResourceOverride) string {
+	if strings.TrimSpace(ro.Operation) != "" {
+		return "operation=" + ro.Operation
+	}
+	if strings.TrimSpace(ro.Schema) != "" {
+		return "schema=" + ro.Schema
+	}
+	return "(no schema or operation)"
+}
+
+// datasourceFromResource builds a DataSourceIR mirroring a managed resource for
+// the generate_datasource opt-in. The data source schema is the read-shaped
+// schema built from the resource's resolved read operation (the read is consumed
+// by the resource, so pathOps still resolves it), not the resource's write-shaped
+// create schema. A resource with no read mapping, or whose read operation cannot
+// be resolved in pathOps, yields nil so the caller can surface a diagnostic.
+func datasourceFromResource(providerName string, r ir.ResourceIR, override config.ResourceOverride, pathOps map[string]map[transformer.HTTPMethod]transformer.Operation, diags *diagnostics.Diagnostics) *ir.DataSourceIR {
+	read := r.CRUDMapping.Read
+	if strings.TrimSpace(read.PathTemplate) == "" || strings.TrimSpace(read.Method) == "" {
+		return nil
+	}
+	top := lookupTransformerOp(pathOps, read.PathTemplate, read.Method)
+	if top == nil {
+		return nil
+	}
+	name := strings.TrimSpace(override.DatasourceName)
+	if name == "" {
+		name = r.Name
+	}
+	name = transformer.ToSnakeCase(name)
+	ds := ir.DataSourceIR{
+		Name:            name,
+		FullName:        providerName + "_" + name,
+		TypeName:        providerName + "_" + name,
+		Description:     fmt.Sprintf("Reads the %s data source.", humanizeConstructName(name)),
+		Schema:          transformer.DataSourceSchema(*top, diags),
+		ReadMapping:     read,
+		SourceOperation: r.SourceOperation,
+	}
+	return &ds
+}
+
+// dataSourceAlreadyExists reports whether a data source with the same name, or
+// reading from the same path/method, is already present. The path/method check
+// prevents double-emission when the read operation is somehow not consumed, and
+// the name check prevents a duplicate-name generator failure.
+func dataSourceAlreadyExists(dataSources []ir.DataSourceIR, ds ir.DataSourceIR) bool {
+	for _, existing := range dataSources {
+		if existing.Name == ds.Name {
+			return true
+		}
+		if strings.TrimSpace(existing.ReadMapping.PathTemplate) != "" &&
+			existing.ReadMapping.PathTemplate == ds.ReadMapping.PathTemplate &&
+			strings.EqualFold(existing.ReadMapping.Method, ds.ReadMapping.Method) {
+			return true
+		}
+	}
+	return false
 }
 
 // overrideOperationDoubleClaimed reports whether an override's operation is
@@ -1352,8 +1600,9 @@ func operationLabel(op *parser.Operation) string {
 // credentials are enforced at runtime by the generated client. Duplicate
 // attribute names across schemes (for example two OAuth2 schemes both
 // contributing client_id) are collapsed to the first declaration so the config
-// schema stays valid. Scheme-mapping errors surface as diagnostics rather than
-// being dropped silently.
+// schema stays valid; the dropped duplicate is surfaced as a warning rather
+// than silently discarded (N-13). Scheme-mapping errors surface as diagnostics
+// rather than being dropped silently.
 func applySecurityConfigAttributes(preview *ir.ProviderIR, diags *diagnostics.Diagnostics) {
 	if preview == nil || len(preview.SecurityIR.Schemes) == 0 {
 		return
@@ -1374,6 +1623,14 @@ func applySecurityConfigAttributes(preview *ir.ProviderIR, diags *diagnostics.Di
 		}
 		for _, a := range attrs {
 			if _, dup := seen[a.Name]; dup {
+				*diags = append(*diags, diagnostics.Diagnostic{
+					Severity: diagnostics.Warning,
+					Summary:  "Security scheme config attribute dropped",
+					Detail: fmt.Sprintf(
+						"scheme %q maps to provider config attribute %q, which another scheme already declares; the duplicate is dropped and this scheme's credential cannot be set independently. Qualify the scheme name in the spec so eidos can emit a distinct attribute.",
+						scheme.Name, a.Name,
+					),
+				})
 				continue
 			}
 			seen[a.Name] = struct{}{}
@@ -1681,7 +1938,7 @@ func buildGroupedResources(spec *parser.Spec, providerName string, pathOps map[s
 	if len(pathOps) == 0 {
 		return nil, nil
 	}
-	groups := transformer.InferResourceCRUD(pathOps, usePutAsCreate)
+	groups := transformer.InferResourceCRUDWithDiagnostics(pathOps, usePutAsCreate, diags)
 
 	var resources []ir.ResourceIR
 	consumed := make(map[string]map[string]bool)

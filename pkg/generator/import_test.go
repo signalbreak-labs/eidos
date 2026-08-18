@@ -375,6 +375,45 @@ func TestResourceFile_ImportState_Composite(t *testing.T) {
 	}
 }
 
+// TestResourceFile_ImportState_IdenticalPascalNames locks in the N-26 dedup:
+// two non-string import attributes whose names PascalCase to the same
+// identifier (pet_id and petId via overrides) must emit distinct local
+// variables (importPetId and importPetId2) so the generated ImportState does not
+// declare the same variable twice and fail to compile.
+func TestResourceFile_ImportState_IdenticalPascalNames(t *testing.T) {
+	r := sampleCompositeResourceIR()
+	r.ImportIDFormat = "{pet_id}:{petId}"
+	r.Schema.Attributes = []ir.AttributeIR{
+		{Name: "pet_id", Required: true, Schema: ir.SchemaIR{Type: ir.TypeInt}},
+		{Name: "petId", Required: true, Schema: ir.SchemaIR{Type: ir.TypeInt}},
+	}
+
+	file := ResourceFile(r, testClientImport)
+	var buf bytes.Buffer
+	if err := file.Render(&buf); err != nil {
+		t.Fatalf("Render() error = %v", err)
+	}
+	got := buf.String()
+
+	for _, want := range []string{
+		"importPetId, err := strconv.ParseInt(widgetImportIDParts[0], 10, 64)",
+		"importPetId2, err := strconv.ParseInt(widgetImportIDParts[1], 10, 64)",
+		`path.Root("pet_id"), importPetId`,
+		`path.Root("petId"), importPetId2`,
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("generated resource file missing %q\ncontent:\n%s", want, got)
+		}
+	}
+
+	// The same variable must never be declared twice.
+	for _, name := range []string{"importPetId", "importPetId2"} {
+		if strings.Count(got, name+", err := strconv") != 1 {
+			t.Errorf("variable %q must be declared exactly once\ncontent:\n%s", name, got)
+		}
+	}
+}
+
 // sampleCompositeResourceIR returns a ResourceIR that uses a composite import
 // identifier.
 func sampleCompositeResourceIR() ir.ResourceIR {

@@ -158,12 +158,14 @@ func nodeExtensions(n Node) map[string]any {
 // invoking fn for each key/value pair. It centralizes the boilerplate repeated
 // across the converter methods.
 //
-// Non-string scalar keys (e.g. a YAML integer key like `1: foo`) are skipped
-// rather than passed to fn: there is no string field name to bind to, and
-// calling fn with an empty key would silently overwrite any other keyless
-// entry under "" (L-74). forEachEntry has no diagnostics channel, so such
-// entries are dropped without a diagnostic; callers that need to surface them
-// should iterate m.Entries directly.
+// Non-string scalar keys (e.g. a YAML integer key like `1: foo`) are passed to
+// fn using their raw source text, matching the v2 converter's keyString
+// behavior, so a flow-style `{200: ...}` response map keeps its status codes
+// instead of being silently dropped (C-1). A key with no raw text (a nil key,
+// or a non-string key whose Raw is empty) is skipped: calling fn with an empty
+// key would silently overwrite any other keyless entry under "" (L-74).
+// forEachEntry has no diagnostics channel, so callers that need to surface
+// malformed keys should iterate m.Entries directly.
 func forEachEntry(m *MapNode, fn func(key string, value Node)) {
 	for _, e := range m.Entries {
 		if e.Key == nil {
@@ -171,7 +173,10 @@ func forEachEntry(m *MapNode, fn func(key string, value Node)) {
 		}
 		key, ok := asString(e.Key)
 		if !ok {
-			continue
+			key = e.Key.Raw
+			if key == "" {
+				continue
+			}
 		}
 		fn(key, e.Value)
 	}

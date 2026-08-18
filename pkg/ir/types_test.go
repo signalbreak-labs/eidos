@@ -116,10 +116,6 @@ func TestSchemaIRRoundTrip(t *testing.T) {
 		Pattern:     "^[0-9a-f-]+$",
 		MinLength:   intPtr(1),
 		MaxLength:   intPtr(36),
-		SourceLocation: &SourceLocation{
-			File: "spec.yaml",
-			Line: 42,
-		},
 	})
 
 	// A collection schema carries its element type on Collection.ElementType,

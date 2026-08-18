@@ -45,11 +45,10 @@ func ApplyWriteOnlyAttributesWithDiagnostics(obj *ir.ObjectSchemaIR, diags *diag
 		attr := &obj.Attributes[i]
 
 		if isWriteOnly(attr) {
-			// Ensure both the attribute and its schema carry the write-only flags.
+			// AttributeIR is the single source of truth for attribute flags; the
+			// embedded SchemaIR no longer duplicates them (N-49).
 			attr.WriteOnly = true
-			attr.Schema.WriteOnly = true
 			attr.Sensitive = true
-			attr.Schema.Sensitive = true
 
 			// The framework forbids WriteOnly together with Computed (a write-only
 			// argument is user-supplied, never provider-computed). Drop Computed so
@@ -111,13 +110,13 @@ func ApplyWriteOnlyAttributesWithDiagnostics(obj *ir.ObjectSchemaIR, diags *diag
 }
 
 // isWriteOnly reports whether an attribute represents a write-only request
-// property. It checks both the attribute-level flag and the embedded schema flag
-// so that it works whether the flag was set on the attribute or its schema.
+// property. The AttributeIR flag is the single source of truth; the embedded
+// SchemaIR no longer carries a duplicate copy (N-49).
 func isWriteOnly(attr *ir.AttributeIR) bool {
 	if attr == nil {
 		return false
 	}
-	return attr.WriteOnly || attr.Schema.WriteOnly
+	return attr.WriteOnly
 }
 
 // applyWriteOnlyRecursive applies write-only processing to nested schema nodes

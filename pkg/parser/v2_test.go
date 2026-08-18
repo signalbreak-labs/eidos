@@ -1832,3 +1832,162 @@ definitions:
 		t.Errorf("Open.additionalProperties = %#v, want true", spec.Components.Schemas["Open"].AdditionalProperties)
 	}
 }
+
+// TestConvertV2PathItemRef asserts a Swagger 2.0 path-item $ref is preserved
+// rather than silently dropped (N-8).
+func TestConvertV2PathItemRef(t *testing.T) {
+	data := []byte(`swagger: "2.0"
+info:
+  title: Test
+  version: "1.0.0"
+paths:
+  /shared:
+    $ref: '#/paths/~1common'
+  /common:
+    get:
+      operationId: getCommon
+`)
+	node, err := LoadFile("pathref.yaml", data)
+	if err != nil {
+		t.Fatalf("LoadFile: %v", err)
+	}
+	spec, diags, err := ConvertV2(node)
+	if err != nil {
+		t.Fatalf("ConvertV2: %v", err)
+	}
+	for _, d := range diags {
+		if d.Severity == SeverityError {
+			t.Errorf("unexpected error diagnostic: %s", d)
+		}
+	}
+	shared := spec.Paths["/shared"]
+	if shared == nil {
+		t.Fatal("missing /shared path item")
+	}
+	if shared.Ref != "#/paths/~1common" {
+		t.Errorf("Ref = %q, want #/paths/~1common", shared.Ref)
+	}
+	if shared.Get != nil {
+		t.Errorf("ref-only path item should not carry operations, got %+v", shared.Get)
+	}
+}
+
+// TestConvertV2OperationSchemesWarns asserts an operation-level schemes override
+// that differs from the document schemes is surfaced as a warning (N-9).
+func TestConvertV2OperationSchemesWarns(t *testing.T) {
+	data := []byte(`swagger: "2.0"
+info:
+  title: Test
+  version: "1.0.0"
+host: api.example.com
+basePath: /v1
+schemes:
+  - http
+paths:
+  /items:
+    get:
+      operationId: listItems
+      schemes:
+        - https
+`)
+	node, err := LoadFile("opschemes.yaml", data)
+	if err != nil {
+		t.Fatalf("LoadFile: %v", err)
+	}
+	spec, diags, err := ConvertV2(node)
+	if err != nil {
+		t.Fatalf("ConvertV2: %v", err)
+	}
+	op := spec.Paths["/items"].Get
+	if op == nil {
+		t.Fatal("missing get operation")
+	}
+	if len(op.Schemes) != 1 || op.Schemes[0] != "https" {
+		t.Errorf("Schemes = %v, want [https]", op.Schemes)
+	}
+	var found bool
+	for _, d := range diags {
+		if d.Severity == SeverityWarning && strings.Contains(d.Summary, "schemes") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected warning for operation-level schemes, got %v", diags)
+	}
+}
+
+// TestConvertV2OperationSchemesMatchingNoWarn asserts an operation-level schemes
+// override that matches the document schemes produces no warning (N-9).
+func TestConvertV2OperationSchemesMatchingNoWarn(t *testing.T) {
+	data := []byte(`swagger: "2.0"
+info:
+  title: Test
+  version: "1.0.0"
+host: api.example.com
+basePath: /v1
+schemes:
+  - https
+paths:
+  /items:
+    get:
+      operationId: listItems
+      schemes:
+        - https
+`)
+	node, err := LoadFile("opschemes-match.yaml", data)
+	if err != nil {
+		t.Fatalf("LoadFile: %v", err)
+	}
+	spec, diags, err := ConvertV2(node)
+	if err != nil {
+		t.Fatalf("ConvertV2: %v", err)
+	}
+	if spec.Paths["/items"].Get == nil {
+		t.Fatal("missing get operation")
+	}
+	for _, d := range diags {
+		if d.Severity == SeverityWarning && strings.Contains(d.Summary, "schemes") {
+			t.Errorf("unexpected schemes warning for matching override: %s", d)
+		}
+	}
+}
+
+// TestValidateNonStringRefErrors asserts a non-string $ref value is reported as
+// an error rather than passing silently (N-10).
+func TestValidateNonStringRefErrors(t *testing.T) {
+	data := []byte(`openapi: 3.0.3
+info:
+  title: Test
+  version: "1.0.0"
+paths:
+  /items:
+    get:
+      operationId: listItems
+      responses:
+        "200":
+          description: ok
+          content:
+            application/json:
+              schema:
+                $ref: 123
+`)
+	node, err := LoadFile("badref.yaml", data)
+	if err != nil {
+		t.Fatalf("LoadFile: %v", err)
+	}
+	spec, diags, err := ConvertV30(node)
+	if err != nil {
+		t.Fatalf("ConvertV30: %v", err)
+	}
+	all := append([]Diagnostic{}, diags...)
+	all = append(all, Validate(node, spec, Version3_0)...)
+	var found bool
+	for _, d := range all {
+		if d.Severity == SeverityError && d.Summary == "Invalid $ref" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected Invalid $ref error, got %v", all)
+	}
+}

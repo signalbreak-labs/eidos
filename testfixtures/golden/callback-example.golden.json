@@ -1,106 +1,132 @@
 [
   {
     "path": ".github/workflows/release.yml",
-    "reason": "GitHub Actions release workflow"
+    "reason": "GitHub Actions release workflow",
+    "body_hash": "1f66f2c0b113697f"
   },
   {
     "path": ".goreleaser.yml",
-    "reason": "GoReleaser release configuration"
+    "reason": "GoReleaser release configuration",
+    "body_hash": "571414f37a2bfdd0"
   },
   {
     "path": "GNUmakefile",
-    "reason": "build and test automation"
+    "reason": "build and test automation",
+    "body_hash": "771e0e9e2aefba94"
   },
   {
     "path": "README.md",
-    "reason": "provider overview and usage guide"
+    "reason": "provider overview and usage guide",
+    "body_hash": "c7db8261ff10b14f"
   },
   {
     "path": "docs/actions/subscribe_to_stream.md",
-    "reason": "documentation for action subscribe_to_stream"
+    "reason": "documentation for action subscribe_to_stream",
+    "body_hash": "88c9faae54f18850"
   },
   {
     "path": "docs/index.md",
-    "reason": "provider overview and authentication guide"
+    "reason": "provider overview and authentication guide",
+    "body_hash": "0212a1be80558aa7"
   },
   {
     "path": "examples/actions/subscribe_to_stream/action.tf",
-    "reason": "example for action subscribe_to_stream"
+    "reason": "example for action subscribe_to_stream",
+    "body_hash": "090ce30af0f1cb40"
   },
   {
     "path": "generator.yaml",
-    "reason": "generated generator configuration"
+    "reason": "generated generator configuration",
+    "body_hash": "cc436dbd3ff17bf3"
   },
   {
     "path": "go.mod",
-    "reason": "Go module definition"
+    "reason": "Go module definition",
+    "body_hash": "6ab4749a6e430eb5"
   },
   {
     "path": "internal/client/client.go",
-    "reason": "generated HTTP client"
+    "reason": "generated HTTP client",
+    "body_hash": "a37c74d3b5e33306"
   },
   {
     "path": "internal/client/client_test.go",
-    "reason": "generated HTTP client unit tests"
+    "reason": "generated HTTP client unit tests",
+    "body_hash": "0fb890fb4f1b0e58"
   },
   {
     "path": "internal/client/errors.go",
-    "reason": "typed API error helpers"
+    "reason": "typed API error helpers",
+    "body_hash": "7b69b0dda148a6d5"
   },
   {
     "path": "internal/client/logging.go",
-    "reason": "request/response trace logging"
+    "reason": "request/response trace logging",
+    "body_hash": "9defaf534cc08195"
   },
   {
     "path": "internal/client/logging_test.go",
-    "reason": "trace logging unit tests"
+    "reason": "trace logging unit tests",
+    "body_hash": "3d1b897c8a09d762"
   },
   {
     "path": "internal/client/models.go",
-    "reason": "request/response model structs"
+    "reason": "request/response model structs",
+    "body_hash": "1efd23827e83c14f"
   },
   {
     "path": "internal/client/pagination.go",
-    "reason": "pagination helpers"
+    "reason": "pagination helpers",
+    "body_hash": "80e851435c7a25d6"
   },
   {
     "path": "internal/client/retry.go",
-    "reason": "retry logic with exponential backoff"
+    "reason": "retry logic with exponential backoff",
+    "body_hash": "bf53c919903fb008"
   },
   {
     "path": "internal/provider/action_subscribe_to_stream.go",
-    "reason": "action callback-example-api_subscribe_to_stream"
+    "reason": "action callback-example-api_subscribe_to_stream",
+    "body_hash": "9068c894fb202436"
   },
   {
     "path": "internal/provider/action_subscribe_to_stream_remote_test.go",
-    "reason": "coverage tests for action subscribe_to_stream remote helper"
+    "reason": "coverage tests for action subscribe_to_stream remote helper",
+    "body_hash": "7335cf660da3fab9"
   },
   {
     "path": "internal/provider/json_convert.go",
-    "reason": "JSON/model conversion helpers for wired CRUD bodies"
+    "reason": "JSON/model conversion helpers for wired CRUD bodies",
+    "body_hash": "4058edad9f4f0ec6"
   },
   {
     "path": "internal/provider/provider.go",
-    "reason": "provider schema and registration"
+    "reason": "provider schema and registration",
+    "body_hash": "63ac63c6c8b41108"
   },
   {
     "path": "internal/provider/provider_test.go",
-    "reason": "provider-level unit tests"
+    "reason": "provider-level unit tests",
+    "body_hash": "156f380b35c64d37"
   },
   {
     "path": "internal/provider/testing_helpers_test.go",
-    "reason": "shared httptest helpers for coverage tests"
+    "reason": "shared httptest helpers for coverage tests",
+    "body_hash": "7713c7e48801a756"
   },
   {
     "path": "internal/provider/validators.go",
-    "reason": "custom schema validators"
+    "reason": "custom schema validators",
+    "body_hash": "94a192299dab9088"
   },
   {
     "path": "main.go",
-    "reason": "provider server entrypoint"
+    "reason": "provider server entrypoint",
+    "body_hash": "de13de5946594bc6"
   },
   {
     "path": "terraform-registry-manifest.json",
-    "reason": "Terraform Registry manifest"
+    "reason": "Terraform Registry manifest",
+    "body_hash": "76ac85aa7f3a523b"
   }
 ]

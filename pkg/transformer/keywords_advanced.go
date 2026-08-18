@@ -25,6 +25,11 @@ import (
 // Callers should invoke ApplyAdvancedKeywords after the base schema type has
 // been resolved so that validators can be typed correctly. diags collects
 // non-fatal diagnostics; nil is accepted and ignored.
+//
+// Deprecated: unreachable from production. The live pipeline maps advanced
+// keywords in schemaIRFromSpecRecursive (resource_schema.go) instead; this
+// function and its helpers are retained only for their test coverage and must
+// not be extended (M-7). See AUDIT.md.
 func ApplyAdvancedKeywords(s *Schema, target *ir.SchemaIR, diags *diagnostics.Diagnostics) error {
 	if s == nil || target == nil {
 		return nil

@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -325,7 +327,7 @@ func TestGenerateConfigTool_Schema(t *testing.T) {
 }
 
 func TestNormalizeSpec_UnsupportedType(t *testing.T) {
-	_, err := normalizeSpec(12345)
+	_, err := normalizeSpec(context.Background(), 12345)
 	if err == nil {
 		t.Fatal("expected error for unsupported spec type")
 	}
@@ -353,7 +355,7 @@ paths: {}
 			case "json.RawMessage":
 				in = json.RawMessage(spec)
 			}
-			got, err := normalizeSpec(in)
+			got, err := normalizeSpec(context.Background(), in)
 			if err != nil {
 				t.Fatalf("normalizeSpec(%s) error: %v", name, err)
 			}
@@ -366,7 +368,7 @@ paths: {}
 
 // TestNormalizeSpec_Nil asserts the required-field guard rejects a missing spec.
 func TestNormalizeSpec_Nil(t *testing.T) {
-	_, err := normalizeSpec(nil)
+	_, err := normalizeSpec(context.Background(), nil)
 	if err == nil {
 		t.Fatal("expected error for nil spec")
 	}
@@ -812,7 +814,7 @@ func TestHandleInspect_HonorsConfig(t *testing.T) {
 // TestHandleGenerate_HonorsConfig verifies eidos/generate reports the
 // override-promoted resource in its summary (not just spec-only inference).
 func TestHandleGenerate_HonorsConfig(t *testing.T) {
-	_, noCfg, err := HandleGenerate(context.Background(), nil, GenerateArgs{Spec: requiresConfigSpec})
+	_, noCfg, err := HandleGenerate(context.Background(), nil, GenerateArgs{Spec: requiresConfigSpec, DryRun: true})
 	if err != nil {
 		t.Fatalf("generate without config: %v", err)
 	}
@@ -820,12 +822,109 @@ func TestHandleGenerate_HonorsConfig(t *testing.T) {
 		t.Errorf("spec-only inference should yield 0 resources, got %d", len(noCfg.Resources))
 	}
 
-	_, withCfg, err := HandleGenerate(context.Background(), nil, GenerateArgs{Spec: requiresConfigSpec, Config: requiresConfigOverride})
+	_, withCfg, err := HandleGenerate(context.Background(), nil, GenerateArgs{Spec: requiresConfigSpec, Config: requiresConfigOverride, DryRun: true})
 	if err != nil {
 		t.Fatalf("generate with config: %v", err)
 	}
 	if len(withCfg.Resources) != 1 || withCfg.Resources[0].Name != "ship" {
 		t.Fatalf("expected one ship resource, got %+v", withCfg.Resources)
+	}
+}
+
+// TestHandleGenerate_RequiresDryRunOrOutput guards N-51: eidos/generate with
+// neither dry_run nor output must fail loud (like the CLI's "--output is
+// required") instead of silently succeeding with file_count: 0 and no files on
+// disk — a misleading success for a file-writing tool.
+func TestHandleGenerate_RequiresDryRunOrOutput(t *testing.T) {
+	_, result, err := HandleGenerate(context.Background(), nil, GenerateArgs{Spec: requiresConfigSpec})
+	if err != nil {
+		t.Fatalf("handle generate returned handler error: %v", err)
+	}
+	if !hasError(result.Diagnostics) {
+		t.Fatalf("expected an error diagnostic, got %+v", result.Diagnostics)
+	}
+	if result.FileCount != 0 {
+		t.Errorf("expected file_count 0, got %d", result.FileCount)
+	}
+}
+
+// TestHandleGenerate_WriteRequiresForce guards N-52: a non-dry-run write into a
+// directory that already contains a planned file must fail loud unless force is
+// set, mirroring the CLI's --force. Before the fix, writeProvider always passed
+// Force: true, so an MCP caller (or a prompt-injected request) could silently
+// overwrite a hand-edited provider directory.
+func TestHandleGenerate_WriteRequiresForce(t *testing.T) {
+	dir := t.TempDir()
+	// internal/provider/provider.go is always part of the generated plan;
+	// pre-seed it so an unforced write has something it must refuse to overwrite.
+	existing := filepath.Join(dir, "internal", "provider", "provider.go")
+	if err := os.MkdirAll(filepath.Dir(existing), 0o750); err != nil {
+		t.Fatalf("mkdir seed dir: %v", err)
+	}
+	if err := os.WriteFile(existing, []byte("// pre-existing\n"), 0o600); err != nil {
+		t.Fatalf("seed output: %v", err)
+	}
+
+	// Without force, the write must fail loud with a diagnostic.
+	_, noForce, err := HandleGenerate(context.Background(), nil, GenerateArgs{
+		Spec: requiresConfigSpec, Config: requiresConfigOverride, Output: dir,
+	})
+	if err != nil {
+		t.Fatalf("handle generate (no force) returned handler error: %v", err)
+	}
+	if !hasError(noForce.Diagnostics) {
+		t.Fatalf("expected an overwrite-refusal error diagnostic, got %+v", noForce.Diagnostics)
+	}
+	// The pre-existing file must be untouched.
+	got, err := os.ReadFile(existing)
+	if err != nil {
+		t.Fatalf("read seeded file: %v", err)
+	}
+	if string(got) != "// pre-existing\n" {
+		t.Errorf("unforced write clobbered pre-existing file: %q", string(got))
+	}
+
+	// With force, the same write succeeds and reports a file count.
+	_, forced, err := HandleGenerate(context.Background(), nil, GenerateArgs{
+		Spec: requiresConfigSpec, Config: requiresConfigOverride, Output: dir, Force: true,
+	})
+	if err != nil {
+		t.Fatalf("handle generate (forced) returned handler error: %v", err)
+	}
+	if hasError(forced.Diagnostics) {
+		t.Fatalf("forced write should not error, got %+v", forced.Diagnostics)
+	}
+	if forced.FileCount == 0 {
+		t.Error("expected written files, got file_count 0")
+	}
+	if forced.OutputDir != dir {
+		t.Errorf("expected output_dir %q, got %q", dir, forced.OutputDir)
+	}
+}
+
+// TestGenerateCollectOptions_SignReleaseOptOut asserts the MCP generate path
+// threads the sign_release opt-out from config (N-39). Before the fix,
+// generateCollectOptions never read SignRelease, so an explicit
+// sign_release: false still emitted signed .goreleaser.yml / release.yml via
+// MCP generate; the opt-out must now reach CollectOptions so
+// FilesForProviderIR applies it.
+func TestGenerateCollectOptions_SignReleaseOptOut(t *testing.T) {
+	opts := generateCollectOptions(`provider:
+  name: test-api
+  version: 0.1.0
+sign_release: false
+`)
+	if opts.SignRelease == nil {
+		t.Fatal("SignRelease = nil, want non-nil (sign_release: false must thread through MCP generate)")
+	}
+	if *opts.SignRelease {
+		t.Fatal("SignRelease = true, want false (sign_release: false opt-out was dropped)")
+	}
+
+	// Absent key keeps the default (nil → signed-by-default).
+	opts = generateCollectOptions("")
+	if opts.SignRelease != nil {
+		t.Fatalf("SignRelease = %v with no config, want nil (keep default-on signing)", opts.SignRelease)
 	}
 }
 
@@ -858,6 +957,22 @@ func TestMergeConfigIntoSpec_EmptyConfigIsNoop(t *testing.T) {
 	}
 	if !bytes.Equal(out, spec) {
 		t.Errorf("empty config should return spec unchanged, got %q", string(out))
+	}
+}
+
+// TestMergeConfigIntoSpec_UseNumberPreservesInt64 guards N-50: the spec↔config
+// merge must round-trip int64 bounds exactly. json.Unmarshal into map[string]any
+// decodes JSON numbers to float64, corrupting integers beyond 2^53; json.Decoder
+// with UseNumber keeps them as json.Number so "maximum": 9223372036854775807
+// survives the round-trip byte-identically.
+func TestMergeConfigIntoSpec_UseNumberPreservesInt64(t *testing.T) {
+	spec := []byte(`{"openapi":"3.0.0","info":{"title":"X","version":"1.0.0"},"paths":{"/x":{}},"components":{"schemas":{"Big":{"type":"integer","maximum":9223372036854775807}}}}`)
+	out, err := mergeConfigIntoSpec(spec, "provider:\n  name: x\n  version: 1.0.0\n")
+	if err != nil {
+		t.Fatalf("mergeConfigIntoSpec: %v", err)
+	}
+	if !bytes.Contains(out, []byte(`9223372036854775807`)) {
+		t.Errorf("int64 bound corrupted by config merge: %s", string(out))
 	}
 }
 

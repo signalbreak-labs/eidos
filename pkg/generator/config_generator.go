@@ -33,8 +33,8 @@ func GenerateConfig(providerIR ir.ProviderIR) (*config.Config, error) {
 			ProtocolVersion: config.DefaultProtocolVersion,
 		},
 		Servers:                convertServers(providerIR.Servers),
-		ResourceOverrides:      convertResources(providerIR.Resources),
-		DatasourceOverrides:    convertDatasources(providerIR.DataSources),
+		ResourceOverrides:      convertResources(providerIR),
+		DatasourceOverrides:    convertDatasources(providerIR),
 		ActionOverrides:        convertActions(providerIR.Actions),
 		EphemeralOverrides:     convertEphemeralResources(providerIR.EphemeralResources),
 		ListResourceOverrides:  convertListResources(providerIR.ListResources),
@@ -42,7 +42,7 @@ func GenerateConfig(providerIR ir.ProviderIR) (*config.Config, error) {
 		Auth:                   convertAuth(providerIR.Name, providerIR.SecurityIR),
 		Pagination:             convertPagination(providerIR.ClientIR.Pagination),
 		GlobalTimeouts:         defaultGlobalTimeouts(),
-		Logging:                defaultLogging(),
+		Logging:                convertLogging(providerIR.ClientIR.Logging),
 		GenerateTerraformTests: boolPtr(providerIR.GenerateTerraformTests),
 	}
 
@@ -105,14 +105,28 @@ func defaultGlobalTimeouts() *config.TimeoutConfig {
 	}
 }
 
-func defaultLogging() *config.LoggingConfig {
+// convertLogging maps a LoggingIR back to the generator.yaml logging section.
+// It is the exact inverse of the transformer's forward mapping (handler.go's
+// buildLoggingIR: Enabled -> LogFile=FilePath, capture flags/max/redact copied):
+// FilePath gets FilePath and Enabled is derived from a non-empty LogFile, so
+// feeding the emitted `logging:` section back into a run reproduces the same
+// ClientIR.Logging and the same generated LoggingConfig (N-68). When the IR has
+// no logging configured (a run without a logging section), nil is returned so
+// the canonical generator.yaml stays honest instead of declaring logging
+// defaults the generated code never applied.
+func convertLogging(l *ir.LoggingIR) *config.LoggingConfig {
+	if l == nil {
+		return nil
+	}
 	return &config.LoggingConfig{
-		MaxBodyBytes: 4096,
-		RedactHeaders: []string{
-			"Authorization",
-			"X-API-Key",
-			"Cookie",
-		},
+		Enabled:                l.LogFile != "",
+		FilePath:               l.LogFile,
+		CaptureRequestHeaders:  l.CaptureRequestHeaders,
+		CaptureRequestBody:     l.CaptureRequestBody,
+		CaptureResponseHeaders: l.CaptureResponseHeaders,
+		CaptureResponseBody:    l.CaptureResponseBody,
+		MaxBodyBytes:           l.MaxBodyBytes,
+		RedactHeaders:          l.RedactHeaders,
 	}
 }
 
@@ -136,7 +150,8 @@ func convertServers(servers []ir.ServerIR) []config.ServerConfig {
 	return out
 }
 
-func convertResources(resources []ir.ResourceIR) []config.ResourceOverride {
+func convertResources(provider ir.ProviderIR) []config.ResourceOverride {
+	resources := provider.Resources
 	out := make([]config.ResourceOverride, 0, len(resources))
 	for _, r := range resources {
 		var timeouts *config.TimeoutConfig
@@ -181,14 +196,41 @@ func convertResources(resources []ir.ResourceIR) []config.ResourceOverride {
 			}
 			ro.DeleteOperation = r.CRUDMapping.Delete.OperationID
 		}
+		// A data source emitted by the resource_overrides.generate_datasource
+		// opt-in carries the resource's SourceOperation (not the read operation's)
+		// as its marker. Re-emit generate_datasource + datasource_name so a
+		// normalized generator.yaml round-trips instead of silently dropping the
+		// data source on regeneration (M-17/G8).
+		for _, ds := range provider.DataSources {
+			if ds.SourceOperation != "" && ds.SourceOperation == r.SourceOperation {
+				ro.GenerateDatasource = boolPtr(true)
+				ro.DatasourceName = ds.Name
+				break
+			}
+		}
 		out = append(out, ro)
 	}
 	return out
 }
 
-func convertDatasources(ds []ir.DataSourceIR) []config.DatasourceOverride {
+func convertDatasources(provider ir.ProviderIR) []config.DatasourceOverride {
+	// Skip data sources emitted by the generate_datasource opt-in: they carry the
+	// resource's SourceOperation as their marker, and convertResources re-emits
+	// generate_datasource for them. Emitting a DatasourceOverride here too would
+	// key it on the resource's create operation — semantically wrong for a data
+	// source override — and duplicate the data source on regeneration (M-17/G8).
+	resourceDerived := make(map[string]bool)
+	for _, r := range provider.Resources {
+		if r.SourceOperation != "" {
+			resourceDerived[r.SourceOperation] = true
+		}
+	}
+	ds := provider.DataSources
 	out := make([]config.DatasourceOverride, 0, len(ds))
 	for _, d := range ds {
+		if d.SourceOperation != "" && resourceDerived[d.SourceOperation] {
+			continue
+		}
 		// Match the transformer's override resolution, which keys data source
 		// overrides against SourceOperation (transformer/override.go). Every
 		// sibling converter uses SourceOperation with a Name fallback; using
@@ -538,13 +580,15 @@ func extractWriteOnlyAttributes(schema ir.ObjectSchemaIR) []config.WriteOnlyAttr
 	// and must not collapse into a single config entry (L-30).
 	seen := make(map[string]struct{})
 	walkObjectSchemaWithPath(schema, func(attr ir.AttributeIR, path string) {
-		if attr.WriteOnly || attr.Schema.WriteOnly {
+		// AttributeIR is the single source of truth for attribute flags; the
+		// embedded SchemaIR no longer duplicates them (N-49).
+		if attr.WriteOnly {
 			if _, ok := seen[path]; !ok {
 				attrs = append(attrs, config.WriteOnlyAttribute{
 					Name:        attr.Name,
 					Path:        path,
 					Description: attr.Description,
-					Sensitive:   attr.Sensitive || attr.Schema.Sensitive,
+					Sensitive:   attr.Sensitive,
 				})
 				seen[path] = struct{}{}
 			}
@@ -579,7 +623,8 @@ func extractComputedAttributes(schema ir.ObjectSchemaIR) []string {
 	var attrs []string
 	seen := make(map[string]struct{})
 	walkObjectSchema(schema, func(attr ir.AttributeIR) {
-		if !attr.Computed && !attr.Schema.Computed {
+		// AttributeIR is the single source of truth for attribute flags (N-49).
+		if !attr.Computed {
 			return
 		}
 		if _, isRequired := required[attr.Name]; isRequired {
@@ -599,7 +644,8 @@ func extractSensitiveAttributes(schema ir.ObjectSchemaIR) []string {
 	var attrs []string
 	seen := make(map[string]struct{})
 	walkObjectSchema(schema, func(attr ir.AttributeIR) {
-		if attr.Sensitive || attr.Schema.Sensitive {
+		// AttributeIR is the single source of truth for attribute flags (N-49).
+		if attr.Sensitive {
 			if _, ok := seen[attr.Name]; !ok {
 				attrs = append(attrs, attr.Name)
 				seen[attr.Name] = struct{}{}
@@ -625,7 +671,8 @@ func extractForceNewAttributes(schema ir.ObjectSchemaIR) []string {
 	var attrs []string
 	seen := make(map[string]struct{})
 	walkObjectSchema(schema, func(attr ir.AttributeIR) {
-		if hasRequiresReplace(attr.PlanModifiers) || hasRequiresReplace(attr.Schema.PlanModifiers) {
+		// AttributeIR is the single source of truth for attribute flags (N-49).
+		if hasRequiresReplace(attr.PlanModifiers) {
 			if _, ok := seen[attr.Name]; !ok {
 				attrs = append(attrs, attr.Name)
 				seen[attr.Name] = struct{}{}

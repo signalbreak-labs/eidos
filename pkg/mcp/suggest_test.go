@@ -3,10 +3,16 @@ package mcp
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
+
+	"github.com/signalbreak-labs/eidos/pkg/api"
+	"github.com/signalbreak-labs/eidos/pkg/diagnostics"
+	"github.com/signalbreak-labs/eidos/pkg/transformer"
 )
 
 // shipStoreSpec mirrors the SpaceTraders motivating case: a collection POST
@@ -169,6 +175,38 @@ func TestHandleSuggestResources_OverrideRoundTripsConsumes(t *testing.T) {
 	}
 }
 
+// TestHandleSuggestResources_ConfigFileReferenceResolved covers N-60: a
+// generator.yaml passed by file path (not inline content) must be resolved by
+// normalizeConfig and honored, suppressing a suggestion whose override is
+// declared in it — the same result as passing the content inline.
+func TestHandleSuggestResources_ConfigFileReferenceResolved(t *testing.T) {
+	// Build the override config exactly as the inline round-trip test does.
+	_, out, err := HandleSuggestResources(context.Background(), nil, SuggestResourcesArgs{Spec: shipStoreSpec})
+	if err != nil {
+		t.Fatalf("HandleSuggestResources error: %v", err)
+	}
+	sug := findSuggestion(out.Suggestions, "purchase-ship")
+	if sug == nil {
+		t.Fatalf("expected a suggestion, got %+v", out.Suggestions)
+	}
+	cfgContent := "provider:\n  name: shipstore\n  version: \"1.0.0\"\n" + sug.OverrideYAML
+
+	cfgPath := filepath.Join(t.TempDir(), "generator.yaml")
+	if err := os.WriteFile(cfgPath, []byte(cfgContent), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	// Passing the file path must behave identically to inline content: the
+	// resource is consumed and no longer proposed.
+	_, out2, err := HandleSuggestResources(context.Background(), nil, SuggestResourcesArgs{Spec: shipStoreSpec, Config: cfgPath})
+	if err != nil {
+		t.Fatalf("HandleSuggestResources with config path error: %v", err)
+	}
+	if findSuggestion(out2.Suggestions, "purchase-ship") != nil {
+		t.Errorf("expected purchase-ship suppressed with config passed by path, got %+v", out2.Suggestions)
+	}
+}
+
 // TestHandleSuggestResources_CompleteGroupNotSuggested asserts a group with a
 // DELETE on the instance (inferred as a complete resource) is not proposed.
 func TestHandleSuggestResources_CompleteGroupNotSuggested(t *testing.T) {
@@ -310,5 +348,130 @@ func TestIsDeleteVerb(t *testing.T) {
 		if isDeleteVerb(v) {
 			t.Errorf("isDeleteVerb(%q) = true, want false", v)
 		}
+	}
+}
+
+// driftSpecs are the reference specs the N-69 cross-check runs over. They mirror
+// pkg/generator's goldenCases so the two inference layers are compared across
+// the same corpus the generation snapshots pin.
+var driftSpecs = []struct {
+	name string
+	path string
+}{
+	{"mycloud", "../../test/specs/mycloud.yaml"},
+	{"mycloud-pets", "../../test/specs/mycloud-pets.yaml"},
+	{"mycloud-data", "../../test/specs/mycloud-data.yaml"},
+	{"complex-polymorphism", "../../test/specs/complex-polymorphism.yaml"},
+	{"callback-example", "../../test/specs/callback-example.yaml"},
+	{"link-example", "../../test/specs/link-example.yaml"},
+	{"oauth2-security", "../../test/specs/oauth2-security.yaml"},
+	{"all-of-nesting", "../../test/specs/all-of-nesting.yaml"},
+	{"circular-references", "../../test/specs/circular-references.yaml"},
+	{"parameter-types", "../../test/specs/parameter-types.yaml"},
+	{"webhooks", "../../test/specs/webhooks.yaml"},
+	{"ephemeral-resources", "../../test/specs/ephemeral-resources.yaml"},
+	{"provider-functions", "../../test/specs/provider-functions.yaml"},
+	{"swagger-formdata", "../../test/specs/swagger-formdata.yaml"},
+	{"put-as-create", "../../test/specs/put-as-create.yaml"},
+	{"put-as-create-composite", "../../test/specs/put-as-create-composite.yaml"},
+}
+
+// TestSuggestLiveGenerationDriftAcrossReferenceSpecs is the N-69 cross-check
+// that pins the agreement between the two inference layers eidos/suggest-resources
+// and live generation rely on:
+//
+//   - suggest groups operations through transformer.InferResourceCRUD (suggest.go);
+//   - live generation classifies through pkg/api buildIRPreview, which groups
+//     complete CRUD via the same InferResourceCRUD but then filters each group
+//     through groupIsResource (reclassifying a complete group whose lifecycle op
+//     is an action/ephemeral/function/list) and classifies the leftovers through
+//     the per-operation classifyOperation pass.
+//
+// For every reference spec, each transformer-complete group's create operation
+// must be accounted for in the live preview: either inferred as a managed
+// resource (consumed) or reclassified to an action/ephemeral (the documented
+// escape hatch — groupIsResource rejection). A complete group that is neither has
+// silently vanished between the two layers: suggest would never propose it (the
+// transformer thinks it is complete) and live generation would never emit it
+// (the API dropped it). The reverse check asserts every live-inferred resource's
+// create op corresponds to a transformer group, so the API cannot emit an
+// orphan resource the transformer never grouped (the Grafana /convert orphan
+// class). Both directions currently hold by construction; this test makes any
+// future drift fail loudly instead of silently changing what generate produces.
+func TestSuggestLiveGenerationDriftAcrossReferenceSpecs(t *testing.T) {
+	for _, tc := range driftSpecs {
+		t.Run(tc.name, func(t *testing.T) {
+			data, err := os.ReadFile(tc.path)
+			if err != nil {
+				t.Fatalf("read spec: %v", err)
+			}
+			resp := api.Validate(data)
+			if resp.IRPreview == nil {
+				t.Skipf("spec %s produced no IR preview", tc.name)
+			}
+			if !resp.Valid {
+				// A spec with error-severity diagnostics is not a useful drift
+				// case: live generation did not produce a complete preview.
+				t.Skipf("spec %s is invalid (error-severity diagnostics); skipping drift check", tc.name)
+			}
+			preview := resp.IRPreview
+
+			// Create ops the live layer inferred as managed resources.
+			consumed := consumedFromPreview(preview)
+			// Create ops the live layer reclassified instead: actions and
+			// ephemerals carry their open/invoke operation, so a dropped group's
+			// create is accounted for when it surfaces there.
+			nonResource := map[string]bool{}
+			for _, a := range preview.Actions {
+				nonResource[opKey(a.InvokeMapping.Method, a.InvokeMapping.PathTemplate)] = true
+			}
+			for _, e := range preview.EphemeralResources {
+				nonResource[opKey(e.OpenMapping.Method, e.OpenMapping.PathTemplate)] = true
+			}
+
+			spec, _, err := api.ParseSpec(data, "spec")
+			if err != nil {
+				t.Fatalf("parse spec: %v", err)
+			}
+			pathOps, _ := transformer.OperationsFromSpecWithDiagnostics(spec)
+			var opDiags diagnostics.Diagnostics
+			groups := transformer.InferResourceCRUDWithDiagnostics(pathOps, true, &opDiags)
+
+			groupCreates := map[string]bool{}
+			for _, g := range groups {
+				if g.Create == nil || g.Read == nil {
+					continue
+				}
+				key := opKey(string(g.Create.Method), g.Create.Path)
+				groupCreates[key] = true
+				if g.Delete == nil {
+					continue // dropped group: suggest territory, not a complete group
+				}
+				if consumed[key] || nonResource[key] {
+					continue
+				}
+				t.Errorf(
+					"complete CRUD group %q (create %s) is neither inferred as a resource nor reclassified to an action/ephemeral by the live layer (N-69 drift)",
+					g.Name, key)
+			}
+
+			// Reverse: every resource the live layer inferred must trace back to a
+			// transformer CRUD group's create. A resource whose create op no
+			// transformer group names would be an API-only invention — the orphan
+			// class that previously produced empty scaffolded resources.
+			for _, r := range preview.Resources {
+				c := r.CRUDMapping.Create
+				key := opKey(c.Method, c.PathTemplate)
+				if c.Method == "" || c.PathTemplate == "" {
+					continue // degenerate mapping; not a drift signal
+				}
+				if groupCreates[key] {
+					continue
+				}
+				t.Errorf(
+					"live layer inferred resource %q with create %s that no transformer CRUD group names (N-69 reverse drift)",
+					r.Name, key)
+			}
+		})
 	}
 }

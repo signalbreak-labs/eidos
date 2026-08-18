@@ -131,11 +131,12 @@ func TestWiredFormDataCreate_Compiles(t *testing.T) {
 func TestWiredFormDataMixedImports(t *testing.T) {
 	r := wiredFormDataResourceIR()
 	// Make the Update a JSON body (no formData) while the Create stays
-	// form-encoded.
+	// form-encoded. BodySchema marks the request body present (M-11).
 	r.CRUDMapping.Update = &ir.OperationMappingIR{
 		Method:       "PUT",
 		PathTemplate: "/pets/{id}",
 		SuccessCodes: []int{200},
+		BodySchema:   &ir.SchemaIR{},
 	}
 	plan := planResourceWiring(r)
 	if !plan.wired {

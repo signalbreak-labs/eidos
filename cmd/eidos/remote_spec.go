@@ -2,20 +2,13 @@ package main
 
 import (
 	"context"
-	"encoding/json"
-	"fmt"
-	"io"
-	"net"
-	"net/http"
-	"net/url"
 	"os"
-	"path/filepath"
 	"strings"
-	"time"
 
 	"github.com/spf13/cobra"
 
 	"github.com/signalbreak-labs/eidos/pkg/config"
+	"github.com/signalbreak-labs/eidos/pkg/specsource"
 )
 
 // Remote `--spec` fetching (PROJECT_DESIGN §23). `--spec` accepts a local file path
@@ -23,36 +16,26 @@ import (
 // hardening the deleted pkg/parser/ref_external.go applied to remote $refs:
 // an https-only scheme allowlist (http is an explicit opt-in), an SSRF guard
 // that rejects private/loopback/link-local hosts (re-applied on every redirect
-// target), a 30s timeout, and a 10 MiB response cap.
+// target, with the validated IPs pinned so a DNS rebind cannot redirect the
+// dial, N-55), a 30s timeout, and a 10 MiB response cap. The fetch runs on the
+// command's context so a Ctrl-C aborts an in-flight download (N-53).
 //
-// Credentials (Phase 2) are passed only via environment variables, resolved at
-// fetch time and never logged: bearer/basic/apiKey headers and an OAuth2
-// client-credentials token. A URL that embeds userinfo is rejected outright.
+// The actual loading and hardening live in pkg/specsource, shared with the MCP
+// server (N-62), so the two entry points cannot drift again; this file keeps
+// only the CLI-facing surface: flag registration, the flag/config merge, and
+// thin wrappers. Credentials (Phase 2) are passed only via environment
+// variables, resolved at fetch time and never logged: bearer/basic/apiKey
+// headers and an OAuth2 client-credentials token. A URL that embeds userinfo is
+// rejected outright.
 
-const (
-	// remoteSpecTimeout caps how long a remote spec fetch may take.
-	remoteSpecTimeout = 30 * time.Second
-	// remoteSpecMaxBytes caps how large a remote spec response body may be.
-	remoteSpecMaxBytes = 10 << 20 // 10 MiB
-	// remoteSpecTokenTimeout caps an OAuth2 client-credentials token request.
-	remoteSpecTokenTimeout = 15 * time.Second
-)
+// specAuth describes opt-in authentication for a remote spec fetch. It aliases
+// the shared type so the CLI's flag/config merge feeds directly into the
+// hardened fetch without a second struct to keep in sync.
+type specAuth = specsource.Auth
 
-// specAuth describes opt-in authentication for a remote spec fetch. Credential
-// fields name environment variables; values are read at request time.
-type specAuth struct {
-	Scheme          string // bearer | basic | apiKey | oauth2-client-credentials
-	HeaderName      string
-	TokenEnv        string
-	UsernameEnv     string
-	PasswordEnv     string
-	KeyEnv          string
-	TokenURL        string
-	ClientIDEnv     string
-	ClientSecretEnv string
-}
-
-// remoteSpecOptions controls a remote spec fetch.
+// remoteSpecOptions controls a remote spec fetch. Fields mirror the shared
+// specsource.Options; the CLI carries them separately so the flag/config merge
+// can build them without importing the shared type into every test.
 type remoteSpecOptions struct {
 	// allowHTTP permits http:// URLs (opt-in; https is the default).
 	allowHTTP bool
@@ -62,6 +45,18 @@ type remoteSpecOptions struct {
 	// spec from httptest (127.0.0.1, which the guard rejects). The CLI never
 	// sets it; it exists solely to make fetchRemoteSpec testable.
 	skipHostCheck bool
+}
+
+// shared converts the CLI option carrier into the shared fetch options. The
+// private-IP escape hatch has no flag; like the MCP it is read from
+// EIDOS_SPEC_ALLOW_PRIVATE=1 at fetch time.
+func (o remoteSpecOptions) shared() specsource.Options {
+	return specsource.Options{
+		AllowHTTP:     o.allowHTTP,
+		AllowPrivate:  os.Getenv("EIDOS_SPEC_ALLOW_PRIVATE") == "1",
+		SkipHostCheck: o.skipHostCheck,
+		Auth:          o.auth,
+	}
 }
 
 // remoteSpecFlags carries the opt-in remote-spec options shared by the generate
@@ -151,271 +146,20 @@ func (f *remoteSpecFlags) options(cfg *config.Config) remoteSpecOptions {
 // treated as remote and fall through to the local-file path, which reports a
 // sensible file-read error.
 func isRemoteSpecURL(specArg string) bool {
-	u, err := url.Parse(specArg)
-	if err != nil {
-		return false
-	}
-	switch strings.ToLower(u.Scheme) {
-	case "http", "https":
-		return true
-	}
-	return false
+	return specsource.IsURL(specArg)
 }
 
-// loadSpecBytes loads the spec named by specArg: a local file via os.ReadFile
-// (the historical path) or a remote URL via a hardened HTTP fetch. It returns
-// the raw bytes and the HTTP Content-Type (empty for local files) so callers
-// can route JSON vs YAML parsing. Credentials never appear in returned errors.
-func loadSpecBytes(specArg string, opts remoteSpecOptions) ([]byte, string, error) {
-	if !isRemoteSpecURL(specArg) {
-		data, err := os.ReadFile(filepath.Clean(specArg))
-		if err != nil {
-			return nil, "", fmt.Errorf("failed to read spec %q: %w", specArg, err)
-		}
-		return data, "", nil
-	}
-	return fetchRemoteSpec(specArg, opts)
+// loadSpecBytes loads the spec named by specArg: a local file via the shared
+// resolver (the historical path) or a remote URL via a hardened HTTP fetch. It
+// returns the raw bytes and the HTTP Content-Type (empty for local files) so
+// callers can route JSON vs YAML parsing. The fetch runs on ctx so a Ctrl-C
+// aborts it (N-53). Credentials never appear in returned errors.
+func loadSpecBytes(ctx context.Context, specArg string, opts remoteSpecOptions) ([]byte, string, error) {
+	return specsource.LoadSpec(ctx, specArg, opts.shared())
 }
 
 // fetchRemoteSpec downloads a remote spec URL through a freshly hardened
 // client. It returns the response body and the HTTP Content-Type header.
-func fetchRemoteSpec(rawURL string, opts remoteSpecOptions) ([]byte, string, error) {
-	u, err := url.Parse(rawURL)
-	if err != nil {
-		return nil, "", fmt.Errorf("failed to parse spec URL: %w", err)
-	}
-	// No URL-embedded credentials: userinfo in a CLI argument is visible in
-	// shell history, ps, and process accounting. Require the env-var form.
-	if u.User != nil {
-		return nil, "", fmt.Errorf("spec URL must not embed credentials (userinfo is visible in shell history and process listings); use --spec-auth-* flags naming environment variables instead")
-	}
-	scheme := strings.ToLower(u.Scheme)
-	if scheme != "https" && (scheme != "http" || !opts.allowHTTP) {
-		return nil, "", fmt.Errorf("spec URL scheme %q is not allowed: https is required for remote specs (pass --spec-allow-http to permit http)", u.Scheme)
-	}
-	if !opts.skipHostCheck {
-		if err := checkRemoteSpecHost(u, os.Getenv("EIDOS_SPEC_ALLOW_PRIVATE") == "1"); err != nil {
-			return nil, "", err
-		}
-	}
-
-	client := newRemoteSpecClient(opts)
-	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, rawURL, http.NoBody)
-	if err != nil {
-		return nil, "", fmt.Errorf("failed to build spec request: %w", err)
-	}
-	if err := applySpecAuth(req, opts.auth); err != nil {
-		return nil, "", err
-	}
-
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, "", fmt.Errorf("failed to fetch spec URL %s: %w (download the spec manually and pass a local path, or check the URL)", redactRemoteURL(rawURL), err)
-	}
-	defer func() { _ = resp.Body.Close() }() //nolint:errcheck // best-effort response body close
-
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, "", fmt.Errorf("failed to fetch spec URL: server returned %s for %s; download the spec manually and pass a local path", resp.Status, redactRemoteURL(rawURL))
-	}
-
-	// Cap the response body size. Read one byte past the limit so truncation is
-	// reported rather than silently using a partial document.
-	limited := io.LimitReader(resp.Body, remoteSpecMaxBytes+1)
-	data, err := io.ReadAll(limited)
-	if err != nil {
-		return nil, "", fmt.Errorf("failed to read spec URL response: %w", err)
-	}
-	if int64(len(data)) > remoteSpecMaxBytes {
-		return nil, "", fmt.Errorf("spec URL response exceeds the %d-byte maximum (%s); download the spec manually and pass a local path", remoteSpecMaxBytes, redactRemoteURL(rawURL))
-	}
-
-	return data, resp.Header.Get("Content-Type"), nil
-}
-
-// newRemoteSpecClient builds the hardened HTTP client used for remote spec
-// fetches: a 30s timeout and a redirect policy that re-applies the same scheme
-// and private-IP rules so a 302 cannot redirect to an internal address.
-func newRemoteSpecClient(opts remoteSpecOptions) *http.Client {
-	return &http.Client{
-		Timeout: remoteSpecTimeout,
-		CheckRedirect: func(req *http.Request, _ []*http.Request) error {
-			return checkRemoteSpecRedirect(req.URL, opts)
-		},
-	}
-}
-
-// checkRemoteSpecHost rejects a spec URL whose host is a literal private/
-// loopback/link-local IP or whose hostname resolves to one. This is the SSRF
-// guard: it prevents a spec URL (possibly attacker-controlled in CI) from
-// reaching cloud metadata endpoints or internal services.
-//
-// allowPrivate relaxes the guard for the INITIAL host only (never for redirect
-// targets). It is set from EIDOS_SPEC_ALLOW_PRIVATE=1, an explicit operator
-// escape hatch for local development against a mock API server; the default
-// posture blocks private hosts.
-func checkRemoteSpecHost(u *url.URL, allowPrivate bool) error {
-	host := u.Hostname()
-	if host == "" {
-		return fmt.Errorf("spec URL has no host")
-	}
-	if allowPrivate {
-		return nil
-	}
-	if ip := net.ParseIP(host); ip != nil {
-		if isPrivateOrLocalIP(ip) {
-			return fmt.Errorf("spec URL host %q resolves to private/local IP %s, which is blocked (SSRF guard); download the spec manually and pass a local path", host, ip)
-		}
-		return nil
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), remoteSpecTimeout)
-	defer cancel()
-	ips, err := net.DefaultResolver.LookupIPAddr(ctx, host)
-	if err != nil {
-		return fmt.Errorf("failed to resolve spec URL host %q: %w", host, err)
-	}
-	for _, ip := range ips {
-		if isPrivateOrLocalIP(ip.IP) {
-			return fmt.Errorf("spec URL host %q resolves to private/local IP %s, which is blocked (SSRF guard); download the spec manually and pass a local path", host, ip.IP)
-		}
-	}
-	return nil
-}
-
-// checkRemoteSpecRedirect enforces the scheme and private-IP policy on HTTP
-// redirect targets, mirroring checkRemoteSpecHost. Redirect targets are never
-// exempted from the private-IP guard (a 302 is the classic SSRF vector).
-func checkRemoteSpecRedirect(u *url.URL, opts remoteSpecOptions) error {
-	scheme := strings.ToLower(u.Scheme)
-	if scheme != "https" && (scheme != "http" || !opts.allowHTTP) {
-		return fmt.Errorf("redirect to unsupported scheme %q (https required)", u.Scheme)
-	}
-	return checkRemoteSpecHost(u, false)
-}
-
-// isPrivateOrLocalIP reports whether ip is a private, loopback, or link-local
-// address — the families most commonly targeted by SSRF attacks.
-func isPrivateOrLocalIP(ip net.IP) bool {
-	return ip.IsPrivate() || ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast()
-}
-
-// redactRemoteURL strips any userinfo from a URL for inclusion in error text
-// (the URL is otherwise safe to log; query parameters are preserved for
-// diagnosability).
-func redactRemoteURL(rawURL string) string {
-	u, err := url.Parse(rawURL)
-	if err != nil {
-		return rawURL
-	}
-	u.User = nil
-	return u.String()
-}
-
-// applySpecAuth attaches the configured authentication headers to the spec
-// request, resolving credential values from environment variables immediately
-// before the request. Empty required env vars fail loud rather than sending an
-// unauthenticated request the vendor will reject.
-func applySpecAuth(req *http.Request, auth *specAuth) error {
-	if auth == nil || strings.TrimSpace(auth.Scheme) == "" {
-		return nil
-	}
-	switch strings.ToLower(strings.TrimSpace(auth.Scheme)) {
-	case "bearer":
-		tok := os.Getenv(strings.TrimSpace(auth.TokenEnv))
-		if tok == "" {
-			return fmt.Errorf("spec auth scheme bearer requires env var %s to be set", auth.TokenEnv)
-		}
-		req.Header.Set("Authorization", "Bearer "+tok)
-	case "basic":
-		user := os.Getenv(strings.TrimSpace(auth.UsernameEnv))
-		pass := os.Getenv(strings.TrimSpace(auth.PasswordEnv))
-		if user == "" && pass == "" {
-			return fmt.Errorf("spec auth scheme basic requires env vars %s and %s to be set", auth.UsernameEnv, auth.PasswordEnv)
-		}
-		req.SetBasicAuth(user, pass)
-	case "apikey":
-		key := os.Getenv(strings.TrimSpace(auth.KeyEnv))
-		if key == "" {
-			return fmt.Errorf("spec auth scheme apiKey requires env var %s to be set", auth.KeyEnv)
-		}
-		header := strings.TrimSpace(auth.HeaderName)
-		if header == "" {
-			return fmt.Errorf("spec auth scheme apiKey requires a header_name")
-		}
-		req.Header.Set(header, key)
-	case "oauth2-client-credentials":
-		id := os.Getenv(strings.TrimSpace(auth.ClientIDEnv))
-		secret := os.Getenv(strings.TrimSpace(auth.ClientSecretEnv))
-		tok, err := fetchClientCredentialsToken(auth.TokenURL, id, secret)
-		if err != nil {
-			return fmt.Errorf("failed to obtain spec auth token: %w", err)
-		}
-		req.Header.Set("Authorization", "Bearer "+tok)
-	default:
-		return fmt.Errorf("unknown spec auth scheme %q (want bearer, basic, apiKey, or oauth2-client-credentials)", auth.Scheme)
-	}
-	return nil
-}
-
-// jsonField extracts a top-level string field from a JSON object. It is used
-// for the OAuth2 token response (access_token); the body is small and the
-// structure is the standard OAuth2 JSON object.
-func jsonField(body []byte, name string) (string, error) {
-	var m map[string]json.RawMessage
-	if err := json.Unmarshal(body, &m); err != nil {
-		return "", fmt.Errorf("token response is not a JSON object: %w", err)
-	}
-	raw, ok := m[name]
-	if !ok {
-		return "", fmt.Errorf("field %q not found", name)
-	}
-	var s string
-	if err := json.Unmarshal(raw, &s); err != nil {
-		return "", fmt.Errorf("field %q is not a string", name)
-	}
-	return s, nil
-}
-
-// fetchClientCredentialsToken performs an OAuth2 client-credentials grant
-// against tokenURL, mirroring the generated client's clientCredentialsForm.
-func fetchClientCredentialsToken(tokenURL, clientID, clientSecret string) (string, error) {
-	if strings.TrimSpace(tokenURL) == "" {
-		return "", fmt.Errorf("oauth2-client-credentials requires a token_url")
-	}
-	form := url.Values{}
-	form.Set("grant_type", "client_credentials")
-	form.Set("client_id", clientID)
-	form.Set("client_secret", clientSecret)
-
-	client := &http.Client{Timeout: remoteSpecTokenTimeout}
-	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, tokenURL, strings.NewReader(form.Encode()))
-	if err != nil {
-		return "", fmt.Errorf("failed to build token request: %w", err)
-	}
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	resp, err := client.Do(req)
-	if err != nil {
-		return "", fmt.Errorf("token request failed: %w", err)
-	}
-	defer func() { _ = resp.Body.Close() }() //nolint:errcheck // best-effort response body close
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return "", fmt.Errorf("token endpoint returned %s", resp.Status)
-	}
-	body, err := io.ReadAll(io.LimitReader(resp.Body, remoteSpecMaxBytes+1))
-	if err != nil {
-		return "", fmt.Errorf("failed to read token response: %w", err)
-	}
-	if int64(len(body)) > remoteSpecMaxBytes {
-		return "", fmt.Errorf("token response exceeds the %d-byte maximum", remoteSpecMaxBytes)
-	}
-	// Extract the access_token field. A tiny inline parser avoids a heavy
-	// dependency for one field; the response shape is the standard OAuth2
-	// JSON object.
-	token, err := jsonField(body, "access_token")
-	if err != nil {
-		return "", fmt.Errorf("token response has no access_token: %w", err)
-	}
-	if strings.TrimSpace(token) == "" {
-		return "", fmt.Errorf("token response access_token is empty")
-	}
-	return token, nil
+func fetchRemoteSpec(ctx context.Context, rawURL string, opts remoteSpecOptions) ([]byte, string, error) {
+	return specsource.FetchURL(ctx, rawURL, opts.shared())
 }

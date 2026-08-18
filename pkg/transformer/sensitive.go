@@ -102,8 +102,9 @@ func InferSensitiveAttributes(obj *ir.ObjectSchemaIR) {
 	for i := range obj.Attributes {
 		attr := &obj.Attributes[i]
 		if !attr.Sensitive && looksSensitive(attrWireName(*attr), attr.Schema) {
+			// AttributeIR is the single source of truth for attribute flags; the
+			// embedded SchemaIR no longer duplicates them (N-49).
 			attr.Sensitive = true
-			attr.Schema.Sensitive = true
 		}
 		inferSensitiveRecursive(&attr.Schema)
 	}

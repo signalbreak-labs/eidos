@@ -145,6 +145,16 @@ func (rv *refValidator) walk(n Node) {
 func (rv *refValidator) checkRef(value Node) {
 	ref, ok := asString(value)
 	if !ok {
+		// A non-string $ref (e.g. `$ref: 123` or `$ref: {…}`) is invalid and
+		// must not pass silently; the converter's scalarString would only report
+		// a warning, so flag it here as an error (N-10).
+		loc := nodeLoc(value)
+		rv.diags = append(rv.diags, Diagnostic{
+			Severity:       SeverityError,
+			Summary:        "Invalid $ref",
+			Detail:         "$ref must be a string containing a JSON Pointer reference.",
+			SourceLocation: &loc,
+		})
 		return
 	}
 	if rv.seen[ref] {

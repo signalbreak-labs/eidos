@@ -68,12 +68,22 @@ func SanitizeGoIdentifier(s string) string {
 	return s
 }
 
+// GoTypeName returns a Go-exported type identifier from an arbitrary name. Like
+// GoFieldName it validates the result so user-controlled names cannot produce
+// invalid Go identifiers: a resource/data source/function/ephemeral/list name
+// of "2fa" yields "X2fa" (not the invalid "2fa"), and "---" or "" yield "X".
+// Used for generated struct and type names derived from IR construct names
+// (M-10); GoFieldName is the same transformation for model field names.
+func GoTypeName(s string) string {
+	return SanitizeGoIdentifier(PascalCase(s))
+}
+
 // GoFieldName returns a Go-exported field name from an attribute name. Unlike
 // PascalCase, it validates the result so hostile spec property names cannot
 // produce invalid Go identifiers: a property named "2fa" yields "X2fa" (not the
 // invalid "2fa"), and "---" or "" yield "X".
 func GoFieldName(s string) string {
-	return SanitizeGoIdentifier(PascalCase(s))
+	return GoTypeName(s)
 }
 
 // CamelCase converts an identifier to lower-camelCase.

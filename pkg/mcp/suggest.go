@@ -83,7 +83,18 @@ func HandleSuggestResources(ctx context.Context, _ *sdkmcp.CallToolRequest, args
 		Suggestions: []Suggestion{},
 	}
 
-	specBytes, err := normalizeSpec(args.Spec)
+	specBytes, err := normalizeSpec(ctx, args.Spec)
+	if err != nil {
+		out = suggestResourcesErrorResult(err)
+		res, err = marshalToolResult(out)
+		return res, out, err
+	}
+
+	// Resolve a path/file:// config reference before merging, matching every
+	// other config-taking MCP tool; otherwise a `config` that names a file on
+	// disk would be embedded as a literal path string and silently ignored
+	// (N-60).
+	configYAML, err := normalizeConfig(ctx, args.Config)
 	if err != nil {
 		out = suggestResourcesErrorResult(err)
 		res, err = marshalToolResult(out)
@@ -93,7 +104,7 @@ func HandleSuggestResources(ctx context.Context, _ *sdkmcp.CallToolRequest, args
 	// Merge config into a copy for the config-aware IR preview (consumed set).
 	// The raw pathOps come from the un-merged spec so overrides never change the
 	// operations/schemas we group.
-	mergedBytes, err := mergeConfigIntoSpec(specBytes, args.Config)
+	mergedBytes, err := mergeConfigIntoSpec(specBytes, configYAML)
 	if err != nil {
 		out = suggestResourcesErrorResult(err)
 		res, err = marshalToolResult(out)
@@ -105,9 +116,19 @@ func HandleSuggestResources(ctx context.Context, _ *sdkmcp.CallToolRequest, args
 	// usePutAsCreate mirrors the real pipeline so candidate grouping matches
 	// what was (or was not) inferred.
 	usePutAsCreate := true
-	if strings.TrimSpace(args.Config) != "" {
-		if cfg, cfgErr := config.LoadBytes([]byte(args.Config)); cfgErr == nil && cfg != nil {
+	if strings.TrimSpace(configYAML) != "" {
+		if cfg, cfgErr := config.LoadBytes([]byte(configYAML)); cfgErr == nil && cfg != nil {
 			usePutAsCreate = cfg.UsePutAsCreate == nil || *cfg.UsePutAsCreate
+			// Surface config validation warnings (both schema and operation set on
+			// an override, env-var collisions). cfg.Warnings carries yaml:"-" so the
+			// generator.yaml round-trip cannot hold them; without this they would be
+			// written by config.Validate and immediately lost (M-16).
+			for _, w := range cfg.Warnings {
+				result.Diagnostics = append(result.Diagnostics, api.DiagnosticJSON{
+					Severity: "warning",
+					Summary:  w,
+				})
+			}
 		} else if cfgErr != nil {
 			result.Diagnostics = append(result.Diagnostics, api.DiagnosticJSON{
 				Severity: "warning", Summary: "could not parse config; use_put_as_create defaulted to true", Detail: cfgErr.Error(),
@@ -123,10 +144,12 @@ func HandleSuggestResources(ctx context.Context, _ *sdkmcp.CallToolRequest, args
 	}
 	result.Diagnostics = append(result.Diagnostics, apiDiags(parseDiags)...)
 	pathOps, opDiags := transformer.OperationsFromSpecWithDiagnostics(spec)
-	result.Diagnostics = append(result.Diagnostics, apiDiags(opDiags)...)
 
 	consumed := consumedFromPreview(resp.IRPreview)
-	groups := transformer.InferResourceCRUD(pathOps, usePutAsCreate)
+	// CRUD inference appends any name-collision dedup warnings to opDiags; the
+	// combined parse + dedup diagnostics are surfaced below.
+	groups := transformer.InferResourceCRUDWithDiagnostics(pathOps, usePutAsCreate, &opDiags)
+	result.Diagnostics = append(result.Diagnostics, apiDiags(opDiags)...)
 
 	for _, g := range groups {
 		if g.Create == nil || g.Read == nil || g.Delete != nil {

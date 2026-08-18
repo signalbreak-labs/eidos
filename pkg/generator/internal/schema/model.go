@@ -13,7 +13,7 @@ import (
 // ResourceAPIModelName returns the generated API model struct name for a
 // resource.
 func ResourceAPIModelName(r ir.ResourceIR) string {
-	return naming.PascalCase(r.Name) + "Model"
+	return naming.GoTypeName(r.Name) + "Model"
 }
 
 // GenerateModelFile builds the *ast.File for internal/provider/model_<name>.go.

@@ -19,7 +19,7 @@ const sampleConfig = "provider:\n  name: petapi\n  version: \"0.1.0\"\n"
 // LLMs took before M-76: passing inline YAML worked, but passing a path silently
 // failed to parse.
 func TestNormalizeConfig_InlineContentNotTreatedAsPath(t *testing.T) {
-	got, err := normalizeConfig(sampleConfig)
+	got, err := normalizeConfig(context.Background(), sampleConfig)
 	if err != nil {
 		t.Fatalf("normalizeConfig inline: %v", err)
 	}
@@ -31,7 +31,7 @@ func TestNormalizeConfig_InlineContentNotTreatedAsPath(t *testing.T) {
 // TestNormalizeConfig_EmptyIsNoop ensures an empty config resolves to empty
 // (a no-op for mergeConfigIntoSpec).
 func TestNormalizeConfig_EmptyIsNoop(t *testing.T) {
-	got, err := normalizeConfig("")
+	got, err := normalizeConfig(context.Background(), "")
 	if err != nil {
 		t.Fatalf("normalizeConfig empty: %v", err)
 	}
@@ -48,7 +48,7 @@ func TestNormalizeConfig_AbsoluteFilePath(t *testing.T) {
 	if err := os.WriteFile(path, []byte(sampleConfig), 0o600); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
-	got, err := normalizeConfig(path)
+	got, err := normalizeConfig(context.Background(), path)
 	if err != nil {
 		t.Fatalf("normalizeConfig file path: %v", err)
 	}
@@ -66,7 +66,7 @@ func TestNormalizeConfig_FileURL(t *testing.T) {
 	if err := os.WriteFile(path, []byte(sampleConfig), 0o600); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
-	got, err := normalizeConfig("file://" + path)
+	got, err := normalizeConfig(context.Background(), "file://"+path)
 	if err != nil {
 		t.Fatalf("normalizeConfig file URL: %v", err)
 	}
@@ -83,7 +83,7 @@ func TestNormalizeConfig_RelativeFilePath(t *testing.T) {
 		t.Fatalf("write config: %v", err)
 	}
 	t.Chdir(dir)
-	got, err := normalizeConfig("generator.yaml")
+	got, err := normalizeConfig(context.Background(), "generator.yaml")
 	if err != nil {
 		t.Fatalf("normalizeConfig relative file: %v", err)
 	}
@@ -98,7 +98,7 @@ func TestNormalizeConfig_RelativeFilePath(t *testing.T) {
 // from the cause).
 func TestNormalizeConfig_MissingFilePathClearError(t *testing.T) {
 	missing := filepath.Join(t.TempDir(), "does-not-exist.yaml")
-	_, err := normalizeConfig(missing)
+	_, err := normalizeConfig(context.Background(), missing)
 	if err == nil {
 		t.Fatal("expected an error for a missing config file path")
 	}
@@ -161,7 +161,7 @@ func TestHandleOverridePreview_MalformedConfigSurfacesDiagnostic(t *testing.T) {
 // TestNormalizeSpec_InlineContentNotTreatedAsPath ensures a string that is a
 // spec body (not a file path or URL) is returned verbatim as inline content.
 func TestNormalizeSpec_InlineContentNotTreatedAsPath(t *testing.T) {
-	got, err := normalizeSpec(sampleSpec)
+	got, err := normalizeSpec(context.Background(), sampleSpec)
 	if err != nil {
 		t.Fatalf("normalizeSpec inline: %v", err)
 	}
@@ -178,7 +178,7 @@ func TestNormalizeSpec_AbsoluteFilePath(t *testing.T) {
 	if err := os.WriteFile(path, []byte(sampleSpec), 0o600); err != nil {
 		t.Fatalf("write spec: %v", err)
 	}
-	got, err := normalizeSpec(path)
+	got, err := normalizeSpec(context.Background(), path)
 	if err != nil {
 		t.Fatalf("normalizeSpec file path: %v", err)
 	}
@@ -195,7 +195,7 @@ func TestNormalizeSpec_RelativeFilePath(t *testing.T) {
 		t.Fatalf("write spec: %v", err)
 	}
 	t.Chdir(dir)
-	got, err := normalizeSpec("api.yaml")
+	got, err := normalizeSpec(context.Background(), "api.yaml")
 	if err != nil {
 		t.Fatalf("normalizeSpec relative file: %v", err)
 	}
@@ -211,7 +211,7 @@ func TestNormalizeSpec_FileURL(t *testing.T) {
 	if err := os.WriteFile(path, []byte(sampleSpec), 0o600); err != nil {
 		t.Fatalf("write spec: %v", err)
 	}
-	got, err := normalizeSpec("file://" + path)
+	got, err := normalizeSpec(context.Background(), "file://"+path)
 	if err != nil {
 		t.Fatalf("normalizeSpec file URL: %v", err)
 	}
@@ -231,7 +231,7 @@ func TestNormalizeSpec_HTTPURL(t *testing.T) {
 	t.Setenv("EIDOS_SPEC_ALLOW_HTTP", "1")
 	t.Setenv("EIDOS_SPEC_ALLOW_PRIVATE", "1")
 
-	got, err := normalizeSpec(srv.URL)
+	got, err := normalizeSpec(context.Background(), srv.URL)
 	if err != nil {
 		t.Fatalf("normalizeSpec http URL: %v", err)
 	}
@@ -246,7 +246,7 @@ func TestNormalizeSpec_HTTPURL(t *testing.T) {
 // treated as inline content.
 func TestNormalizeSpec_MissingFilePathClearError(t *testing.T) {
 	missing := filepath.Join(t.TempDir(), "does-not-exist.yaml")
-	_, err := normalizeSpec(missing)
+	_, err := normalizeSpec(context.Background(), missing)
 	if err == nil {
 		t.Fatal("expected an error for a missing file path")
 	}
@@ -266,7 +266,7 @@ func TestNormalizeSpec_HTTPSSchemeRejectedByDefault(t *testing.T) {
 	t.Setenv("EIDOS_SPEC_ALLOW_PRIVATE", "1")
 	t.Setenv("EIDOS_SPEC_ALLOW_HTTP", "")
 
-	_, err := normalizeSpec(srv.URL)
+	_, err := normalizeSpec(context.Background(), srv.URL)
 	if err == nil {
 		t.Fatal("expected http to be rejected without EIDOS_SPEC_ALLOW_HTTP")
 	}

@@ -382,12 +382,25 @@ func wiredListDataSourceReadHelperBody(ds ir.DataSourceIR, plan crudOperationPla
 	}
 	if style == ir.PaginationStyleOffset {
 		// Offset pagination starts at page 1; the next callback increments it
-		// and stops when a page returns no items.
-		stmts = append(stmts, astgen.ExprStmt(astgen.Call(
-			astgen.Selector(astgen.Ident("params"), "Set"),
-			astgen.Lit(pageParam),
-			astgen.Lit("1"),
-		)))
+		// and stops when a page returns no items. Only seed the page param when
+		// the practitioner did not already supply one — an explicit config value
+		// must win, or every read restarts at page 1 and pages 2+ are silently
+		// truncated (N-21).
+		stmts = append(stmts, &ast.IfStmt{
+			Init: astgen.AssignStmt(
+				[]ast.Expr{astgen.Ident("_"), astgen.Ident("ok")},
+				[]ast.Expr{astgen.IndexExpr(astgen.Ident("params"), astgen.Lit(pageParam))},
+				token.DEFINE,
+			),
+			Cond: astgen.Unary(token.NOT, astgen.Ident("ok")),
+			Body: astgen.Block(
+				astgen.ExprStmt(astgen.Call(
+					astgen.Selector(astgen.Ident("params"), "Set"),
+					astgen.Lit(pageParam),
+					astgen.Lit("1"),
+				)),
+			),
+		})
 	}
 	// nextURL carries the link_header next-page URL from the next callback (which
 	// extracts it from the response Link header) to the fetch closure (which

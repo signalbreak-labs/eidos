@@ -193,6 +193,42 @@ func TestWiredListDataSource_Offset_Render(t *testing.T) {
 	}
 }
 
+// TestWiredListDataSource_Offset_DoesNotClobberPage asserts the N-21 fix: the
+// offset pagination page param is seeded to "1" only when the practitioner did
+// not already supply it. A config `page` attribute wired as a query param must
+// win — otherwise every read restarts at page 1 and pages 2+ are silently
+// truncated. The generated code guards the Set with a map-presence check.
+func TestWiredListDataSource_Offset_DoesNotClobberPage(t *testing.T) {
+	ds := listDataSourceIR(&ir.PaginationIR{Style: ir.PaginationStyleOffset, PageParam: "page"})
+	// Add a config "page" attribute and wire it as the page query param, so a
+	// practitioner can drive pagination from config.
+	ds.Schema.Attributes = append(ds.Schema.Attributes, ir.AttributeIR{
+		Name:     "page",
+		Optional: true,
+		Schema:   ir.SchemaIR{Type: ir.TypeInt},
+	})
+	ds.ReadMapping.QueryParams = append(ds.ReadMapping.QueryParams,
+		ir.ParamIR{Name: "page", In: "query", Schema: ir.SchemaIR{Type: ir.TypeInt}},
+	)
+
+	file := DataSourceFile(ds, testClientImport)
+	var buf bytes.Buffer
+	if err := file.Render(&buf); err != nil {
+		t.Fatalf("Render() error = %v", err)
+	}
+	got := buf.String()
+	// The seed must be guarded on the key's absence so the config value wins.
+	for _, want := range []string{
+		`_, ok := params["page"]`,
+		`if !ok {`,
+		`params.Set("page", "1")`,
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("generated offset list body missing %q\n--- body ---\n%s", want, got)
+		}
+	}
+}
+
 // TestWiredListDataSource_Cursor_Render asserts the cursor next callback reads
 // the cursor from the response field and sends it back as the query parameter.
 func TestWiredListDataSource_Cursor_Render(t *testing.T) {

@@ -3,9 +3,12 @@
 package transformer
 
 import (
+	"fmt"
 	"regexp"
 	"sort"
 	"strings"
+
+	"github.com/signalbreak-labs/eidos/pkg/diagnostics"
 )
 
 // HTTPMethod is a normalized HTTP verb used by CRUD inference.
@@ -147,6 +150,15 @@ var pathParamRe = regexp.MustCompile(`^\{([^}:]+)(?::[^}]*)?\}$`)
 //
 // The returned resources are sorted deterministically by resource name.
 func InferResourceCRUD(pathOps map[string]map[HTTPMethod]Operation, usePutAsCreate bool) []ResourceCRUD {
+	return InferResourceCRUDWithDiagnostics(pathOps, usePutAsCreate, nil)
+}
+
+// InferResourceCRUDWithDiagnostics is InferResourceCRUD with a diagnostics
+// channel. When diags is non-nil, a same-named group that dedupCRUDByName
+// drops (or replaces) surfaces a Warning naming both collection paths, so a
+// construct that loses a name collision is never silently discarded
+// (AGENTS.md "fail loud, never silently").
+func InferResourceCRUDWithDiagnostics(pathOps map[string]map[HTTPMethod]Operation, usePutAsCreate bool, diags *diagnostics.Diagnostics) []ResourceCRUD {
 	parsed := make(map[string][]pathSegment, len(pathOps))
 	prefixKeys := make(map[string]pathKey, len(pathOps))
 	pathKeys := make(map[string]pathKey, len(pathOps))
@@ -185,7 +197,7 @@ func InferResourceCRUD(pathOps map[string]map[HTTPMethod]Operation, usePutAsCrea
 	sort.SliceStable(resources, func(i, j int) bool {
 		return resources[i].Name < resources[j].Name
 	})
-	resources = dedupCRUDByName(resources)
+	resources = dedupCRUDByName(resources, diags)
 	return resources
 }
 
@@ -194,6 +206,11 @@ func InferResourceCRUD(pathOps map[string]map[HTTPMethod]Operation, usePutAsCrea
 // a full CRUD group are reclassified as actions by the API layer: a scaffolded
 // resource with an empty model is worse than a wired action, and a resource
 // without a Delete cannot be destroyed by Terraform.
+//
+// Deprecated: unreachable from production. The live pipeline applies the
+// groupIsResource overlay in pkg/api (classifyOperation) instead of this
+// structural check; this function is retained only for its test coverage and
+// must not be extended (M-7). See AUDIT.md.
 func HasFullCRUD(path string, method HTTPMethod, pathOps map[string]map[HTTPMethod]Operation) bool {
 	for _, g := range InferResourceCRUD(pathOps, true) {
 		if g.Create == nil || g.Read == nil || g.Delete == nil {
@@ -232,32 +249,63 @@ func crudCompleteness(r ResourceCRUD) int {
 
 // dedupCRUDByName keeps the first group for each name, but when a name collides
 // the group with the higher CRUD-completeness score wins (stable for ties).
-func dedupCRUDByName(items []ResourceCRUD) []ResourceCRUD {
+// A group that loses a collision is never dropped silently: when diags is
+// non-nil, a Warning naming both collection paths is appended (AGENTS.md "fail
+// loud, never silently").
+func dedupCRUDByName(items []ResourceCRUD, diags *diagnostics.Diagnostics) []ResourceCRUD {
 	if len(items) == 0 {
 		return items
 	}
 	best := make(map[string]int, len(items))
+	byPath := make(map[string]string, len(items))
 	out := items[:0]
 	for _, it := range items {
 		score := crudCompleteness(it)
-		if prev, ok := best[it.Name]; ok {
+		prev, ok := best[it.Name]
+		if ok {
 			if prev >= score {
-				continue // the earlier, equally-or-more-complete group wins
+				// The earlier, equally-or-more-complete group wins; the later
+				// same-named group is dropped. Surface it so the loss is visible.
+				appendCRUDDedupWarning(diags, it.Name, it.CollectionPath, byPath[it.Name])
+				continue
 			}
 			// The later group is more complete; replace the earlier entry.
 			best[it.Name] = score
 			for i := range out {
 				if out[i].Name == it.Name {
+					appendCRUDDedupWarning(diags, it.Name, out[i].CollectionPath, it.CollectionPath)
 					out[i] = it
 					break
 				}
 			}
+			byPath[it.Name] = it.CollectionPath
 			continue
 		}
 		best[it.Name] = score
+		byPath[it.Name] = it.CollectionPath
 		out = append(out, it)
 	}
 	return out
+}
+
+// appendCRUDDedupWarning records a Warning when a name collision drops a CRUD
+// group, naming both the surviving and the dropped collection paths. A nil
+// diags channel makes it a no-op so the deprecated no-diagnostics inference
+// entry points keep their signatures.
+func appendCRUDDedupWarning(diags *diagnostics.Diagnostics, name, surviving, dropped string) {
+	if diags == nil {
+		return
+	}
+	*diags = append(*diags, diagnostics.Diagnostic{
+		Severity: diagnostics.Warning,
+		Summary:  fmt.Sprintf("resource name collision %q dropped a CRUD group", name),
+		Detail: fmt.Sprintf(
+			"Two OpenAPI path groups both infer the resource name %q; the group at %q survives "+
+				"(the more complete CRUD, or the first on ties) and the group at %q is dropped so the two "+
+				"cannot emit colliding Terraform type names. If both paths are needed, disambiguate them "+
+				"with a generator.yaml resource_override.",
+			name, surviving, dropped),
+	})
 }
 
 func buildResourceCRUD(prefixKey pathKey, paths []string, pathOps map[string]map[HTTPMethod]Operation, parsed map[string][]pathSegment, pathKeys map[string]pathKey, usePutAsCreate bool) ResourceCRUD {
@@ -415,7 +463,13 @@ func detectID(segs []pathSegment) IDInfo {
 		info.ImportFormat = strings.Repeat("%s:", len(params))
 		info.ImportFormat = info.ImportFormat[:len(info.ImportFormat)-1]
 	} else {
-		info.AttributeName = ToSnakeCase(params[0])
+		// SanitizeAttributeName, not bare ToSnakeCase, so a path parameter whose
+		// name is a reserved Terraform root (e.g. GitLab's {provider}) yields the
+		// same "provider_" name the schema attribute carries. A raw ToSnakeCase
+		// "provider" would not match the schema's "provider_" attribute, making
+		// the synthetic-id check add a duplicate and forcePutAsCreateIdentifiers
+		// fail to force the identifier Required (N-18).
+		info.AttributeName = SanitizeAttributeName(params[0])
 	}
 	return info
 }
@@ -431,13 +485,43 @@ func cloneOp(ops map[HTTPMethod]Operation, method HTTPMethod) *Operation {
 	return nil
 }
 
+// sesPlurals maps the common "ses" plurals whose singular ends in "s" (so the
+// plural adds "es": status→statuses, bus→buses) rather than "e" (so the plural
+// adds "s": case→cases, house→houses). The two classes are indistinguishable
+// by suffix alone, and the "e"-final class is far more common, so the generic
+// trailing-"s" strip stays the default and only these known "s"-final singulars
+// are special-cased (N-12).
+var sesPlurals = map[string]string{
+	"aliases":  "alias",
+	"atlases":  "atlas",
+	"biases":   "bias",
+	"buses":    "bus",
+	"campuses": "campus",
+	"canvases": "canvas",
+	"choruses": "chorus",
+	"circuses": "circus",
+	"gases":    "gas",
+	"statuses": "status",
+}
+
 func singularize(s string) string {
 	switch s {
 	case "species", "series":
 		return s
 	}
+	if singular, ok := sesPlurals[s]; ok {
+		return singular
+	}
 	if strings.HasSuffix(s, "ies") && len(s) > 3 && !isVowel(s[len(s)-4]) {
 		return s[:len(s)-3] + "y"
+	}
+	// Plurals of words ending in a sibilant (s, x, ch, sh) add "es":
+	// classes→class, addresses→address, processes→process, boxes→box,
+	// churches→church, dishes→dish. Stripping only the trailing "s" would mangle
+	// these into "classe"/"addresse"/"boxe"/... (N-12).
+	if strings.HasSuffix(s, "sses") || strings.HasSuffix(s, "ches") ||
+		strings.HasSuffix(s, "shes") || strings.HasSuffix(s, "xes") {
+		return s[:len(s)-2]
 	}
 	if strings.HasSuffix(s, "s") && !strings.HasSuffix(s, "ss") && len(s) > 1 {
 		return s[:len(s)-1]

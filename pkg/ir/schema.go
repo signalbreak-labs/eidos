@@ -68,6 +68,14 @@ type BlockIR struct {
 // SchemaIR is the core IR schema node. A SchemaIR is either a primitive type,
 // a collection, a union, or an object-like aggregate described by Attributes
 // and Blocks.
+//
+// The framework flags below (Required/Optional/Computed/Sensitive/WriteOnly/
+// ForceNew/Deprecated/DeprecationMessage/Default/Validators/PlanModifiers) are
+// for STANDALONE schema nodes (e.g. ParamIR.Schema, function return types).
+// When a SchemaIR is embedded in an AttributeIR, the AttributeIR is the single
+// source of truth for those flags and the embedded SchemaIR carries only the
+// shape fields (Type/Collection/Union/Attributes/Blocks/...); producers and
+// consumers never read the flag copies on an embedded SchemaIR (N-49).
 type SchemaIR struct {
 	Name                  string               `json:"name"`
 	Description           string               `json:"description,omitempty"`
@@ -112,7 +120,10 @@ type SchemaIR struct {
 	PropertyNames         *SchemaIR            `json:"property_names,omitempty"`         // JSON Schema: validates property names
 	UnevaluatedProperties *SchemaIR            `json:"unevaluated_properties,omitempty"` // JSON Schema 2020-12: controls unevaluated properties
 	OriginalRef           string               `json:"original_ref,omitempty"`
-	SourceLocation        *SourceLocation      `json:"source_location,omitempty"` // Source position in the original spec
+	// Source position tracking for schema nodes was removed (N-47): no producer
+	// ever set SourceLocation, and its JSON tag diverged from
+	// diagnostics.SourceLocation (col vs column). Source traceability for
+	// diagnostics lives on the parser's Schema and the diagnostics themselves.
 }
 
 // NewDefaultInt returns a pointer to a default value suitable for

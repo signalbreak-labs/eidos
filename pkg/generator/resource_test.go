@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/signalbreak-labs/eidos/pkg/generator/astgen"
 	"github.com/signalbreak-labs/eidos/pkg/generator/internal/naming"
 	"github.com/signalbreak-labs/eidos/pkg/ir"
 )
@@ -439,7 +440,9 @@ func TestSnakeCase(t *testing.T) {
 	}
 }
 
-// TestResourceStructName verifies generated resource struct naming.
+// TestResourceStructName verifies generated resource struct naming. The empty
+// name is hostile IR: GoTypeName sanitizes it to "X" so the emitted identifier
+// stays a valid Go identifier rather than the bare "Resource" suffix (M-10).
 func TestResourceStructName(t *testing.T) {
 	cases := []struct {
 		name string
@@ -447,7 +450,7 @@ func TestResourceStructName(t *testing.T) {
 	}{
 		{"pet", "PetResource"},
 		{"my_cloud", "MyCloudResource"},
-		{"", "Resource"},
+		{"", "XResource"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -459,7 +462,10 @@ func TestResourceStructName(t *testing.T) {
 	}
 }
 
-// TestResourceModelName verifies generated resource model naming.
+// TestResourceModelName verifies generated resource model naming. The empty
+// name is hostile IR: GoTypeName sanitizes it to "X" so the emitted identifier
+// stays a valid Go identifier rather than the bare "ResourceModel" suffix
+// (M-10).
 func TestResourceModelName(t *testing.T) {
 	cases := []struct {
 		name string
@@ -467,7 +473,7 @@ func TestResourceModelName(t *testing.T) {
 	}{
 		{"pet", "PetResourceModel"},
 		{"my_cloud", "MyCloudResourceModel"},
-		{"", "ResourceModel"},
+		{"", "XResourceModel"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -813,6 +819,85 @@ func TestResourceFile_ValidatorImportGating(t *testing.T) {
 	}
 }
 
+// TestResourceFile_NestedDynamicElementDoesNotImportValidators is a regression
+// test for M-9: a collection whose element contains a nested dynamic renders as
+// a DynamicAttribute with no Validators field, so the schema/validator import
+// must NOT be registered even when the element also declares a constrained
+// attribute. The pre-fix import gate recursed into collection elements without
+// the ContainsNestedDynamic guard, registering the import unused and breaking
+// the generated provider's compile ("imported and not used").
+func TestResourceFile_NestedDynamicElementDoesNotImportValidators(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping network-bound compile test in -short mode")
+	}
+	skipIfNetworkRestricted(t)
+
+	exclMin := float64(1)
+	r := sampleResourceIR()
+	r.Name = "nested_dynamic"
+	r.TypeName = "mycloud_nested_dynamic"
+	r.Schema.Attributes = []ir.AttributeIR{
+		{
+			Name:     "items",
+			Optional: true,
+			Schema: ir.SchemaIR{
+				Collection: &ir.CollectionType{
+					Kind: ir.List,
+					ElementType: ir.SchemaIR{
+						Attributes: []ir.AttributeIR{
+							{
+								Name:     "limit",
+								Optional: true,
+								Schema: ir.SchemaIR{
+									Type:             ir.TypeInt,
+									ExclusiveMinimum: &exclMin,
+								},
+							},
+							{
+								Name:     "extra",
+								Optional: true,
+								Schema:   ir.SchemaIR{Type: ir.TypeDynamic},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	got := renderResourceString(t, r)
+	// The collection must degrade to a DynamicAttribute (framework rejects a
+	// collection whose element contains a dynamic at any depth), and that
+	// DynamicAttribute carries no Validators field.
+	if !strings.Contains(got, "schema.DynamicAttribute") {
+		t.Fatalf("collection with nested dynamic element should render as DynamicAttribute:\n%s", got)
+	}
+	if strings.Contains(got, `terraform-plugin-framework/schema/validator"`) {
+		t.Errorf("collection with nested dynamic element must not import schema/validator (M-9):\n%s", got)
+	}
+
+	// The generated module must build cleanly: no unused schema/validator import.
+	p := ir.ProviderIR{
+		Name:      "mycloud",
+		TypeName:  "mycloud",
+		Resources: []ir.ResourceIR{r},
+	}
+	tmp := generateResourceModule(t, p)
+	ctx, cancel := contextWithTimeout(t, 5*time.Minute)
+	defer cancel()
+	tidyCmd := exec.CommandContext(ctx, "go", "mod", "tidy")
+	tidyCmd.Dir = tmp
+	if out, err := tidyCmd.CombinedOutput(); err != nil {
+		t.Fatalf("go mod tidy failed: %v\n%s", err, out)
+	}
+	cmd := exec.CommandContext(ctx, "go", "build", "./internal/provider")
+	cmd.Dir = tmp
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("go build failed for nested-dynamic collection resource (M-9 regression): %v\n%s", err, out)
+	}
+}
+
 // TestResourceFile_NestingSetBlock verifies SetNestedBlock generation.
 func TestResourceFile_NestingSetBlock(t *testing.T) {
 	r := sampleResourceIR()
@@ -1037,5 +1122,61 @@ func TestResourceModel_WireNameJSONTag(t *testing.T) {
 	got := buf.String()
 	if !strings.Contains(got, `tfsdk:"can_admin" json:"canAdmin"`) {
 		t.Errorf("model field must carry the wire-name json tag (tfsdk:\"can_admin\" json:\"canAdmin\")\n--- body ---\n%s", got)
+	}
+}
+
+// TestNormalizeAttributeFlags_RequiredComputed locks in the N-25 emit-time guard:
+// an attribute marked both Required and Computed is normalized the way the
+// ephemeral merge resolves the conflict (Computed wins, Required clears to
+// Optional) so the rendered schema stays framework-valid. The transformer
+// enforces the invariant today, but the emit path must not produce a
+// Required+Computed attribute if hostile IR ever reaches it.
+func TestNormalizeAttributeFlags_RequiredComputed(t *testing.T) {
+	attr := ir.AttributeIR{Required: true, Computed: true}
+	got := normalizeAttributeFlags(attr)
+	if got.Required {
+		t.Error("normalizeAttributeFlags left Required set")
+	}
+	if !got.Optional {
+		t.Error("normalizeAttributeFlags did not set Optional")
+	}
+	if !got.Computed {
+		t.Error("normalizeAttributeFlags cleared Computed")
+	}
+}
+
+// TestAttributeValues_RequiredComputedEmitsOptional verifies that the resource
+// and datasource attribute-value emitters render a Required+Computed attribute
+// as Optional+Computed (never Required), so a hostile IR flag combination
+// cannot produce a schema the plugin-framework rejects at startup (N-25).
+func TestAttributeValues_RequiredComputedEmitsOptional(t *testing.T) {
+	attr := ir.AttributeIR{Name: "conflict", Required: true, Computed: true, Schema: ir.SchemaIR{Type: ir.TypeString}}
+
+	resourceElems := resourceAttributeValues(attr, nil)
+	resourceGot, err := astgen.RenderExpr(astgen.CompositeLit(astgen.Ident("schema.StringAttribute"), resourceElems...))
+	if err != nil {
+		t.Fatalf("resource RenderExpr() error = %v", err)
+	}
+	for _, want := range []string{"Optional: true", "Computed: true"} {
+		if !strings.Contains(string(resourceGot), want) {
+			t.Errorf("resource attribute missing %q\ncontent:\n%s", want, string(resourceGot))
+		}
+	}
+	if strings.Contains(string(resourceGot), "Required: true") {
+		t.Errorf("resource attribute must not emit Required for Required+Computed\ncontent:\n%s", string(resourceGot))
+	}
+
+	datasourceElems := datasourceAttributeValues(attr, nil)
+	dsGot, err := astgen.RenderExpr(astgen.CompositeLit(astgen.Ident("schema.StringAttribute"), datasourceElems...))
+	if err != nil {
+		t.Fatalf("datasource RenderExpr() error = %v", err)
+	}
+	for _, want := range []string{"Optional: true", "Computed: true"} {
+		if !strings.Contains(string(dsGot), want) {
+			t.Errorf("datasource attribute missing %q\ncontent:\n%s", want, string(dsGot))
+		}
+	}
+	if strings.Contains(string(dsGot), "Required: true") {
+		t.Errorf("datasource attribute must not emit Required for Required+Computed\ncontent:\n%s", string(dsGot))
 	}
 }

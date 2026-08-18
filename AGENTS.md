@@ -17,7 +17,7 @@ overwrite existing files unless `--force` is supplied).
 ## Hard rules
 
 - **Never run `go mod tidy` without reviewing the `toolchain` line.** `go.mod`
-  pins `go 1.26.0` + `toolchain go1.26.5`; CI resolves the toolchain from it.
+  pins `go 1.26.0` + `toolchain go1.26.6`; CI resolves the toolchain from it.
   Do not change the `toolchain` line unless you intend to change the CI toolchain.
 - **Generation must stay deterministic.** Identical spec + config must produce
   byte-identical output: no timestamps, random IDs, or nondeterministic
@@ -151,7 +151,7 @@ See `docs/PROJECT_DESIGN.md` for the full architecture and IR design.
 
 ## Toolchain & lint
 
-- `go.mod`: `go 1.26.0`, `toolchain go1.26.5`. CI uses `go-version-file: go.mod`.
+- `go.mod`: `go 1.26.0`, `toolchain go1.26.6`. CI uses `go-version-file: go.mod`.
 - `.golangci.yml` is a v2 config, lint Go version pinned to `1.26`. CI uses
   `golangci-lint-action@v9` (`v2.12.2`). An older binary will fail to parse it
   (and versions built with Go < the `go` directive in `go.mod`, e.g. v2.2.1,

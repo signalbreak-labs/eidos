@@ -14,6 +14,11 @@ import (
 // discriminator is supplied, it is attached to the Union as a DiscriminatorIR.
 // Non-fatal diagnostics encountered during conversion are appended to diags;
 // nil is accepted and ignored.
+//
+// Deprecated: unreachable from production. The live pipeline converts
+// polymorphism in schemaSpecFromParser (from_parser.go) instead; this function
+// and its helpers are retained only for their test coverage and must not be
+// extended (M-7). See AUDIT.md.
 func NormalizeOneOf(schemas []*Schema, discriminator *Discriminator, diags *diagnostics.Diagnostics) (*ir.SchemaIR, error) {
 	if len(schemas) == 0 {
 		return nil, errors.New("oneOf must contain at least one variant schema")
@@ -39,6 +44,11 @@ func NormalizeOneOf(schemas []*Schema, discriminator *Discriminator, diags *diag
 // Union field holds the variants. anyOf never carries a discriminator.
 // Non-fatal diagnostics encountered during conversion are appended to diags;
 // nil is accepted and ignored.
+//
+// Deprecated: unreachable from production. The live pipeline converts
+// polymorphism in schemaSpecFromParser (from_parser.go) instead; this function
+// and its helpers are retained only for their test coverage and must not be
+// extended (M-7). See AUDIT.md.
 func NormalizeAnyOf(schemas []*Schema, diags *diagnostics.Diagnostics) (*ir.SchemaIR, error) {
 	if len(schemas) == 0 {
 		return nil, errors.New("anyOf must contain at least one variant schema")

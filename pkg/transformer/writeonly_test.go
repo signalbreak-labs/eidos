@@ -25,9 +25,10 @@ func TestApplyWriteOnlyAttributesSimple(t *testing.T) {
 	obj := &ir.ObjectSchemaIR{
 		Attributes: []ir.AttributeIR{
 			{
-				Name:     "password",
-				Required: true,
-				Schema:   ir.SchemaIR{Type: ir.TypeString, WriteOnly: true},
+				Name:      "password",
+				Required:  true,
+				WriteOnly: true,
+				Schema:    ir.SchemaIR{Type: ir.TypeString},
 			},
 		},
 	}
@@ -42,17 +43,13 @@ func TestApplyWriteOnlyAttributesSimple(t *testing.T) {
 	if wo.Name != "password_wo" {
 		t.Errorf("write-only attribute name = %q, want %q", wo.Name, "password_wo")
 	}
+	// N-49: the AttributeIR is the single source of truth for the flags; the
+	// embedded SchemaIR no longer carries duplicates.
 	if !wo.WriteOnly {
 		t.Errorf("write-only attribute WriteOnly = false, want true")
 	}
-	if !wo.Schema.WriteOnly {
-		t.Errorf("write-only schema WriteOnly = false, want true")
-	}
 	if !wo.Sensitive {
 		t.Errorf("write-only attribute Sensitive = false, want true")
-	}
-	if !wo.Schema.Sensitive {
-		t.Errorf("write-only schema Sensitive = false, want true")
 	}
 	if !wo.Required {
 		t.Errorf("write-only attribute Required was changed")
@@ -101,9 +98,10 @@ func TestApplyWriteOnlyAttributesAlreadySuffixed(t *testing.T) {
 	obj := &ir.ObjectSchemaIR{
 		Attributes: []ir.AttributeIR{
 			{
-				Name:     "password_wo",
-				Optional: true,
-				Schema:   ir.SchemaIR{Type: ir.TypeString, WriteOnly: true},
+				Name:      "password_wo",
+				Optional:  true,
+				WriteOnly: true,
+				Schema:    ir.SchemaIR{Type: ir.TypeString},
 			},
 		},
 	}
@@ -125,9 +123,10 @@ func TestApplyWriteOnlyAttributesExistingCompanionNotDuplicated(t *testing.T) {
 	obj := &ir.ObjectSchemaIR{
 		Attributes: []ir.AttributeIR{
 			{
-				Name:     "password_wo",
-				Optional: true,
-				Schema:   ir.SchemaIR{Type: ir.TypeString, WriteOnly: true},
+				Name:      "password_wo",
+				Optional:  true,
+				WriteOnly: true,
+				Schema:    ir.SchemaIR{Type: ir.TypeString},
 			},
 			{
 				Name:     "password_wo_version",
@@ -148,12 +147,14 @@ func TestApplyWriteOnlyAttributesMultiple(t *testing.T) {
 	obj := &ir.ObjectSchemaIR{
 		Attributes: []ir.AttributeIR{
 			{
-				Name:   "password",
-				Schema: ir.SchemaIR{Type: ir.TypeString, WriteOnly: true},
+				Name:      "password",
+				WriteOnly: true,
+				Schema:    ir.SchemaIR{Type: ir.TypeString},
 			},
 			{
-				Name:   "token",
-				Schema: ir.SchemaIR{Type: ir.TypeString, WriteOnly: true},
+				Name:      "token",
+				WriteOnly: true,
+				Schema:    ir.SchemaIR{Type: ir.TypeString},
 			},
 			{
 				Name:   "name",
@@ -189,8 +190,9 @@ func TestApplyWriteOnlyAttributesNestedObject(t *testing.T) {
 					Type: ir.TypeString,
 					Attributes: []ir.AttributeIR{
 						{
-							Name:   "password",
-							Schema: ir.SchemaIR{Type: ir.TypeString, WriteOnly: true},
+							Name:      "password",
+							WriteOnly: true,
+							Schema:    ir.SchemaIR{Type: ir.TypeString},
 						},
 					},
 				},
@@ -220,8 +222,9 @@ func TestApplyWriteOnlyAttributesBlock(t *testing.T) {
 				Schema: ir.ObjectSchemaIR{
 					Attributes: []ir.AttributeIR{
 						{
-							Name:   "password",
-							Schema: ir.SchemaIR{Type: ir.TypeString, WriteOnly: true},
+							Name:      "password",
+							WriteOnly: true,
+							Schema:    ir.SchemaIR{Type: ir.TypeString},
 						},
 					},
 				},
@@ -256,8 +259,9 @@ func TestApplyWriteOnlyAttributesCollectionElement(t *testing.T) {
 							Type: ir.TypeString,
 							Attributes: []ir.AttributeIR{
 								{
-									Name:   "value",
-									Schema: ir.SchemaIR{Type: ir.TypeString, WriteOnly: true},
+									Name:      "value",
+									WriteOnly: true,
+									Schema:    ir.SchemaIR{Type: ir.TypeString},
 								},
 							},
 						},
@@ -294,8 +298,9 @@ func TestApplyWriteOnlyAttributesUnionVariant(t *testing.T) {
 								Type: ir.TypeString,
 								Attributes: []ir.AttributeIR{
 									{
-										Name:   "password",
-										Schema: ir.SchemaIR{Type: ir.TypeString, WriteOnly: true},
+										Name:      "password",
+										WriteOnly: true,
+										Schema:    ir.SchemaIR{Type: ir.TypeString},
 									},
 								},
 							},
@@ -339,8 +344,8 @@ func TestApplyWriteOnlyAttributesAttributeLevelFlag(t *testing.T) {
 	if obj.Attributes[0].Name != "password_wo" {
 		t.Errorf("attribute name = %q, want %q", obj.Attributes[0].Name, "password_wo")
 	}
-	if !obj.Attributes[0].Schema.WriteOnly {
-		t.Errorf("schema-level WriteOnly was not propagated")
+	if !obj.Attributes[0].WriteOnly {
+		t.Errorf("attribute-level WriteOnly was not propagated")
 	}
 }
 
@@ -353,7 +358,7 @@ func TestApplyWriteOnlyAttributesAttributeLevelFlag(t *testing.T) {
 func TestApplyWriteOnlyAttributesRenameConflictDiagnostic(t *testing.T) {
 	obj := &ir.ObjectSchemaIR{
 		Attributes: []ir.AttributeIR{
-			{Name: "password", WriteOnly: true, Schema: ir.SchemaIR{Type: ir.TypeString, WriteOnly: true}},
+			{Name: "password", WriteOnly: true, Schema: ir.SchemaIR{Type: ir.TypeString}},
 			{Name: "password_wo", Schema: ir.SchemaIR{Type: ir.TypeString}},
 		},
 	}

@@ -40,6 +40,11 @@ type EphemeralResourceIR struct {
 //   - A POST that is a managed-resource Create (the collection has a paired
 //     instance subpath) is skipped, mirroring InferActions, so it is not
 //     emitted as both a managed resource and an ephemeral resource.
+//
+// Deprecated: unreachable from production. The live pipeline classifies
+// operations in pkg/api (classifyOperation) and builds ephemeral IR there;
+// this function is retained only for its test coverage and must not be
+// extended (M-7). See AUDIT.md.
 func InferEphemeralResources(pathOps map[string]map[HTTPMethod]Operation) []EphemeralResourceIR {
 	allPaths := make(map[string]struct{}, len(pathOps))
 	for path := range pathOps {
@@ -72,7 +77,7 @@ func InferEphemeralResources(pathOps map[string]map[HTTPMethod]Operation) []Ephe
 	sort.SliceStable(resources, func(i, j int) bool {
 		return resources[i].Name < resources[j].Name
 	})
-	resources = dedupByName(resources, func(e EphemeralResourceIR) string { return e.Name })
+	resources = dedupByName(resources, func(e EphemeralResourceIR) string { return e.Name }, nil)
 	return resources
 }
 

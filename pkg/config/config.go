@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"math"
+	"io"
 	"os"
 	"sort"
 	"strings"
@@ -576,39 +576,43 @@ func formatDuration(d time.Duration) string {
 		return "0s"
 	}
 	sign := ""
+	// The magnitude is computed in uint64: -d overflows int64 when
+	// d == math.MinInt64 (|MinInt64| = 2^63 does not fit), and the previous
+	// workaround time.Duration(uint64(d)) merely wrapped back to MinInt64 — a
+	// no-op that produced a malformed "-" output. -(d+1)+1 equals -d for every
+	// negative d while never overflowing (d+1 is representable) (N-43).
+	var mag uint64
 	if d < 0 {
 		sign = "-"
-		// -d overflows int64 when d == math.MinInt64, leaving the magnitude
-		// negative and producing a malformed "-" output. Compute the magnitude
-		// via the uint64 representation in that one case (L-18).
-		if d == math.MinInt64 {
-			d = time.Duration(uint64(d)) //nolint:gosec // G115: intentional overflow-to-magnitude for the MinInt64 edge case; the result is a large positive duration used only as an output magnitude.
-		} else {
-			d = -d
-		}
+		// gosec: the conversion is provably non-overflowing — for d < 0 the
+		// magnitude |d| fits in uint64 (max is 2^63, exactly uint64's span
+		// beyond int64), and -(d+1) is ≤ 2^63-1 which fits int64.
+		mag = uint64(-(d + 1)) + 1 //nolint:gosec // magnitude fits uint64 by construction
+	} else {
+		mag = uint64(d)
 	}
 	var parts []string
-	if h := d / time.Hour; h > 0 {
+	if h := mag / uint64(time.Hour); h > 0 {
 		parts = append(parts, fmt.Sprintf("%dh", h))
-		d -= h * time.Hour
+		mag -= h * uint64(time.Hour)
 	}
-	if m := d / time.Minute; m > 0 {
+	if m := mag / uint64(time.Minute); m > 0 {
 		parts = append(parts, fmt.Sprintf("%dm", m))
-		d -= m * time.Minute
+		mag -= m * uint64(time.Minute)
 	}
-	if s := d / time.Second; s > 0 {
+	if s := mag / uint64(time.Second); s > 0 {
 		parts = append(parts, fmt.Sprintf("%ds", s))
-		d -= s * time.Second
+		mag -= s * uint64(time.Second)
 	}
-	if ms := d / time.Millisecond; ms > 0 {
+	if ms := mag / uint64(time.Millisecond); ms > 0 {
 		parts = append(parts, fmt.Sprintf("%dms", ms))
-		d -= ms * time.Millisecond
+		mag -= ms * uint64(time.Millisecond)
 	}
-	if us := d / time.Microsecond; us > 0 {
+	if us := mag / uint64(time.Microsecond); us > 0 {
 		parts = append(parts, fmt.Sprintf("%dus", us))
-		d -= us * time.Microsecond
+		mag -= us * uint64(time.Microsecond)
 	}
-	if ns := d; ns > 0 {
+	if ns := mag; ns > 0 {
 		parts = append(parts, fmt.Sprintf("%dns", ns))
 	}
 	return sign + strings.Join(parts, "")
@@ -626,6 +630,13 @@ func Load(path string) (*Config, error) {
 
 // LoadBytes parses generator.yaml bytes into a Config, applies defaults, and validates it.
 func LoadBytes(data []byte) (*Config, error) {
+	// Empty, whitespace-only, or comment-only configs fail yaml's Decode with a
+	// bare "EOF" — accurate but useless (N-41). Reject them with an actionable
+	// message before decoding.
+	if !hasYAMLContent(data) {
+		return nil, fmt.Errorf("generator.yaml is empty or contains only whitespace/comments; provide a config with at least a provider.name")
+	}
+
 	var cfg Config
 	// Strict decoding: unknown or misspelled keys (e.g. "overrides_extra",
 	// "time_outs") are rejected instead of being silently dropped, so a user's
@@ -634,6 +645,20 @@ func LoadBytes(data []byte) (*Config, error) {
 	dec.KnownFields(true)
 	if err := dec.Decode(&cfg); err != nil {
 		return nil, fmt.Errorf("failed to unmarshal generator.yaml: %w", err)
+	}
+	// A concatenated config (or an accidental "---") silently drops everything
+	// after the first document (N-40). Detect a second document and reject
+	// fail-loud instead of generating a provider with half the overrides. A
+	// trailing empty document (a stray "---" at EOF with nothing after) decodes
+	// to a nil value and is tolerated; only a real second document is an error.
+	var extra any
+	if err := dec.Decode(&extra); !errors.Is(err, io.EOF) {
+		if err != nil {
+			return nil, fmt.Errorf("failed to decode generator.yaml document separator: %w", err)
+		}
+		if extra != nil {
+			return nil, fmt.Errorf("generator.yaml contains multiple YAML documents; the config must be a single document (remove the extra %q separator)", "---")
+		}
 	}
 	ApplyDefaults(&cfg)
 	if err := Validate(&cfg); err != nil {
@@ -681,10 +706,29 @@ func Validate(cfg *Config) error {
 
 	if cfg.Naming != nil {
 		if strings.TrimSpace(cfg.Naming.Transform) != "" {
-			valid := map[string]bool{namingTransformSnakeCase: true, "camelCase": true, "PascalCase": true}
-			if !valid[cfg.Naming.Transform] {
-				errs = append(errs, fmt.Errorf("naming.transform must be one of: %s, camelCase, PascalCase", namingTransformSnakeCase))
+			// N-46: camelCase and PascalCase were validated and documented but
+			// never implemented — applyNamingOverrides treats transform as a no-op
+			// because inferred names are already snake_case. Reject them fail-loud
+			// instead of advertising a config surface that does nothing.
+			if cfg.Naming.Transform != namingTransformSnakeCase {
+				errs = append(errs, fmt.Errorf("naming.transform %q is not implemented; only %s is supported (inferred names are always normalized to snake_case)", cfg.Naming.Transform, namingTransformSnakeCase))
 			}
+		}
+	}
+
+	// Empty skip/include patterns are rejected fail-loud (M-15): a pasted
+	// trailing "- " (or an empty string threaded through an LLM) would otherwise
+	// silently exclude every operation — MatchName("", opID) is false for every
+	// non-empty operationId — and generate a provider with zero resources. This
+	// mirrors the generation.<kind>.include/exclude empty-entry checks below.
+	for i, p := range cfg.SkipOperations {
+		if strings.TrimSpace(p) == "" {
+			errs = append(errs, fmt.Errorf("skip_operations[%d] is empty", i))
+		}
+	}
+	for i, p := range cfg.IncludeOperations {
+		if strings.TrimSpace(p) == "" {
+			errs = append(errs, fmt.Errorf("include_operations[%d] is empty", i))
 		}
 	}
 
@@ -710,6 +754,21 @@ func Validate(cfg *Config) error {
 		}
 		if strings.TrimSpace(ro.Schema) != "" && strings.TrimSpace(ro.Operation) != "" {
 			cfg.Warnings = append(cfg.Warnings, fmt.Sprintf("resource_overrides[%d]: both schema %q and operation %q are set; operation takes precedence and schema is ignored", i, ro.Schema, ro.Operation))
+		}
+		// N-45: generate_resource: true builds a resource from an operation (or
+		// create_operation). Without a seed operation applyResourceCreationOverrides
+		// silently continues, so the opt-in would pass Validate and then do
+		// nothing. Require the seed here fail-loud instead.
+		if ro.GenerateResource != nil && *ro.GenerateResource &&
+			strings.TrimSpace(ro.Operation) == "" && strings.TrimSpace(ro.CreateOperation) == "" {
+			errs = append(errs, fmt.Errorf("resource_overrides[%d]: generate_resource: true requires an operation (or create_operation) to build the resource from", i))
+		}
+		// N-45: generate_resource: false is silently ignored by design (the escape
+		// hatch is skip: true). Surface a warning so a practitioner who wrote
+		// generate_resource: false expecting it to skip gets pointed at the
+		// supported knob instead of a silent no-op.
+		if ro.GenerateResource != nil && !*ro.GenerateResource {
+			cfg.Warnings = append(cfg.Warnings, fmt.Sprintf("resource_overrides[%d]: generate_resource: false is a no-op; use skip: true to exclude this resource", i))
 		}
 		for j, woa := range ro.WriteOnlyAttributes {
 			if strings.TrimSpace(woa.Name) == "" {
@@ -845,11 +904,10 @@ func validateTimeoutConfig(t *TimeoutConfig, path string) error {
 
 // validateGenerationConfig checks that generation filters and package rules are
 // structurally valid. It returns a slice of validation errors.
+// validateGenerationConfig checks the generation.* include/exclude/override
+// surface. The caller always passes &cfg.Generation (a value field), so cfg is
+// never nil; the guard is deliberately omitted (N-44).
 func validateGenerationConfig(cfg *GenerationConfig) []error {
-	if cfg == nil {
-		return nil
-	}
-
 	errs := make([]error, 0, 6)
 	errs = append(errs, validateResourceGenerationConfig("resources", &cfg.Resources)...)
 	errs = append(errs, validateResourceGenerationConfig("datasources", &cfg.DataSources)...)
@@ -947,19 +1005,22 @@ func validateStateUpgrades(schemaVersion int, upgrades []StateUpgradeConfig, idx
 		}
 		seen[su.From] = struct{}{}
 		fromVersions = append(fromVersions, su.From)
-		for oldName, newName := range su.Renames {
+		// Iterate renames in sorted key order so the reported error (when several
+		// entries are invalid) is deterministic across runs; a raw map range over a
+		// Go map is non-deterministic (N-42).
+		for _, oldName := range sortedKeys(su.Renames) {
 			if strings.TrimSpace(oldName) == "" {
 				return fmt.Errorf("resource_overrides[%d].state_upgrades[%d].renames contains empty old attribute name", idx, j)
 			}
-			if strings.TrimSpace(newName) == "" {
+			if strings.TrimSpace(su.Renames[oldName]) == "" {
 				return fmt.Errorf("resource_overrides[%d].state_upgrades[%d].renames[%q] maps to empty new attribute name", idx, j, oldName)
 			}
 		}
-		for oldName, newName := range su.BlockRenames {
+		for _, oldName := range sortedKeys(su.BlockRenames) {
 			if strings.TrimSpace(oldName) == "" {
 				return fmt.Errorf("resource_overrides[%d].state_upgrades[%d].block_renames contains empty old block name", idx, j)
 			}
-			if strings.TrimSpace(newName) == "" {
+			if strings.TrimSpace(su.BlockRenames[oldName]) == "" {
 				return fmt.Errorf("resource_overrides[%d].state_upgrades[%d].block_renames[%q] maps to empty new block name", idx, j, oldName)
 			}
 		}
@@ -1026,4 +1087,31 @@ func validateNoAddRemoveOverlap(su StateUpgradeConfig, idx, j int) error {
 		}
 	}
 	return nil
+}
+
+// sortedKeys returns the keys of m in sorted order. It exists so map iteration
+// never leaks into error text or emitted output, keeping behavior deterministic.
+func sortedKeys(m map[string]string) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+// hasYAMLContent reports whether data contains any line that is neither blank
+// nor a YAML comment (a '#' as the first non-whitespace character). A line like
+// `name: "value # not a comment"` still counts as content because the '#' is not
+// leading. Used to reject empty/whitespace/comment-only configs with an
+// actionable error instead of yaml's bare "EOF" (N-41).
+func hasYAMLContent(data []byte) bool {
+	for _, line := range strings.Split(string(data), "\n") {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
+			continue
+		}
+		return true
+	}
+	return false
 }

@@ -15,6 +15,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/signalbreak-labs/eidos/pkg/config"
+	"github.com/signalbreak-labs/eidos/pkg/specsource"
 )
 
 // TestMustMarkFlagRequired covers the registered-flag happy path and the
@@ -75,25 +76,25 @@ func TestRemoteSpecFlags_Options(t *testing.T) {
 // TestCheckRemoteSpecHost covers the no-host, allowPrivate bypass, literal
 // private/public IP, and hostname-resolution branches of the SSRF guard.
 func TestCheckRemoteSpecHost(t *testing.T) {
-	if err := checkRemoteSpecHost(&url.URL{}, false); err == nil || !strings.Contains(err.Error(), "no host") {
+	if err := specsource.CheckHost(context.Background(), &url.URL{}, false); err == nil || !strings.Contains(err.Error(), "no host") {
 		t.Errorf("no-host err = %v, want no host error", err)
 	}
-	if err := checkRemoteSpecHost(&url.URL{Host: "127.0.0.1"}, true); err != nil {
+	if err := specsource.CheckHost(context.Background(), &url.URL{Host: "127.0.0.1"}, true); err != nil {
 		t.Errorf("allowPrivate = %v, want nil", err)
 	}
-	if err := checkRemoteSpecHost(&url.URL{Host: "10.0.0.1"}, false); err == nil || !strings.Contains(err.Error(), "private/local IP") {
+	if err := specsource.CheckHost(context.Background(), &url.URL{Host: "10.0.0.1"}, false); err == nil || !strings.Contains(err.Error(), "private/local IP") {
 		t.Errorf("literal private = %v, want private IP error", err)
 	}
-	if err := checkRemoteSpecHost(&url.URL{Host: "8.8.8.8"}, false); err != nil {
+	if err := specsource.CheckHost(context.Background(), &url.URL{Host: "8.8.8.8"}, false); err != nil {
 		t.Errorf("literal public = %v, want nil", err)
 	}
 	// localhost resolves to a loopback address; the guard must reject it.
-	if err := checkRemoteSpecHost(&url.URL{Host: "localhost"}, false); err == nil || !strings.Contains(err.Error(), "private/local IP") {
+	if err := specsource.CheckHost(context.Background(), &url.URL{Host: "localhost"}, false); err == nil || !strings.Contains(err.Error(), "private/local IP") {
 		t.Errorf("localhost = %v, want private IP error", err)
 	}
 }
 
-// TestApplySpecAuth covers every scheme branch of applySpecAuth: the nil and
+// TestApplySpecAuth covers every scheme branch of the shared ApplyAuth: the nil and
 // empty-scheme no-ops, bearer/basic/apiKey success and missing-env failures,
 // the apiKey missing-header failure, and the unknown-scheme rejection.
 func TestApplySpecAuth(t *testing.T) {
@@ -105,17 +106,17 @@ func TestApplySpecAuth(t *testing.T) {
 		return r
 	}
 
-	if err := applySpecAuth(newReq(), nil); err != nil {
+	if err := specsource.ApplyAuth(newReq(), nil); err != nil {
 		t.Errorf("nil auth = %v, want nil", err)
 	}
-	if err := applySpecAuth(newReq(), &specAuth{}); err != nil {
+	if err := specsource.ApplyAuth(newReq(), &specAuth{}); err != nil {
 		t.Errorf("empty scheme = %v, want nil", err)
 	}
 
 	// bearer with a token set.
 	t.Setenv("EIDOS_TEST_BEARER", "tok")
 	r := newReq()
-	if err := applySpecAuth(r, &specAuth{Scheme: "bearer", TokenEnv: "EIDOS_TEST_BEARER"}); err != nil {
+	if err := specsource.ApplyAuth(r, &specAuth{Scheme: "bearer", TokenEnv: "EIDOS_TEST_BEARER"}); err != nil {
 		t.Errorf("bearer = %v, want nil", err)
 	}
 	if got := r.Header.Get("Authorization"); got != "Bearer tok" {
@@ -123,7 +124,7 @@ func TestApplySpecAuth(t *testing.T) {
 	}
 	// bearer with a missing env var.
 	t.Setenv("EIDOS_TEST_BEARER_MISSING", "")
-	if err := applySpecAuth(newReq(), &specAuth{Scheme: "Bearer", TokenEnv: "EIDOS_TEST_BEARER_MISSING"}); err == nil {
+	if err := specsource.ApplyAuth(newReq(), &specAuth{Scheme: "Bearer", TokenEnv: "EIDOS_TEST_BEARER_MISSING"}); err == nil {
 		t.Error("bearer missing env should error")
 	}
 
@@ -131,7 +132,7 @@ func TestApplySpecAuth(t *testing.T) {
 	t.Setenv("EIDOS_TEST_USER", "u")
 	t.Setenv("EIDOS_TEST_PASS", "p")
 	r = newReq()
-	if err := applySpecAuth(r, &specAuth{Scheme: "basic", UsernameEnv: "EIDOS_TEST_USER", PasswordEnv: "EIDOS_TEST_PASS"}); err != nil {
+	if err := specsource.ApplyAuth(r, &specAuth{Scheme: "basic", UsernameEnv: "EIDOS_TEST_USER", PasswordEnv: "EIDOS_TEST_PASS"}); err != nil {
 		t.Errorf("basic = %v, want nil", err)
 	}
 	if u, p, ok := r.BasicAuth(); !ok || u != "u" || p != "p" {
@@ -140,14 +141,14 @@ func TestApplySpecAuth(t *testing.T) {
 	// basic with both env vars empty.
 	t.Setenv("EIDOS_TEST_USER_M", "")
 	t.Setenv("EIDOS_TEST_PASS_M", "")
-	if err := applySpecAuth(newReq(), &specAuth{Scheme: "basic", UsernameEnv: "EIDOS_TEST_USER_M", PasswordEnv: "EIDOS_TEST_PASS_M"}); err == nil {
+	if err := specsource.ApplyAuth(newReq(), &specAuth{Scheme: "basic", UsernameEnv: "EIDOS_TEST_USER_M", PasswordEnv: "EIDOS_TEST_PASS_M"}); err == nil {
 		t.Error("basic missing env should error")
 	}
 
 	// apiKey with a key and header.
 	t.Setenv("EIDOS_TEST_KEY", "k")
 	r = newReq()
-	if err := applySpecAuth(r, &specAuth{Scheme: "apikey", KeyEnv: "EIDOS_TEST_KEY", HeaderName: "X-API-Key"}); err != nil {
+	if err := specsource.ApplyAuth(r, &specAuth{Scheme: "apikey", KeyEnv: "EIDOS_TEST_KEY", HeaderName: "X-API-Key"}); err != nil {
 		t.Errorf("apikey = %v, want nil", err)
 	}
 	if got := r.Header.Get("X-API-Key"); got != "k" {
@@ -155,17 +156,17 @@ func TestApplySpecAuth(t *testing.T) {
 	}
 	// apiKey with a missing key.
 	t.Setenv("EIDOS_TEST_KEY_M", "")
-	if err := applySpecAuth(newReq(), &specAuth{Scheme: "apiKey", KeyEnv: "EIDOS_TEST_KEY_M", HeaderName: "X-API-Key"}); err == nil {
+	if err := specsource.ApplyAuth(newReq(), &specAuth{Scheme: "apiKey", KeyEnv: "EIDOS_TEST_KEY_M", HeaderName: "X-API-Key"}); err == nil {
 		t.Error("apikey missing key should error")
 	}
 	// apiKey with a missing header name.
 	t.Setenv("EIDOS_TEST_KEY_H", "k")
-	if err := applySpecAuth(newReq(), &specAuth{Scheme: "apiKey", KeyEnv: "EIDOS_TEST_KEY_H"}); err == nil {
+	if err := specsource.ApplyAuth(newReq(), &specAuth{Scheme: "apiKey", KeyEnv: "EIDOS_TEST_KEY_H"}); err == nil {
 		t.Error("apikey missing header should error")
 	}
 
 	// Unknown scheme.
-	if err := applySpecAuth(newReq(), &specAuth{Scheme: "nope"}); err == nil {
+	if err := specsource.ApplyAuth(newReq(), &specAuth{Scheme: "nope"}); err == nil {
 		t.Error("unknown scheme should error")
 	}
 }
@@ -192,13 +193,13 @@ func TestApplySpecAuth_OAuth2ClientCredentials(t *testing.T) {
 	}
 	auth := &specAuth{Scheme: "oauth2-client-credentials", TokenURL: srv.URL,
 		ClientIDEnv: "EIDOS_TEST_CID", ClientSecretEnv: "EIDOS_TEST_CSECRET"}
-	if err := applySpecAuth(r, auth); err != nil {
+	if err := specsource.ApplyAuth(r, auth); err != nil {
 		t.Fatalf("oauth2 = %v, want nil", err)
 	}
 	if got := r.Header.Get("Authorization"); got != "Bearer oauth-tok" {
 		t.Errorf("oauth2 header = %q, want Bearer oauth-tok", got)
 	}
-	if err := applySpecAuth(newReqForOAuth(t), &specAuth{Scheme: "oauth2-client-credentials"}); err == nil {
+	if err := specsource.ApplyAuth(newReqForOAuth(t), &specAuth{Scheme: "oauth2-client-credentials"}); err == nil {
 		t.Error("oauth2 without token_url should error")
 	}
 }

@@ -91,7 +91,7 @@ func LookupTool() *sdkmcp.Tool {
 }
 
 // HandleLookup implements eidos/lookup.
-func HandleLookup(_ context.Context, _ *sdkmcp.CallToolRequest, args LookupArgs) (res *sdkmcp.CallToolResult, out LookupResult, err error) {
+func HandleLookup(ctx context.Context, _ *sdkmcp.CallToolRequest, args LookupArgs) (res *sdkmcp.CallToolResult, out LookupResult, err error) {
 	defer recoverHandler("eidos/lookup", lookupErrorResult, &res, &out)
 	result := LookupResult{
 		Diagnostics: []api.DiagnosticJSON{},
@@ -108,7 +108,7 @@ func HandleLookup(_ context.Context, _ *sdkmcp.CallToolRequest, args LookupArgs)
 		return res, out, err
 	}
 
-	specBytes, err := normalizeSpec(args.Spec)
+	specBytes, err := normalizeSpec(ctx, args.Spec)
 	if err != nil {
 		out = lookupErrorResult(err)
 		res, err = marshalToolResult(out)

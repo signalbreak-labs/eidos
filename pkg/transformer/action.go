@@ -30,6 +30,12 @@ type ActionIR struct {
 // operation of a managed resource, which is detected by the presence of an
 // instance subpath (e.g., POST /pets is not an action because /pets/{petId}
 // exists). The returned actions are sorted deterministically by name.
+//
+// Deprecated: unreachable from production. The live pipeline classifies
+// operations in pkg/api (classifyOperation) and builds action IR via
+// ObjectSchemaFromOperation / schemaIRFromSpec; this function and its
+// inference helpers are retained only for their test coverage and must not be
+// extended (M-7). See AUDIT.md.
 func InferActions(pathOps map[string]map[HTTPMethod]Operation) []ActionIR {
 	allPaths := make(map[string]struct{}, len(pathOps))
 	for path := range pathOps {
@@ -53,7 +59,7 @@ func InferActions(pathOps map[string]map[HTTPMethod]Operation) []ActionIR {
 	sort.SliceStable(actions, func(i, j int) bool {
 		return actions[i].Name < actions[j].Name
 	})
-	actions = dedupByName(actions, func(a ActionIR) string { return a.Name })
+	actions = dedupByName(actions, func(a ActionIR) string { return a.Name }, nil)
 	return actions
 }
 
@@ -154,8 +160,10 @@ func ObjectSchemaFromOperation(op Operation) ir.ObjectSchemaIR {
 
 // ObjectSchemaFromOperationWithDiagnostics is ObjectSchemaFromOperation that
 // appends fail-loud diagnostics to diags (a nil diags is allowed and simply
-// suppresses emission). The only diagnostic it emits today is the path/body
-// name collision described below.
+// suppresses emission). It emits two classes of diagnostic: the path/body name
+// collision described below, and the array-query-parameter warnings surfaced by
+// paramSchemaIR (non-scalar items modeled as a List of strings; non-form
+// serialization styles serialized as repeated form values regardless).
 //
 // A request-body property whose sanitized Terraform name collides with a
 // path-parameter's sanitized name represents a DISTINCT API field, not a
@@ -172,6 +180,12 @@ func ObjectSchemaFromOperation(op Operation) ir.ObjectSchemaIR {
 // carry no WireName here: they are substituted into the URL path, and emitting
 // them into the request body under their wire name would collide with (and, by
 // map-key overwrite, clobber) the body's same-named field.
+//
+// Parameters are mapped through paramSchemaIR (the same mapper the resource
+// path uses) so an array query parameter becomes a List of its element type
+// instead of being silently stringified (N-14): the generated provider then
+// serializes one repeated query value per element, matching how data sources
+// model the same parameter.
 func ObjectSchemaFromOperationWithDiagnostics(op Operation, diags *diagnostics.Diagnostics) ir.ObjectSchemaIR {
 	if len(op.Parameters) == 0 && op.RequestSchema == nil {
 		return ir.ObjectSchemaIR{}
@@ -185,17 +199,25 @@ func ObjectSchemaFromOperationWithDiagnostics(op Operation, diags *diagnostics.D
 	var attrs []ir.AttributeIR
 	seen := make(map[string]struct{})
 	pathNames := make(map[string]struct{})
-	add := func(a ir.AttributeIR) {
+	// add appends a and reports whether it was added. A duplicate name is
+	// dropped (params are appended first and win); the caller decides whether
+	// the drop is benign or must be surfaced fail-loud (N-15).
+	add := func(a ir.AttributeIR) bool {
 		if _, dup := seen[a.Name]; dup {
-			return
+			return false
 		}
 		seen[a.Name] = struct{}{}
 		attrs = append(attrs, a)
+		return true
 	}
 	for _, p := range op.Parameters {
 		name := SanitizeAttributeName(p.Name)
 		pathNames[name] = struct{}{}
-		schema := ir.SchemaIR{Type: mapParamType(p.Type)}
+		// paramSchemaIR models an array query parameter as a List of the element
+		// type (with fail-loud warnings for non-scalar items and non-form styles)
+		// instead of silently stringifying it via mapParamType's array default
+		// (N-14), keeping actions consistent with data sources.
+		schema := paramSchemaIR(p.In, p.Type, p.ItemsType, p.Style, diags, p.Name)
 		add(ir.AttributeIR{
 			Name:     name,
 			Schema:   schema,
@@ -205,33 +227,27 @@ func ObjectSchemaFromOperationWithDiagnostics(op Operation, diags *diagnostics.D
 	}
 
 	if op.RequestSchema != nil {
-		for _, a := range requestBodyAttributes(*op.RequestSchema) {
-			if _, isPath := pathNames[a.Name]; isPath {
-				// Path/body name collision: disambiguate the body attribute so it
-				// is not dropped, preserving its WireName for the request body
-				// key. See the function doc comment for the rationale.
-				orig := a.Name
-				a.Name = "body_" + orig
-				for i := 2; ; i++ {
-					if _, dup := seen[a.Name]; !dup {
-						break
-					}
-					a.Name = fmt.Sprintf("body_%s_%d", orig, i)
-				}
+		for _, a := range requestBodyAttributes(*op.RequestSchema, diags) {
+			a = disambiguateBodyCollision(a, op, pathNames, seen, diags)
+			if !add(a) {
+				// The body attribute's sanitized name is already taken by a
+				// parameter (path params were disambiguated above, so this is a
+				// query/header/cookie param) or by another body property (e.g.
+				// "fooBar" and "foo_bar"). The property is dropped from the
+				// config surface; surface the loss fail-loud instead of silently
+				// leaving it unconfigurable (N-15).
 				if diags != nil {
 					*diags = append(*diags, diagnostics.Diagnostic{
 						Severity: diagnostics.Warning,
-						Summary:  "request-body property collides with a path parameter name",
+						Summary:  "request-body property dropped on name collision",
 						Detail: fmt.Sprintf(
-							"operation %q has a path parameter and a request-body property that both normalize to %q. "+
-								"They are distinct API fields, so the body attribute is disambiguated as %q "+
-								"(wire name %q preserved for the request body). Set both in the action config: "+
-								"the bare attribute for the path parameter and the body_-prefixed attribute for the request body.",
-							op.OperationID, orig, a.Name, a.WireName),
+							"operation %q has a request-body property that normalizes to %q, which is already "+
+								"taken by a parameter or another body property; the body property is not configurable "+
+								"as its own attribute. Rename it in the spec, or set it via a raw body.",
+							op.OperationID, a.Name),
 					})
 				}
 			}
-			add(a)
 		}
 	}
 
@@ -241,10 +257,92 @@ func ObjectSchemaFromOperationWithDiagnostics(op Operation, diags *diagnostics.D
 	return ir.ObjectSchemaIR{Attributes: attrs}
 }
 
-func requestBodyAttributes(spec SchemaSpec) []ir.AttributeIR {
+// disambiguateBodyCollision renames a request-body attribute whose sanitized
+// name collides with a path parameter, preserving its WireName for the request
+// body key. The rename picks an unused "body_<orig>[_N]" name. It also emits a
+// fail-loud Warning so the disambiguation is never silent; a non-colliding body
+// attribute is returned unchanged. This is a separate helper so
+// ObjectSchemaFromOperationWithDiagnostics stays under the cognitive-complexity
+// budget (N-15).
+func disambiguateBodyCollision(a ir.AttributeIR, op Operation, pathNames, seen map[string]struct{}, diags *diagnostics.Diagnostics) ir.AttributeIR {
+	if _, isPath := pathNames[a.Name]; !isPath {
+		return a
+	}
+	orig := a.Name
+	a.Name = "body_" + orig
+	for i := 2; ; i++ {
+		if _, dup := seen[a.Name]; !dup {
+			break
+		}
+		a.Name = fmt.Sprintf("body_%s_%d", orig, i)
+	}
+	if diags != nil {
+		*diags = append(*diags, diagnostics.Diagnostic{
+			Severity: diagnostics.Warning,
+			Summary:  "request-body property collides with a path parameter name",
+			Detail: fmt.Sprintf(
+				"operation %q has a path parameter and a request-body property that both normalize to %q. "+
+					"They are distinct API fields, so the body attribute is disambiguated as %q "+
+					"(wire name %q preserved for the request body). Set both in the action config: "+
+					"the bare attribute for the path parameter and the body_-prefixed attribute for the request body.",
+				op.OperationID, orig, a.Name, a.WireName),
+		})
+	}
+	return a
+}
+
+// requestBodyAttributes maps a request-body SchemaSpec to writable body
+// attributes. An object body maps each declared property to an attribute
+// (carrying WireName for the request-body key). Two degenerate shapes degrade
+// to a single Dynamic `body` attribute instead of producing zero attributes,
+// each with a fail-loud Warning (N-15):
+//
+//   - A union body (oneOf/anyOf): the flat attribute model cannot switch on
+//     variants, so the body is exposed as raw JSON the practitioner sets as-is.
+//   - An empty object (`type: object`, no properties): there are no named
+//     fields to expose; the Dynamic body keeps the action's request body
+//     configurable rather than silently absent.
+//
+// A non-object body (string, array, ...) also maps to the single `body`
+// attribute, marked Required (a declared request body is expected to be sent)
+// so the generated schema is not rejected at runtime (M-37).
+func requestBodyAttributes(spec SchemaSpec, diags *diagnostics.Diagnostics) []ir.AttributeIR {
 	spec.Type = strings.ToLower(strings.TrimSpace(spec.Type))
 	switch spec.Type {
 	case "object":
+		if len(spec.OneOf) > 0 || len(spec.AnyOf) > 0 {
+			if diags != nil {
+				*diags = append(*diags, diagnostics.Diagnostic{
+					Severity: diagnostics.Warning,
+					Summary:  "union request body degraded to a Dynamic body attribute",
+					Detail: "The action request body declares a oneOf/anyOf union, which the flat " +
+						"attribute model cannot switch on; eidos exposes it as a single Dynamic `body` " +
+						"attribute. Set the body as raw JSON and it is sent as-is.",
+				})
+			}
+			return []ir.AttributeIR{{
+				Name:     "body",
+				Schema:   schemaIRFromSpec(spec),
+				Required: true,
+				Optional: false,
+			}}
+		}
+		if len(spec.Properties) == 0 {
+			if diags != nil {
+				*diags = append(*diags, diagnostics.Diagnostic{
+					Severity: diagnostics.Warning,
+					Summary:  "empty object request body degraded to a Dynamic body attribute",
+					Detail: "The action request body declares an object with no properties; eidos " +
+						"exposes it as a single Dynamic `body` attribute so the request body stays configurable.",
+				})
+			}
+			return []ir.AttributeIR{{
+				Name:     "body",
+				Schema:   schemaIRFromSpec(spec),
+				Required: true,
+				Optional: false,
+			}}
+		}
 		required := make(map[string]bool, len(spec.Required))
 		for _, name := range spec.Required {
 			required[name] = true
@@ -311,20 +409,5 @@ func schemaIRFromSpec(spec SchemaSpec) ir.SchemaIR {
 		return ir.SchemaIR{Collection: &ir.CollectionType{Kind: kind, ElementType: schemaIRFromSpec(*spec.Items)}}
 	default:
 		return ir.SchemaIR{Type: ir.TypeDynamic}
-	}
-}
-
-func mapParamType(t string) ir.PrimitiveType {
-	switch strings.ToLower(strings.TrimSpace(t)) {
-	case "integer":
-		return ir.TypeInt
-	case "number":
-		return ir.TypeFloat
-	case "boolean":
-		return ir.TypeBool
-	case "string":
-		return ir.TypeString
-	default:
-		return ir.TypeString
 	}
 }

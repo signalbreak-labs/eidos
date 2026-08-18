@@ -29,19 +29,9 @@ var ErrUnknownResourceBlockNesting = errors.New("unknown resource block nesting 
 // Create/Read/Update/Delete bodies to the generated API client.
 func ResourceFile(r ir.ResourceIR, clientImport string) File {
 	path := fmt.Sprintf("internal/provider/resource_%s.go", naming.SnakeCase(r.Name))
-	file, err := func() (f *ast.File, err error) {
-		defer func() {
-			if rec := recover(); rec != nil {
-				if recErr, ok := rec.(error); ok {
-					err = fmt.Errorf("renderer panic: %w", recErr)
-				} else {
-					err = fmt.Errorf("renderer panic: %v", rec)
-				}
-			}
-		}()
-		f, err = generateResourceFile(r, clientImport)
-		return
-	}()
+	file, err := renderEntitySafely(func() (*ast.File, error) {
+		return generateResourceFile(r, clientImport)
+	})
 	if err != nil {
 		return ErrorFile(path, err)
 	}
@@ -391,7 +381,7 @@ func registerResourceImports(f *astgen.File, r ir.ResourceIR, wiring resourceWir
 
 // resourceModelName returns the generated model struct name for a resource.
 func resourceModelName(r ir.ResourceIR) string {
-	return naming.PascalCase(r.Name) + "ResourceModel"
+	return naming.GoTypeName(r.Name) + "ResourceModel"
 }
 
 // registerWiredResourceImports adds the imports a wired CRUD body needs to build
@@ -971,6 +961,10 @@ func blockSizeValidatorExprs(block ir.BlockIR, _, pkg string) []ast.Expr {
 
 // resourceAttributeValues builds the common field dictionary for a resource attribute.
 func resourceAttributeValues(attr ir.AttributeIR, extra []ast.Expr) []ast.Expr {
+	// Resolve a Required+Computed conflict before emitting flags so the render
+	// never produces a framework-invalid schema (N-25).
+	attr = normalizeAttributeFlags(attr)
+
 	elems := []ast.Expr{}
 
 	if attr.MarkdownDescription != "" {

@@ -573,9 +573,10 @@ func TestApplyWriteOnlyAttributesClearsComputed(t *testing.T) {
 	obj := &ir.ObjectSchemaIR{
 		Attributes: []ir.AttributeIR{
 			{
-				Name:     "password",
-				Computed: true,
-				Schema:   ir.SchemaIR{Type: ir.TypeString, WriteOnly: true},
+				Name:      "password",
+				Computed:  true,
+				WriteOnly: true,
+				Schema:    ir.SchemaIR{Type: ir.TypeString},
 			},
 		},
 	}
@@ -737,6 +738,119 @@ func TestApplyOverrides_ComputedAttributesClearsRequired(t *testing.T) {
 	}
 	if !labels.Optional {
 		t.Errorf("labels Optional = false, want true (Optional preserved for Optional+Computed)")
+	}
+}
+
+// TestApplyOverrides_ComputedAttributesNested locks in the N-20 fix: a
+// computed_attributes (or force_new/sensitive) override targeting an attribute
+// nested under an object attribute, inside a list element, or under a union
+// variant is applied instead of matching nothing silently. The nested walk
+// mirrors the write-only recursion.
+func TestApplyOverrides_ComputedAttributesNested(t *testing.T) {
+	provider := &ir.ProviderIR{
+		Resources: []ir.ResourceIR{{
+			Name:     "profile",
+			TypeName: "profile",
+			Schema: ir.ObjectSchemaIR{
+				Attributes: []ir.AttributeIR{
+					{
+						Name:     "contact",
+						Optional: true,
+						Schema: ir.SchemaIR{
+							Attributes: []ir.AttributeIR{
+								{Name: "nested_field", Required: true, Schema: ir.SchemaIR{Type: ir.TypeString}},
+							},
+						},
+					},
+					{
+						Name:     "tags",
+						Optional: true,
+						Schema: ir.SchemaIR{
+							Collection: &ir.CollectionType{
+								Kind: ir.List,
+								ElementType: ir.SchemaIR{
+									Attributes: []ir.AttributeIR{
+										{Name: "list_nested", Sensitive: false, Schema: ir.SchemaIR{Type: ir.TypeString}},
+									},
+								},
+							},
+						},
+					},
+					{
+						Name:     "shape",
+						Optional: true,
+						Schema: ir.SchemaIR{
+							Union: &ir.UnionType{
+								Variants: []ir.SchemaIR{
+									{
+										Attributes: []ir.AttributeIR{
+											{Name: "union_nested", Schema: ir.SchemaIR{Type: ir.TypeString}},
+										},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		}},
+	}
+	cfg := &config.Config{
+		Provider: config.ProviderConfig{Name: "test", Version: "0.0.1"},
+		ResourceOverrides: []config.ResourceOverride{{
+			Schema:              "profile",
+			ComputedAttributes:  []string{"nested_field"},
+			ForceNew:            []string{"list_nested"},
+			SensitiveAttributes: []string{"union_nested"},
+		}},
+	}
+
+	if err := ApplyOverrides(provider, cfg); err != nil {
+		t.Fatalf("ApplyOverrides() = %v, want nil", err)
+	}
+
+	root := provider.Resources[0].Schema
+
+	// Object-attribute nested attribute.
+	contact, ok := findAttr(root.Attributes, "contact")
+	if !ok {
+		t.Fatalf("attribute %q not found", "contact")
+	}
+	nested, ok := findAttr(contact.Schema.Attributes, "nested_field")
+	if !ok {
+		t.Fatalf("attribute %q not found", "nested_field")
+	}
+	if !nested.Computed {
+		t.Errorf("nested_field Computed = false, want true (forced by computed_attributes)")
+	}
+	if nested.Required {
+		t.Errorf("nested_field Required = true, want false (computed_attributes clears Required)")
+	}
+
+	// List-element nested attribute.
+	tags, ok := findAttr(root.Attributes, "tags")
+	if !ok {
+		t.Fatalf("attribute %q not found", "tags")
+	}
+	listNested, ok := findAttr(tags.Schema.Collection.ElementType.Attributes, "list_nested")
+	if !ok {
+		t.Fatalf("attribute %q not found", "list_nested")
+	}
+	if !listNested.ForceNew {
+		t.Errorf("list_nested ForceNew = false, want true (forced by force_new)")
+	}
+
+	// Union-variant nested attribute.
+	shape, ok := findAttr(root.Attributes, "shape")
+	if !ok {
+		t.Fatalf("attribute %q not found", "shape")
+	}
+	unionNested, ok := findAttr(shape.Schema.Union.Variants[0].Attributes, "union_nested")
+	if !ok {
+		t.Fatalf("attribute %q not found", "union_nested")
+	}
+	if !unionNested.Sensitive {
+		t.Errorf("union_nested Sensitive = false, want true (forced by sensitive_attributes)")
 	}
 }
 

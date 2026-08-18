@@ -505,6 +505,60 @@ func TestOperationsFromSpec_FormDataParameterWarns(t *testing.T) {
 	}
 }
 
+// TestOperationsFromSpec_FormDataInBodyContentWarns locks in the N-11 fix: the
+// v2 parser normalizes `in: formData` parameters into the request body's
+// form/multipart content schema (and drops them from op.Parameters), so a
+// non-primitive formData property (file upload, object, array) surfaces the
+// fail-loud "formData parameter not wired" Warning by walking the request body
+// content — not just the direct formData parameters.
+func TestOperationsFromSpec_FormDataInBodyContentWarns(t *testing.T) {
+	spec := &parser.Spec{
+		Paths: map[string]*parser.PathItem{
+			"/uploads": {
+				Post: &parser.Operation{
+					OperationID: "uploadFile",
+					RequestBody: &parser.RequestBody{
+						Content: map[string]*parser.MediaType{
+							"multipart/form-data": {
+								Schema: &parser.Schema{
+									Type: "object",
+									Properties: map[string]*parser.Schema{
+										"file":    {Type: "file"},
+										"caption": {Type: "string"},
+									},
+								},
+							},
+						},
+					},
+					Responses: map[string]*parser.Response{
+						"200": {Description: "ok"},
+					},
+				},
+			},
+		},
+	}
+
+	_, diags := OperationsFromSpecWithDiagnostics(spec)
+	var fileWarn, captionWarn bool
+	for _, d := range diags {
+		if d.Severity != diagnostics.Warning || !strings.Contains(d.Summary, "formData") {
+			continue
+		}
+		if strings.Contains(d.Detail, "file") {
+			fileWarn = true
+		}
+		if strings.Contains(d.Detail, "caption") {
+			captionWarn = true
+		}
+	}
+	if !fileWarn {
+		t.Errorf("expected a formData-not-wired Warning for the file property, got %v", diags)
+	}
+	if captionWarn {
+		t.Errorf("primitive formData property caption must not warn (it is wired), got %v", diags)
+	}
+}
+
 // TestOperationsFromSpec_PrimitiveFormDataDoesNotWarn verifies that a
 // primitive (string) formData parameter is wired as
 // application/x-www-form-urlencoded and so does not emit the not-wired warning
@@ -534,13 +588,23 @@ func TestOperationsFromSpec_PrimitiveFormDataDoesNotWarn(t *testing.T) {
 	}
 }
 
-func TestOperationsFromSpec_DefaultResponseFallback(t *testing.T) {
+// TestOperationsFromSpec_DefaultResponseNotSuccess locks in N-16: the `default`
+// response is the OpenAPI catch-all and frequently describes errors, so it is
+// NOT treated as the success schema. An operation that declares only a default
+// (plus error codes) carries no response schema and surfaces a fail-loud
+// warning instead of deriving the entire resource shape from the default.
+func TestOperationsFromSpec_DefaultResponseNotSuccess(t *testing.T) {
 	spec := &parser.Spec{
 		Paths: map[string]*parser.PathItem{
 			"/pets": {
 				Get: &parser.Operation{
 					OperationID: "listPets",
 					Responses: map[string]*parser.Response{
+						"404": {
+							Content: map[string]*parser.MediaType{
+								"application/json": {Schema: &parser.Schema{Type: "object"}},
+							},
+						},
 						"default": {
 							Headers: map[string]*parser.Header{
 								"Link": {},
@@ -555,18 +619,59 @@ func TestOperationsFromSpec_DefaultResponseFallback(t *testing.T) {
 		},
 	}
 
-	ops := OperationsFromSpec(spec)
+	ops, diags := OperationsFromSpecWithDiagnostics(spec)
 	got := ops["/pets"][MethodGet]
+
+	if got.ResponseBody {
+		t.Errorf("ResponseBody = %v, want false (no 2xx success response)", got.ResponseBody)
+	}
+	if got.ResponseSchema != nil {
+		t.Errorf("ResponseSchema = %+v, want nil (default must not be used as the success schema)", got.ResponseSchema)
+	}
+	if len(got.ResponseHeaders) != 0 {
+		t.Errorf("ResponseHeaders = %v, want none (default headers must not be adopted)", got.ResponseHeaders)
+	}
+	warned := false
+	for _, d := range diags {
+		if d.Severity == diagnostics.Warning && strings.Contains(d.Summary, "no 2xx response") {
+			warned = true
+		}
+	}
+	if !warned {
+		t.Errorf("expected a fail-loud warning that the default response is not used as success, got diags=%v", diags)
+	}
+}
+
+// TestOperationsFromSpec_ContentBearing2xxBeatsEmptyLower2xx locks in the
+// other half of N-16: an empty 200 (no content) must not shadow a
+// content-bearing 201 just because 200 sorts first.
+func TestOperationsFromSpec_ContentBearing2xxBeatsEmptyLower2xx(t *testing.T) {
+	spec := &parser.Spec{
+		Paths: map[string]*parser.PathItem{
+			"/pets": {
+				Post: &parser.Operation{
+					OperationID: "createPet",
+					Responses: map[string]*parser.Response{
+						"200": {}, // declared but carries no content
+						"201": {
+							Content: map[string]*parser.MediaType{
+								"application/json": {Schema: &parser.Schema{Type: "object"}},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	ops := OperationsFromSpec(spec)
+	got := ops["/pets"][MethodPost]
 
 	if !got.ResponseBody {
 		t.Errorf("ResponseBody = %v, want true", got.ResponseBody)
 	}
-	if got.ResponseSchema == nil || got.ResponseSchema.Type != "array" {
-		t.Errorf("ResponseSchema.Type = %v, want array", got.ResponseSchema)
-	}
-	wantHeaders := []string{"Link"}
-	if !reflect.DeepEqual(sortedStrings(got.ResponseHeaders), wantHeaders) {
-		t.Errorf("ResponseHeaders = %v, want %v", got.ResponseHeaders, wantHeaders)
+	if got.ResponseSchema == nil || got.ResponseSchema.Type != "object" {
+		t.Errorf("ResponseSchema.Type = %v, want object (content-bearing 201 should win over empty 200)", got.ResponseSchema)
 	}
 }
 
@@ -1019,6 +1124,94 @@ func TestSchemaSpecFromParserFlattensNestedAllOf(t *testing.T) {
 	// Array items from the Traits member survive the merge.
 	if item.Properties["tags"].Items == nil {
 		t.Errorf("expected tags array items to survive allOf merge, got %+v", item.Properties["tags"])
+	}
+}
+
+// TestSchemaSpecFromParserAllOfConflictWarns locks in the M-5 fix: when two
+// allOf members define the same property with different schemas, the first
+// member's definition wins (first-wins) and a Warning naming the property is
+// emitted instead of the drop being silent.
+func TestSchemaSpecFromParserAllOfConflictWarns(t *testing.T) {
+	spec := &parser.Spec{
+		Components: &parser.Components{
+			Schemas: map[string]*parser.Schema{
+				"One": {Type: "object", Properties: map[string]*parser.Schema{"name": {Type: "string"}}},
+				"Two": {Type: "object", Properties: map[string]*parser.Schema{"name": {Type: "integer"}}},
+			},
+		},
+	}
+	parent := &parser.Schema{
+		AllOf: []*parser.Schema{
+			{Ref: "#/components/schemas/One"},
+			{Ref: "#/components/schemas/Two"},
+		},
+	}
+	var diags diagnostics.Diagnostics
+	got := schemaSpecFromParser(spec, parent, &diags)
+	if got == nil {
+		t.Fatal("expected non-nil SchemaSpec")
+	}
+	// First-wins: name keeps the string type from the first member.
+	prop, ok := got.Properties["name"]
+	if !ok {
+		t.Fatal("expected name property")
+	}
+	if prop.Type != "string" {
+		t.Errorf("name type = %q, want string (first allOf member wins)", prop.Type)
+	}
+	if !hasWarning(diags, "allOf property conflict") || !hasWarning(diags, "name") {
+		t.Fatalf("expected an allOf conflict Warning naming the property, got diags: %+v", diags)
+	}
+}
+
+// TestSchemaSpecFromParserRefNameNotLeakedAcrossRefs locks in the M-6 fix: a
+// memoized SchemaSpec returned for an acyclic ref is a copy, so the RefName a
+// caller stamps on one ref does not leak into later refs to the same underlying
+// schema. Without the copy, both oneOf variants here would end up carrying the
+// same RefName, and which one won would depend on map-iteration order — breaking
+// byte-identical determinism.
+func TestSchemaSpecFromParserRefNameNotLeakedAcrossRefs(t *testing.T) {
+	spec := &parser.Spec{
+		Components: &parser.Components{
+			Schemas: map[string]*parser.Schema{
+				"Pet": {
+					Type: "object",
+					Properties: map[string]*parser.Schema{
+						"name": {Type: "string"},
+					},
+				},
+				"PetAlias": {
+					Ref: "#/components/schemas/Pet",
+				},
+			},
+		},
+	}
+	parent := &parser.Schema{
+		OneOf: []*parser.Schema{
+			{Ref: "#/components/schemas/Pet"},
+			{Ref: "#/components/schemas/PetAlias"},
+		},
+	}
+
+	// Convert twice: the RefNames must be identical across runs.
+	for i := 0; i < 2; i++ {
+		got := schemaSpecFromParser(spec, parent, nil)
+		if got == nil {
+			t.Fatal("expected non-nil SchemaSpec")
+		}
+		if len(got.OneOf) != 2 {
+			t.Fatalf("expected 2 oneOf variants, got %d: %+v", len(got.OneOf), got.OneOf)
+		}
+		names := map[string]bool{}
+		for _, v := range got.OneOf {
+			names[v.RefName] = true
+		}
+		if !names["Pet"] {
+			t.Errorf("iteration %d: expected a variant with RefName %q, got %v", i, "Pet", got.OneOf)
+		}
+		if !names["PetAlias"] {
+			t.Errorf("iteration %d: expected a variant with RefName %q (not leaked %q), got %v", i, "PetAlias", "Pet", got.OneOf)
+		}
 	}
 }
 

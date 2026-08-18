@@ -31,22 +31,12 @@ func ProviderFile(pir ir.ProviderIR) (File, error) {
 // provider-data mechanism. An empty clientImport keeps the historical
 // config-decode-only Configure body.
 func ProviderFileWithClient(pir ir.ProviderIR, clientImport string) (File, error) {
-	f, err := func() (f *ast.File, err error) {
-		defer func() {
-			if rec := recover(); rec != nil {
-				if recErr, ok := rec.(error); ok {
-					err = fmt.Errorf("renderer panic: %w", recErr)
-				} else {
-					err = fmt.Errorf("renderer panic: %v", rec)
-				}
-			}
-		}()
-		if err = validateProviderConfig(pir.ConfigSchema); err != nil {
-			return
+	f, err := renderEntitySafely(func() (*ast.File, error) {
+		if err := validateProviderConfig(pir.ConfigSchema); err != nil {
+			return nil, err
 		}
-		f, err = generateProviderFile(pir, clientImport)
-		return
-	}()
+		return generateProviderFile(pir, clientImport)
+	})
 	if err != nil {
 		return File{}, err
 	}
@@ -55,14 +45,16 @@ func ProviderFileWithClient(pir ir.ProviderIR, clientImport string) (File, error
 
 // providerPackageName returns the Go identifier used for the provider struct.
 // It is lower-camelCase so the struct remains unexported, e.g. "mycloudProvider".
+// The name is sanitized so a digit-leading ProviderIR.Name (e.g. "2fa") cannot
+// produce the invalid Go identifier "2faProvider" (M-10).
 func providerPackageName(pir ir.ProviderIR) string {
-	return naming.CamelCase(pir.Name) + "Provider"
+	return naming.SanitizeGoIdentifier(naming.CamelCase(pir.Name)) + "Provider"
 }
 
 // providerModelName returns the Go identifier used for the provider config model
-// struct, e.g. "mycloudProviderModel".
+// struct, e.g. "mycloudProviderModel". Sanitized for digit-leading names (M-10).
 func providerModelName(pir ir.ProviderIR) string {
-	return naming.CamelCase(pir.Name) + "ProviderModel"
+	return naming.SanitizeGoIdentifier(naming.CamelCase(pir.Name)) + "ProviderModel"
 }
 
 // providerTypeName returns the Terraform provider type name. It prefers
@@ -94,6 +86,16 @@ func generateProviderFile(pir ir.ProviderIR, clientImport string) (*ast.File, er
 	// attributes are always emitted (see providerConfigAttributes), so the import
 	// is unconditional.
 	f.AddImport("github.com/hashicorp/terraform-plugin-framework/types", "types")
+	// The schema/validator package is referenced by schema.AddValidators when a
+	// provider config attribute or block emits a Validators field
+	// (validator.Int64/Float64/Object/Map …). Gate it precisely on the config
+	// schema so it is neither missing when a constraint is declared (M-8) nor
+	// imported unused. The log_* trace-logging attributes never carry
+	// constraints, so checking the declared ConfigSchema is equivalent to
+	// checking every rendered attribute.
+	if objectSchemaNeedsValidators(pir.ConfigSchema) {
+		f.AddImport("github.com/hashicorp/terraform-plugin-framework/schema/validator", "validator")
+	}
 
 	providerStruct := providerPackageName(pir)
 	modelStruct := providerModelName(pir)
@@ -1049,6 +1051,22 @@ func nestedAttributesMapFromSchema(s ir.SchemaIR, parentPath string) ast.Expr {
 	return nestedAttributesMap(ir.ObjectSchemaIR{Attributes: s.Attributes, Blocks: s.Blocks}, parentPath)
 }
 
+// normalizeAttributeFlags returns a copy of attr with the Required+Computed
+// conflict resolved the way the ephemeral merge does: Computed wins and Required
+// is cleared to Optional. The plugin-framework rejects an attribute that is both
+// Required and Computed at startup, so the emit path defends this invariant even
+// if hostile IR reaches it (N-25). The transformer enforces the invariant today,
+// but hand-written IR or a future transformer change could violate it; an
+// attribute renderer that prefers Computed produces a framework-valid schema
+// rather than one the provider fails to load.
+func normalizeAttributeFlags(attr ir.AttributeIR) ir.AttributeIR {
+	if attr.Required && attr.Computed {
+		attr.Required = false
+		attr.Optional = true
+	}
+	return attr
+}
+
 // objectSchemaNeedsValidators reports whether any attribute or nested block in
 // the object schema emits a Validators field. It is used to decide whether the
 // generated file needs the schema/validator package import.
@@ -1081,16 +1099,24 @@ func schemaIRNeedsValidators(s ir.SchemaIR) bool {
 	if schemaEmitsValidators(s) {
 		return true
 	}
-	// Object-like collection elements (List/Set/Map of object) render their
-	// nested attributes in a map, each of which may emit validators. Primitive
-	// collection elements are rendered as bare type references with no
-	// validators, so they are not recursed.
-	if s.Collection != nil && schema.IsObjectLike(s.Collection.ElementType) {
-		if objectSchemaNeedsValidators(ir.ObjectSchemaIR{
-			Attributes: s.Collection.ElementType.Attributes,
-			Blocks:     s.Collection.ElementType.Blocks,
-		}) {
-			return true
+	if s.Collection != nil {
+		// A collection whose element is, or contains at any depth, a dynamic
+		// renders as a DynamicAttribute with no Validators field — mirroring
+		// frameworkAttributeExpr's ContainsNestedDynamic early return — so it
+		// must not contribute a validator import (M-9): importing schema/validator
+		// for such a collection would leave it unused and break the generated
+		// provider's compile. Object-like elements (after union normalization)
+		// render their nested attributes in a map, each of which may emit
+		// validators. Primitive elements render as bare type references with no
+		// validators, so they are not recursed.
+		elem := schema.DynamicUnionElement(s.Collection.ElementType)
+		if !schema.ContainsNestedDynamic(elem) && schema.IsObjectLike(elem) {
+			if objectSchemaNeedsValidators(ir.ObjectSchemaIR{
+				Attributes: elem.Attributes,
+				Blocks:     elem.Blocks,
+			}) {
+				return true
+			}
 		}
 	}
 	if schema.IsObjectLike(s) {
@@ -1338,27 +1364,27 @@ func modelFieldTags(attr ir.AttributeIR) string {
 
 // resourceStructName returns the generated resource struct name for an IR resource.
 func resourceStructName(r ir.ResourceIR) string {
-	return naming.PascalCase(r.Name) + "Resource"
+	return naming.GoTypeName(r.Name) + "Resource"
 }
 
 // dataSourceStructName returns the generated data source struct name.
 func dataSourceStructName(ds ir.DataSourceIR) string {
-	return naming.PascalCase(ds.Name) + "DataSource"
+	return naming.GoTypeName(ds.Name) + "DataSource"
 }
 
 // functionStructName returns the generated function struct name.
 func functionStructName(fn ir.FunctionIR) string {
-	return naming.PascalCase(fn.Name) + "Function"
+	return naming.GoTypeName(fn.Name) + "Function"
 }
 
 // ephemeralResourceStructName returns the generated ephemeral resource struct name.
 func ephemeralResourceStructName(er ir.EphemeralResourceIR) string {
-	return naming.PascalCase(er.Name) + "EphemeralResource"
+	return naming.GoTypeName(er.Name) + "EphemeralResource"
 }
 
 // listResourceStructName returns the generated list resource struct name.
 func listResourceStructName(lr ir.ListResourceIR) string {
-	return naming.PascalCase(lr.Name) + "ListResource"
+	return naming.GoTypeName(lr.Name) + "ListResource"
 }
 
 // litOrOmit returns the trimmed string as an ast.Expr, or nil when the input

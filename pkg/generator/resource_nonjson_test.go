@@ -64,6 +64,10 @@ func wiredXMLResourceIR() ir.ResourceIR {
 		PathTemplate: "/pets",
 		SuccessCodes: []int{201},
 		MediaType:    "application/xml",
+		// BodySchema is the presence marker for a request body (M-11): the
+		// generator encodes a body only when it is non-nil, exactly as the
+		// transformer emits it for a real body-bearing operation.
+		BodySchema: &ir.SchemaIR{},
 	}
 	// Mirror the create: an XML update so the whole resource is XML-only and
 	// the rendered file contains no JSON body machinery.
@@ -72,6 +76,7 @@ func wiredXMLResourceIR() ir.ResourceIR {
 		PathTemplate: "/pets/{id}",
 		SuccessCodes: []int{200},
 		MediaType:    "application/xml",
+		BodySchema:   &ir.SchemaIR{},
 	}
 	r.CRUDMapping.Update = &update
 	return r
@@ -228,6 +233,61 @@ func TestWiredXMLBody_Render(t *testing.T) {
 	}
 }
 
+// TestJSONConvertFile_XMLGating asserts the N-37 contract: json_convert.go
+// carries the XML serialization helpers (mapToXML and friends) and their
+// supporting imports (bytes, encoding/xml, sort) only when at least one wired
+// resource CRUD body serializes application/xml. JSON-only providers must not
+// ship dead XML serialization code, and XML providers must keep the helpers so
+// their wired bodies compile.
+func TestJSONConvertFile_XMLGating(t *testing.T) {
+	render := func(p *ir.ProviderIR) string {
+		f := JSONConvertFile(p)
+		var buf bytes.Buffer
+		if err := f.Render(&buf); err != nil {
+			t.Fatalf("Render() error = %v", err)
+		}
+		return buf.String()
+	}
+
+	xmlImports := []string{`"bytes"`, `"encoding/xml"`, `"sort"`}
+	xmlHelpers := []string{"mapToXML", "writeXMLElement", "writeXMLValue"}
+
+	// A JSON-only provider (the sample resource has no XML body) omits them.
+	jsonProvider := sampleProviderWithResourceIR()
+	if AnyResourceXMLBody(jsonProvider.Resources) {
+		t.Fatal("AnyResourceXMLBody(sample provider) = true, want false")
+	}
+	got := render(&jsonProvider)
+	for _, want := range xmlImports {
+		if strings.Contains(got, want) {
+			t.Errorf("JSON-only json_convert.go must not import %s\n--- body ---\n%s", want, got)
+		}
+	}
+	for _, want := range xmlHelpers {
+		if strings.Contains(got, want) {
+			t.Errorf("JSON-only json_convert.go must not emit %s\n--- body ---\n%s", want, got)
+		}
+	}
+
+	// An XML-wired provider includes them.
+	xmlProvider := sampleProviderWithResourceIR()
+	xmlProvider.Resources = []ir.ResourceIR{wiredXMLResourceIR()}
+	if !AnyResourceXMLBody(xmlProvider.Resources) {
+		t.Fatal("AnyResourceXMLBody(xml provider) = false, want true")
+	}
+	got = render(&xmlProvider)
+	for _, want := range xmlImports {
+		if !strings.Contains(got, want) {
+			t.Errorf("XML json_convert.go must import %s\n--- body ---\n%s", want, got)
+		}
+	}
+	for _, want := range xmlHelpers {
+		if !strings.Contains(got, want) {
+			t.Errorf("XML json_convert.go must emit %s\n--- body ---\n%s", want, got)
+		}
+	}
+}
+
 // TestWiredXMLBody_Compiles generates a full provider module with an XML-wired
 // resource and compiles it, proving the mapToXML body and Content-Type are
 // syntactically valid. mapToXML lives in the shared json_convert.go helper
@@ -271,9 +331,50 @@ func TestPlanOperation_UnknownMediaTypeScaffolds(t *testing.T) {
 		PathTemplate: "/pets",
 		SuccessCodes: []int{201},
 		MediaType:    "application/octet-stream",
+		// A real body-bearing operation carries the BodySchema presence marker;
+		// the generator must not silently encode an unsupported media type.
+		BodySchema: &ir.SchemaIR{},
 	}
 	if planResourceWiring(r).wired {
 		t.Fatalf("create with an unsupported media type must not wire (honest scaffold)")
+	}
+}
+
+// TestBodilessCreateWiresWithoutBody asserts the M-11 fix: a body-bearing
+// method (POST/PUT/PATCH) with NO request body (BodySchema nil, no formData
+// params) wires as a bodiless request — it does NOT serialize the entire plan
+// model as JSON to an endpoint expecting no body. The plan must not claim a
+// JSON body and the rendered Create body must contain no JSON-body machinery
+// and send a nil body reader.
+func TestBodilessCreateWiresWithoutBody(t *testing.T) {
+	r := sampleResourceIR()
+	plan := planResourceWiring(r)
+	if !plan.wired {
+		t.Fatalf("plan.wired = false, want true (bodiless POST create resolves)")
+	}
+	if plan.needsJSONBody {
+		t.Fatalf("plan.needsJSONBody = true, want false (no request body declared)")
+	}
+	if plan.create.hasBody {
+		t.Fatalf("plan.create.hasBody = true, want false (no BodySchema, no formData)")
+	}
+
+	files := ResourceFiles([]ir.ResourceIR{r}, testClientImport)
+	if len(files) != 1 {
+		t.Fatalf("ResourceFiles() returned %d files, want 1", len(files))
+	}
+	var buf bytes.Buffer
+	if err := files[0].Render(&buf); err != nil {
+		t.Fatalf("Render() error = %v", err)
+	}
+	got := buf.String()
+	for _, banned := range []string{
+		`modelToJSONMap`, // bodiless create must not build a JSON body
+		`json.Marshal`,   // no JSON marshaling for a bodiless create
+	} {
+		if strings.Contains(got, banned) {
+			t.Errorf("bodiless Create body must not contain %q\n--- body ---\n%s", banned, got)
+		}
 	}
 }
 

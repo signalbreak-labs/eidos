@@ -2,6 +2,7 @@ package transformer
 
 import (
 	"fmt"
+	"reflect"
 	"sort"
 	"strconv"
 	"strings"
@@ -103,7 +104,7 @@ func operationFromParser(spec *parser.Spec, path string, method HTTPMethod, op *
 		}
 	}
 
-	if resp := successfulResponse(spec, op.Responses); resp != nil {
+	if resp := successfulResponse(spec, op.OperationID, op.Responses, diags); resp != nil {
 		out.ResponseBody = len(resp.Content) > 0
 		if s := firstContentSchema(resp.Content); s != nil {
 			out.ResponseSchema = schemaSpecFromParser(spec, resolveSchemaRef(spec, s), diags)
@@ -174,7 +175,15 @@ func parametersFromParser(spec *parser.Spec, pi *parser.PathItem, op *parser.Ope
 	return params
 }
 
-func successfulResponse(spec *parser.Spec, responses map[string]*parser.Response) *parser.Response {
+// successfulResponse selects the operation's success response. It prefers an
+// explicit 2xx (or 2XX wildcard) that actually carries a content schema: an
+// empty 2xx (no content) must not shadow a content-bearing 2xx just because its
+// status code sorts first (N-16). When no 2xx response exists it returns nil —
+// the OpenAPI `default` response is the catch-all and frequently describes
+// errors, so deriving the whole response shape from it would model a resource
+// on an error schema; instead the operation stays honestly bodiless and a
+// fail-loud warning is emitted (N-16).
+func successfulResponse(spec *parser.Spec, operationID string, responses map[string]*parser.Response, diags *diagnostics.Diagnostics) *parser.Response {
 	if len(responses) == 0 {
 		return nil
 	}
@@ -188,8 +197,10 @@ func successfulResponse(spec *parser.Spec, responses map[string]*parser.Response
 		key      string
 	}
 	keys := make([]successKey, 0, len(responses))
+	hasDefault := false
 	for code := range responses {
 		if code == "default" {
+			hasDefault = true
 			continue
 		}
 		if n, err := strconv.Atoi(code); err == nil {
@@ -212,12 +223,41 @@ func successfulResponse(spec *parser.Spec, responses map[string]*parser.Response
 		// Prefer the specific code over the wildcard at the same hundred.
 		return !keys[i].wildcard && keys[j].wildcard
 	})
+
+	// Prefer the first 2xx that carries a content schema; keep the first
+	// non-nil 2xx as the fallback so an all-empty 2xx set still yields the
+	// lowest 2xx (its headers may still be meaningful for pagination).
+	var fallback *parser.Response
 	for _, k := range keys {
-		if r := resolveResponse(spec, responses[k.key]); r != nil {
+		r := resolveResponse(spec, responses[k.key])
+		if r == nil {
+			continue
+		}
+		if fallback == nil {
+			fallback = r
+		}
+		if firstContentSchema(r.Content) != nil {
 			return r
 		}
 	}
-	return resolveResponse(spec, responses["default"])
+	if fallback != nil {
+		return fallback
+	}
+
+	// No 2xx response exists. Do not treat `default` as the success schema.
+	if hasDefault && diags != nil {
+		*diags = append(*diags, diagnostics.Diagnostic{
+			Severity: diagnostics.Warning,
+			Summary:  "operation has no 2xx response; default response is not used as the success schema",
+			Detail: fmt.Sprintf(
+				"operation %q declares no 2xx response (only a `default` and/or error responses). "+
+					"The `default` response is the catch-all and frequently describes errors, so eidos "+
+					"does not derive a response schema from it; the operation carries no response schema. "+
+					"Declare an explicit 2xx response to model the payload.",
+				operationID),
+		})
+	}
+	return nil
 }
 
 // isRangeWildcard reports whether code is an OpenAPI 3 range response key of
@@ -627,7 +667,13 @@ func schemaSpecFromParserDepth(spec *parser.Spec, s *parser.Schema, depth, cycle
 	}
 	out := schemaSpecFromParserDepthInner(spec, s, depth, cycleDepth, visited, memo, diags)
 	memo[key] = out
-	return out
+	// Return a copy on the first conversion too: callers stamp a RefName on the
+	// result (operationFromParser, unionSpecsFromParser), and mutating the
+	// memoized entry would leak that name into every later ref to the same
+	// schema — which name survives then depends on map-iteration order and breaks
+	// byte-identical determinism (M-6).
+	cp := *out
+	return &cp
 }
 
 // schemaSpecFromParserDepthInner converts a non-ref parser.Schema into a
@@ -726,7 +772,19 @@ func flattenCompositionInto(out *SchemaSpec, spec *parser.Spec, s *parser.Schema
 		if merged == nil {
 			continue
 		}
-		mergeAllOfSchemaSpec(out, *merged)
+		if conflicts := mergeAllOfSchemaSpec(out, *merged); len(conflicts) > 0 && diags != nil {
+			// First-wins dropped a later allOf member's definition of the same
+			// property; surface it so the silent data loss is fail-loud (M-5).
+			loc := member.SourceLocation
+			for _, name := range conflicts {
+				*diags = diags.Append(diagnostics.Diagnostic{
+					Severity:       diagnostics.Warning,
+					Summary:        "allOf property conflict",
+					Detail:         fmt.Sprintf("Property %q is defined by multiple allOf members with different schemas; the first definition wins and the later one is dropped.", name),
+					SourceLocation: &loc,
+				})
+			}
+		}
 	}
 	if len(s.OneOf) > 0 {
 		out.OneOf = unionSpecsFromParser(spec, s.OneOf, depth, cycleDepth, visited, memo, diags)
@@ -799,7 +857,12 @@ func refBaseName(ref string) string {
 // deduplication, and items/additionalProperties fill empty dst fields. Bounds and
 // other validation metadata are not carried on SchemaSpec, so this is a structural
 // merge only, matching what schemaIRFromSpecRecursive consumes.
-func mergeAllOfSchemaSpec(dst *SchemaSpec, src SchemaSpec) {
+//
+// It returns the names of properties that src defines with a schema different
+// from the one already in dst (first-wins dropped the later definition). Callers
+// surface these as warnings so the silent data loss is fail-loud (M-5).
+func mergeAllOfSchemaSpec(dst *SchemaSpec, src SchemaSpec) []string {
+	var conflicts []string
 	if dst.Type == "" && src.Type != "" {
 		dst.Type = src.Type
 		dst.Format = src.Format
@@ -815,9 +878,13 @@ func mergeAllOfSchemaSpec(dst *SchemaSpec, src SchemaSpec) {
 			dst.Properties = make(map[string]SchemaSpec, len(src.Properties))
 		}
 		for name, prop := range src.Properties {
-			if _, exists := dst.Properties[name]; !exists {
-				dst.Properties[name] = prop
+			if existing, exists := dst.Properties[name]; exists {
+				if !reflect.DeepEqual(existing, prop) {
+					conflicts = append(conflicts, name)
+				}
+				continue
 			}
+			dst.Properties[name] = prop
 		}
 	}
 	if len(src.Required) > 0 {
@@ -832,6 +899,7 @@ func mergeAllOfSchemaSpec(dst *SchemaSpec, src SchemaSpec) {
 			}
 		}
 	}
+	return conflicts
 }
 
 // warnCompositionNotModeled records a warning that a oneOf/anyOf composition in a
@@ -883,36 +951,88 @@ func warnFormDataParameters(diags *diagnostics.Diagnostics, op *parser.Operation
 		return
 	}
 	seen := make(map[string]bool)
-	emit := func(p parser.Parameter) {
-		if !strings.EqualFold(p.In, "formData") || seen[p.Name] {
+	emit := func(name string, loc parser.SourceLocation) {
+		if seen[name] {
 			return
 		}
-		seen[p.Name] = true
-		if isWireableFormDataPrimitive(p) {
-			// Primitive formData is wired as application/x-www-form-urlencoded;
-			// no warning, because the construct is not dropped.
-			return
-		}
+		seen[name] = true
 		*diags = diags.Append(diagnostics.Diagnostic{
 			Severity: diagnostics.Warning,
 			Summary:  "formData parameter not wired",
 			Detail: fmt.Sprintf(
 				"parameter %q is declared in: formData with a non-primitive type. The generated request body form-encodes primitive (string/integer/number/boolean) formData parameters, but this parameter's type cannot be form-encoded from a typed attribute, so this operation is not wired to a remote API endpoint. Use a primitive formData type, a JSON request body, or a generator.yaml override.",
-				p.Name,
+				name,
 			),
-			SourceLocation: locPtrOrNil(p.SourceLocation),
+			SourceLocation: locPtrOrNil(loc),
 		})
+	}
+	emitParam := func(p parser.Parameter) {
+		if !strings.EqualFold(p.In, "formData") {
+			return
+		}
+		if isWireableFormDataPrimitive(p) {
+			// Primitive formData is wired as application/x-www-form-urlencoded;
+			// no warning, because the construct is not dropped.
+			return
+		}
+		emit(p.Name, p.SourceLocation)
 	}
 	if op != nil {
 		for _, p := range op.Parameters {
-			emit(p)
+			emitParam(p)
 		}
+		// The v2 parser normalizes in: formData parameters into the request body
+		// (v2.go) and drops them from op.Parameters, so the loop above sees none
+		// of them. Walk the form-encoded content schemas to surface non-primitive
+		// formData parameters (file uploads, objects, arrays) that would otherwise
+		// be silently dropped (N-11).
+		warnFormDataRequestBody(op.RequestBody, emit)
 	}
 	if pi != nil {
 		for _, p := range pi.Parameters {
-			emit(p)
+			emitParam(p)
 		}
 	}
+}
+
+// warnFormDataRequestBody emits the not-wired warning for every non-primitive
+// form-encoded request-body property, walking the content schemas the v2 parser
+// normalized in: formData parameters into (N-11). It is a separate helper so
+// warnFormDataParameters stays under the cognitive-complexity budget.
+func warnFormDataRequestBody(body *parser.RequestBody, emit func(name string, loc parser.SourceLocation)) {
+	if body == nil {
+		return
+	}
+	for mediaType, mt := range body.Content {
+		if mt == nil || mt.Schema == nil {
+			continue
+		}
+		switch RequestBodyKind(mediaType) {
+		case "form", "multipart":
+		default:
+			continue
+		}
+		for name, s := range mt.Schema.Properties {
+			if s == nil || isWireableFormDataSchema(s) {
+				continue
+			}
+			emit(name, s.SourceLocation)
+		}
+	}
+}
+
+// isWireableFormDataSchema reports whether a form-encoded request body property
+// can be wired from a typed attribute. It mirrors isWireableFormDataPrimitive
+// for the schema form the v2 parser stores formData parameters in (N-11).
+func isWireableFormDataSchema(s *parser.Schema) bool {
+	if s == nil {
+		return false
+	}
+	switch schemaTypeString(s.Type) {
+	case "string", "integer", "number", "boolean":
+		return true
+	}
+	return false
 }
 
 // locPtrOrNil returns a pointer to loc when it carries a file, or nil when the

@@ -65,10 +65,10 @@ func clientConfigFromIR(p ir.ProviderIR) clientConfig {
 	cfg := clientConfig{
 		BaseURL:         goString(""),
 		UserAgent:       goString("eidos-generated-client"),
-		Timeout:         formatDuration(30 * time.Second),
+		Timeout:         goDurationExpr(30 * time.Second),
 		RetryMax:        3,
-		RetryWaitMin:    formatDuration(1 * time.Second),
-		RetryWaitMax:    formatDuration(30 * time.Second),
+		RetryWaitMin:    goDurationExpr(1 * time.Second),
+		RetryWaitMax:    goDurationExpr(30 * time.Second),
 		PaginationStyle: goString("none"),
 		PageParam:       goString("page"),
 		PerPageParam:    goString("per_page"),
@@ -93,16 +93,16 @@ func clientConfigFromIR(p ir.ProviderIR) clientConfig {
 		cfg.UserAgent = goString(p.ClientIR.UserAgent)
 	}
 	if p.ClientIR.Timeout > 0 {
-		cfg.Timeout = formatDuration(p.ClientIR.Timeout)
+		cfg.Timeout = goDurationExpr(p.ClientIR.Timeout)
 	}
 	if p.ClientIR.RetryMax > 0 {
 		cfg.RetryMax = p.ClientIR.RetryMax
 	}
 	if p.ClientIR.RetryWaitMin > 0 {
-		cfg.RetryWaitMin = formatDuration(p.ClientIR.RetryWaitMin)
+		cfg.RetryWaitMin = goDurationExpr(p.ClientIR.RetryWaitMin)
 	}
 	if p.ClientIR.RetryWaitMax > 0 {
-		cfg.RetryWaitMax = formatDuration(p.ClientIR.RetryWaitMax)
+		cfg.RetryWaitMax = goDurationExpr(p.ClientIR.RetryWaitMax)
 	}
 
 	if p.ClientIR.Pagination != nil {
@@ -130,7 +130,12 @@ func jsonTag(name string) string {
 	return fmt.Sprintf("`json:%q`", name)
 }
 
-func formatDuration(d time.Duration) string {
+// goDurationExpr renders a time.Duration as a Go source expression (e.g.
+// "3 * time.Second") for interpolation into generated client code. It is
+// distinct from pkg/config's formatDuration, which renders a round-trip YAML
+// duration string ("3s"); the two are named differently so an edit to one
+// cannot silently affect the other (N-38).
+func goDurationExpr(d time.Duration) string {
 	switch {
 	case d == 0:
 		return "0"

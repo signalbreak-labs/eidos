@@ -2,6 +2,7 @@ package parser
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 )
 
@@ -15,8 +16,12 @@ import (
 type circularDetector struct {
 	root     Node
 	circular map[string]struct{}
-	diags    []Diagnostic
-	seen     map[Node]bool
+	// nonCircular caches refs already proven not to reach the goal, so a shared
+	// non-circular ref (e.g. #/components/schemas/Error referenced hundreds of
+	// times) is not re-walked on every occurrence (C-7).
+	nonCircular map[string]bool
+	diags       []Diagnostic
+	seen        map[Node]bool
 }
 
 func (d *circularDetector) detect(n Node) {
@@ -50,11 +55,11 @@ func (d *circularDetector) detectWithKey(n Node, parentKey string) {
 			}
 			key, _ := asString(e.Key)
 			if key == "$ref" {
-				d.checkRef(e.Value, v)
+				d.checkRef(e.Value, v, false)
 				continue
 			}
 			if scalar, ok := e.Value.(*ScalarNode); ok && d.isBareRef(scalar, key) {
-				d.checkRef(e.Value, v)
+				d.checkRef(e.Value, v, true)
 				continue
 			}
 			d.detectWithKey(e.Value, key)
@@ -62,7 +67,7 @@ func (d *circularDetector) detectWithKey(n Node, parentKey string) {
 	case *SequenceNode:
 		for _, item := range v.Items {
 			if scalar, ok := item.(*ScalarNode); ok && d.isBareRef(scalar, parentKey) {
-				d.checkRef(item, v)
+				d.checkRef(item, v, true)
 				continue
 			}
 			d.detectWithKey(item, parentKey)
@@ -110,7 +115,12 @@ func literalDataKey(key string) bool {
 	return literalSchemaScalarKeys[key]
 }
 
-func (d *circularDetector) checkRef(value, goal Node) {
+// checkRef determines whether the ref held by value participates in a cycle.
+// bare reports whether value is a bare schema-pointer scalar (M-24) rather than
+// a "$ref" key. Resolve diagnostics are surfaced only for bare refs: the
+// validateRefs pass already reports unresolvable "$ref" keys (it walks the whole
+// AST), so surfacing them here too would duplicate the diagnostic (N-5).
+func (d *circularDetector) checkRef(value, goal Node, bare bool) {
 	ref, ok := asString(value)
 	if !ok || !isLocalSchemaRef(ref) {
 		return
@@ -123,13 +133,29 @@ func (d *circularDetector) checkRef(value, goal Node) {
 	if _, found := d.circular[ref]; found {
 		return
 	}
-	target, _ := ResolveLocalRef(d.root, ref, nodeLoc(value))
+	// A ref already proven non-circular is likewise not re-walked (C-7).
+	if d.nonCircular[ref] {
+		return
+	}
+	target, resolveDiags := ResolveLocalRef(d.root, ref, nodeLoc(value))
+	if bare {
+		d.diags = append(d.diags, resolveDiags...)
+	}
 	if target == nil {
 		return
 	}
 	reaches, reachDiags := canReach(d.root, target, goal)
 	d.diags = append(d.diags, reachDiags...)
 	if !reaches {
+		// Cache the ref as non-circular only when its target is acyclic. A
+		// cyclic target can be non-circular at one location and circular at
+		// another (e.g. a self-referencing schema also referenced from a
+		// request body), so a ref-string cache would wrongly skip the circular
+		// occurrence. An acyclic target can never be reached from its own ref,
+		// so every occurrence of the ref is provably non-circular (C-7).
+		if !d.targetIsCyclic(target) {
+			d.nonCircular[ref] = true
+		}
 		return
 	}
 	d.circular[ref] = struct{}{}
@@ -142,19 +168,35 @@ func (d *circularDetector) checkRef(value, goal Node) {
 	})
 }
 
+// targetIsCyclic reports whether target participates in a $ref cycle, i.e.
+// whether following nested nodes and refs from target can return to target.
+// canReach with start==goal returns true immediately, so the walk starts from
+// the target's children rather than the target itself. Resolve diagnostics are
+// not surfaced here: the refs walked are "$ref" keys, which validateRefs
+// reports (N-5).
+func (d *circularDetector) targetIsCyclic(target Node) bool {
+	rs := &reachState{root: d.root, goal: target, seen: make(map[Node]bool)}
+	return rs.walkChildren(target, 0)
+}
+
 // DetectCircularSchemaRefs scans the raw AST for local schema $ref cycles.
 func DetectCircularSchemaRefs(root Node) ([]string, []Diagnostic) {
 	d := &circularDetector{
-		root:     root,
-		circular: make(map[string]struct{}),
-		seen:     make(map[Node]bool),
+		root:        root,
+		circular:    make(map[string]struct{}),
+		nonCircular: make(map[string]bool),
+		seen:        make(map[Node]bool),
 	}
 	d.detect(root)
 
+	// Sort so the returned refs are deterministic across runs (C-6); a map
+	// iteration order would otherwise leak into diagnostics ordering and any
+	// emitted output.
 	refs := make([]string, 0, len(d.circular))
 	for ref := range d.circular {
 		refs = append(refs, ref)
 	}
+	sort.Strings(refs)
 	return refs, d.diags
 }
 
@@ -212,6 +254,9 @@ func (rs *reachState) walkChildren(n Node, depth int) bool {
 				if !ok || !strings.HasPrefix(ref, "#") {
 					continue
 				}
+				// Resolve diagnostics are intentionally not surfaced here: every
+				// "$ref" key this walk follows is also visited by validateRefs,
+				// which reports unresolvable pointers once (N-5).
 				target, _ := ResolveLocalRef(rs.root, ref, nodeLoc(e.Value))
 				if target != nil && rs.walk(target, depth+1) {
 					return true

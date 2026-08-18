@@ -1082,9 +1082,13 @@ func (c *v30Converter) convertSchema(n Node) *Schema {
 	m, ok := n.(*MapNode)
 	if !ok {
 		// Boolean schemas (true/false) are valid in OpenAPI 3.1 but cannot be
-		// represented in the *Schema model, so they are silently dropped.
-		// Any other non-mapping value is a structural type mismatch.
-		if _, ok := nodeBool(n); !ok {
+		// represented in the *Schema model. Surface a warning instead of
+		// dropping them silently: `true` accepts anything and `false` accepts
+		// nothing, so dropping changes semantics (C-3).
+		if _, isBool := nodeBool(n); isBool {
+			c.warn(nodeLoc(n), "boolean schema is not modeled",
+				"A boolean schema (true/false) is valid in OpenAPI 3.1 but cannot be represented in the generated provider; it is being dropped. Use an explicit object schema instead.")
+		} else {
 			c.warnTypeMismatch(nodeLoc(n), "schema", n)
 		}
 		return nil
@@ -1184,6 +1188,8 @@ func (c *v30Converter) convertSchema(n Node) *Schema {
 			s.ContentMediaType = c.scalarString(value, "contentMediaType")
 		case "contentEncoding":
 			s.ContentEncoding = c.scalarString(value, "contentEncoding")
+		case "contentSchema":
+			s.ContentSchema = c.convertSchema(value)
 		case "unevaluatedProperties":
 			s.UnevaluatedProperties = c.convertSchema(value)
 		case "unevaluatedItems":

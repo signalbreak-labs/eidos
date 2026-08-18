@@ -1,126 +1,157 @@
 [
   {
     "path": ".github/workflows/release.yml",
-    "reason": "GitHub Actions release workflow"
+    "reason": "GitHub Actions release workflow",
+    "body_hash": "ae42673ed8ab3eaf"
   },
   {
     "path": ".goreleaser.yml",
-    "reason": "GoReleaser release configuration"
+    "reason": "GoReleaser release configuration",
+    "body_hash": "49346473852230da"
   },
   {
     "path": "GNUmakefile",
-    "reason": "build and test automation"
+    "reason": "build and test automation",
+    "body_hash": "771e0e9e2aefba94"
   },
   {
     "path": "README.md",
-    "reason": "provider overview and usage guide"
+    "reason": "provider overview and usage guide",
+    "body_hash": "5fea78e648adfe69"
   },
   {
     "path": "docs/actions/create_department.md",
-    "reason": "documentation for action create_department"
+    "reason": "documentation for action create_department",
+    "body_hash": "46f024d4557010ab"
   },
   {
     "path": "docs/data-sources/list_departments.md",
-    "reason": "documentation for data source list_departments"
+    "reason": "documentation for data source list_departments",
+    "body_hash": "30cc35bb27af1cb4"
   },
   {
     "path": "docs/index.md",
-    "reason": "provider overview and authentication guide"
+    "reason": "provider overview and authentication guide",
+    "body_hash": "bc525f359f01927c"
   },
   {
     "path": "examples/actions/create_department/action.tf",
-    "reason": "example for action create_department"
+    "reason": "example for action create_department",
+    "body_hash": "88ecd001dcdc1130"
   },
   {
     "path": "examples/data-sources/list_departments/data-source.tf",
-    "reason": "example for data source list_departments"
+    "reason": "example for data source list_departments",
+    "body_hash": "e9d9ff779a182545"
   },
   {
     "path": "generator.yaml",
-    "reason": "generated generator configuration"
+    "reason": "generated generator configuration",
+    "body_hash": "a964c5755e5bdaff"
   },
   {
     "path": "go.mod",
-    "reason": "Go module definition"
+    "reason": "Go module definition",
+    "body_hash": "0497d60bd91115eb"
   },
   {
     "path": "internal/client/client.go",
-    "reason": "generated HTTP client"
+    "reason": "generated HTTP client",
+    "body_hash": "a37c74d3b5e33306"
   },
   {
     "path": "internal/client/client_test.go",
-    "reason": "generated HTTP client unit tests"
+    "reason": "generated HTTP client unit tests",
+    "body_hash": "0fb890fb4f1b0e58"
   },
   {
     "path": "internal/client/errors.go",
-    "reason": "typed API error helpers"
+    "reason": "typed API error helpers",
+    "body_hash": "7b69b0dda148a6d5"
   },
   {
     "path": "internal/client/logging.go",
-    "reason": "request/response trace logging"
+    "reason": "request/response trace logging",
+    "body_hash": "9defaf534cc08195"
   },
   {
     "path": "internal/client/logging_test.go",
-    "reason": "trace logging unit tests"
+    "reason": "trace logging unit tests",
+    "body_hash": "3d1b897c8a09d762"
   },
   {
     "path": "internal/client/models.go",
-    "reason": "request/response model structs"
+    "reason": "request/response model structs",
+    "body_hash": "1efd23827e83c14f"
   },
   {
     "path": "internal/client/pagination.go",
-    "reason": "pagination helpers"
+    "reason": "pagination helpers",
+    "body_hash": "80e851435c7a25d6"
   },
   {
     "path": "internal/client/retry.go",
-    "reason": "retry logic with exponential backoff"
+    "reason": "retry logic with exponential backoff",
+    "body_hash": "bf53c919903fb008"
   },
   {
     "path": "internal/provider/action_create_department.go",
-    "reason": "action circular-references-api_create_department"
+    "reason": "action circular-references-api_create_department",
+    "body_hash": "ce35cf311990aed5"
   },
   {
     "path": "internal/provider/action_create_department_remote_test.go",
-    "reason": "coverage tests for action create_department remote helper"
+    "reason": "coverage tests for action create_department remote helper",
+    "body_hash": "a3298257f5bfd0c3"
   },
   {
     "path": "internal/provider/data_source_list_departments.go",
-    "reason": "data source circular-references-api_list_departments"
+    "reason": "data source circular-references-api_list_departments",
+    "body_hash": "8626684bf519b7a7"
   },
   {
     "path": "internal/provider/data_source_list_departments_remote_test.go",
-    "reason": "coverage tests for data source list_departments remote helpers"
+    "reason": "coverage tests for data source list_departments remote helpers",
+    "body_hash": "040794e051964d58"
   },
   {
     "path": "internal/provider/data_source_list_departments_test.go",
-    "reason": "unit tests for data source list_departments"
+    "reason": "unit tests for data source list_departments",
+    "body_hash": "e279fb850a627a8b"
   },
   {
     "path": "internal/provider/json_convert.go",
-    "reason": "JSON/model conversion helpers for wired CRUD bodies"
+    "reason": "JSON/model conversion helpers for wired CRUD bodies",
+    "body_hash": "36be31b660ad9238"
   },
   {
     "path": "internal/provider/provider.go",
-    "reason": "provider schema and registration"
+    "reason": "provider schema and registration",
+    "body_hash": "7c6ec89fbc318711"
   },
   {
     "path": "internal/provider/provider_test.go",
-    "reason": "provider-level unit tests"
+    "reason": "provider-level unit tests",
+    "body_hash": "cd4c593389b45055"
   },
   {
     "path": "internal/provider/testing_helpers_test.go",
-    "reason": "shared httptest helpers for coverage tests"
+    "reason": "shared httptest helpers for coverage tests",
+    "body_hash": "4eedb7e7bec970e0"
   },
   {
     "path": "internal/provider/validators.go",
-    "reason": "custom schema validators"
+    "reason": "custom schema validators",
+    "body_hash": "94a192299dab9088"
   },
   {
     "path": "main.go",
-    "reason": "provider server entrypoint"
+    "reason": "provider server entrypoint",
+    "body_hash": "771dd1c73db94ebc"
   },
   {
     "path": "terraform-registry-manifest.json",
-    "reason": "Terraform Registry manifest"
+    "reason": "Terraform Registry manifest",
+    "body_hash": "76ac85aa7f3a523b"
   }
 ]

@@ -1,114 +1,142 @@
 [
   {
     "path": ".github/workflows/release.yml",
-    "reason": "GitHub Actions release workflow"
+    "reason": "GitHub Actions release workflow",
+    "body_hash": "4bb3d114789296fc"
   },
   {
     "path": ".goreleaser.yml",
-    "reason": "GoReleaser release configuration"
+    "reason": "GoReleaser release configuration",
+    "body_hash": "efebefa9e251b47b"
   },
   {
     "path": "GNUmakefile",
-    "reason": "build and test automation"
+    "reason": "build and test automation",
+    "body_hash": "771e0e9e2aefba94"
   },
   {
     "path": "README.md",
-    "reason": "provider overview and usage guide"
+    "reason": "provider overview and usage guide",
+    "body_hash": "07950b37cf6cdbb9"
   },
   {
     "path": "docs/index.md",
-    "reason": "provider overview and authentication guide"
+    "reason": "provider overview and authentication guide",
+    "body_hash": "3ec7476bd10b9042"
   },
   {
     "path": "docs/resources/notif_meta_config.md",
-    "reason": "documentation for resource notif_meta_config"
+    "reason": "documentation for resource notif_meta_config",
+    "body_hash": "73b06c47b3be4450"
   },
   {
     "path": "examples/resources/notif_meta_config/resource.tf",
-    "reason": "example for resource notif_meta_config"
+    "reason": "example for resource notif_meta_config",
+    "body_hash": "ea9a2aa6400b650b"
   },
   {
     "path": "generator.yaml",
-    "reason": "generated generator configuration"
+    "reason": "generated generator configuration",
+    "body_hash": "abcc97830e6022ad"
   },
   {
     "path": "go.mod",
-    "reason": "Go module definition"
+    "reason": "Go module definition",
+    "body_hash": "ed05d71772bd8e01"
   },
   {
     "path": "internal/client/client.go",
-    "reason": "generated HTTP client"
+    "reason": "generated HTTP client",
+    "body_hash": "d6ce9f7b822bcaac"
   },
   {
     "path": "internal/client/client_test.go",
-    "reason": "generated HTTP client unit tests"
+    "reason": "generated HTTP client unit tests",
+    "body_hash": "ba5d3fc2fa7b3852"
   },
   {
     "path": "internal/client/errors.go",
-    "reason": "typed API error helpers"
+    "reason": "typed API error helpers",
+    "body_hash": "7b69b0dda148a6d5"
   },
   {
     "path": "internal/client/logging.go",
-    "reason": "request/response trace logging"
+    "reason": "request/response trace logging",
+    "body_hash": "9defaf534cc08195"
   },
   {
     "path": "internal/client/logging_test.go",
-    "reason": "trace logging unit tests"
+    "reason": "trace logging unit tests",
+    "body_hash": "3d1b897c8a09d762"
   },
   {
     "path": "internal/client/models.go",
-    "reason": "request/response model structs"
+    "reason": "request/response model structs",
+    "body_hash": "1efd23827e83c14f"
   },
   {
     "path": "internal/client/pagination.go",
-    "reason": "pagination helpers"
+    "reason": "pagination helpers",
+    "body_hash": "80e851435c7a25d6"
   },
   {
     "path": "internal/client/retry.go",
-    "reason": "retry logic with exponential backoff"
+    "reason": "retry logic with exponential backoff",
+    "body_hash": "bf53c919903fb008"
   },
   {
     "path": "internal/provider/json_convert.go",
-    "reason": "JSON/model conversion helpers for wired CRUD bodies"
+    "reason": "JSON/model conversion helpers for wired CRUD bodies",
+    "body_hash": "b6217f39cb763301"
   },
   {
     "path": "internal/provider/provider.go",
-    "reason": "provider schema and registration"
+    "reason": "provider schema and registration",
+    "body_hash": "52e2276513b60392"
   },
   {
     "path": "internal/provider/provider_test.go",
-    "reason": "provider-level unit tests"
+    "reason": "provider-level unit tests",
+    "body_hash": "c04f2d420256aa99"
   },
   {
     "path": "internal/provider/resource_notif_meta_config.go",
-    "reason": "resource composite-upsert-api_notif_meta_config"
+    "reason": "resource composite-upsert-api_notif_meta_config",
+    "body_hash": "17aa1ac504381a3f"
   },
   {
     "path": "internal/provider/resource_notif_meta_config_acceptance_test.go",
-    "reason": "acceptance tests for resource notif_meta_config"
+    "reason": "acceptance tests for resource notif_meta_config",
+    "body_hash": "f713bc3841b96aa9"
   },
   {
     "path": "internal/provider/resource_notif_meta_config_remote_test.go",
-    "reason": "coverage tests for resource notif_meta_config remote helpers"
+    "reason": "coverage tests for resource notif_meta_config remote helpers",
+    "body_hash": "d2213783e55de657"
   },
   {
     "path": "internal/provider/resource_notif_meta_config_test.go",
-    "reason": "unit tests for resource notif_meta_config"
+    "reason": "unit tests for resource notif_meta_config",
+    "body_hash": "99e9a2f16d31174d"
   },
   {
     "path": "internal/provider/testing_helpers_test.go",
-    "reason": "shared httptest helpers for coverage tests"
+    "reason": "shared httptest helpers for coverage tests",
+    "body_hash": "c06768ba872f4a92"
   },
   {
     "path": "internal/provider/validators.go",
-    "reason": "custom schema validators"
+    "reason": "custom schema validators",
+    "body_hash": "94a192299dab9088"
   },
   {
     "path": "main.go",
-    "reason": "provider server entrypoint"
+    "reason": "provider server entrypoint",
+    "body_hash": "0d6899bb5f0a5084"
   },
   {
     "path": "terraform-registry-manifest.json",
-    "reason": "Terraform Registry manifest"
+    "reason": "Terraform Registry manifest",
+    "body_hash": "76ac85aa7f3a523b"
   }
 ]

@@ -343,6 +343,46 @@ func TestMapSecuritySchemeToProviderConfig_MultiBearerQualifies(t *testing.T) {
 	}
 }
 
+// TestMapSecuritySchemeToProviderConfig_MultiAPIKeyQualifies locks in the N-13
+// fix: a spec that declares several apiKey schemes (e.g. one in a header and one
+// in a query) maps each to a distinct, scheme-qualified config attribute instead
+// of collapsing every apiKey scheme onto one api_key attribute. A single apiKey
+// scheme keeps the canonical api_key name (the existing single-scheme cases
+// cover that).
+func TestMapSecuritySchemeToProviderConfig_MultiAPIKeyQualifies(t *testing.T) {
+	schemes := []ir.SecuritySchemeIR{
+		{Name: "ApiKeyAuth", Type: ir.SecuritySchemeAPIKey, In: "header", NameField: "X-API-Key"},
+		{Name: "apiKeyQuery", Type: ir.SecuritySchemeAPIKey, In: "query", NameField: "api_key"},
+	}
+	headerAttrs, err := MapSecuritySchemeToProviderConfig(schemes[0], schemes)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(headerAttrs) != 1 {
+		t.Fatalf("expected 1 attribute, got %d: %+v", len(headerAttrs), headerAttrs)
+	}
+	if headerAttrs[0].Name != "api_key_auth" {
+		t.Errorf("header scheme attribute name = %q, want api_key_auth (scheme-qualified)", headerAttrs[0].Name)
+	}
+	if !headerAttrs[0].Sensitive {
+		t.Error("apiKey attribute must be sensitive")
+	}
+
+	queryAttrs, err := MapSecuritySchemeToProviderConfig(schemes[1], schemes)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(queryAttrs) != 1 {
+		t.Fatalf("expected 1 attribute, got %d: %+v", len(queryAttrs), queryAttrs)
+	}
+	if queryAttrs[0].Name != "api_key_query" {
+		t.Errorf("query scheme attribute name = %q, want api_key_query (scheme-qualified)", queryAttrs[0].Name)
+	}
+	if queryAttrs[0].Name == headerAttrs[0].Name {
+		t.Errorf("the two apiKey schemes must not collapse onto one attribute name (%q)", queryAttrs[0].Name)
+	}
+}
+
 // TestMapOpenIDConnectSurfacesDiscoveryURL locks in the L-106 fix: when the
 // spec declares an OpenIDConnectURL, it is carried into the oidc_token_url
 // attribute description so practitioners do not have to look it up manually.

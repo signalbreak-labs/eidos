@@ -180,26 +180,6 @@ func TestParamSchemaIR(t *testing.T) {
 	}
 }
 
-// TestMapParamType covers every branch of the parameter type mapping.
-func TestMapParamType(t *testing.T) {
-	cases := []struct {
-		in   string
-		want ir.PrimitiveType
-	}{
-		{"integer", ir.TypeInt},
-		{"number", ir.TypeFloat},
-		{"boolean", ir.TypeBool},
-		{"string", ir.TypeString},
-		{"array", ir.TypeString}, // unrecognized → string
-		{"  NUMBER ", ir.TypeFloat},
-	}
-	for _, tc := range cases {
-		if got := mapParamType(tc.in); got != tc.want {
-			t.Errorf("mapParamType(%q) = %v, want %v", tc.in, got, tc.want)
-		}
-	}
-}
-
 // TestInt64ValueCoercions covers every numeric kind int64Value recognizes and
 // the non-numeric rejection.
 func TestInt64ValueCoercions(t *testing.T) {

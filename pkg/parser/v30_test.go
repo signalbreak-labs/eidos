@@ -430,6 +430,8 @@ components:
       additionalProperties: true
     Base:
       type: object
+    A:
+      type: object
     Tuple:
       type: array
       prefixItems:
@@ -1037,5 +1039,142 @@ components:
 	}
 	if !foundRequired {
 		t.Error("expected diagnostic for required array with non-string item")
+	}
+}
+
+// TestConvertV30FlowNumericResponseKeys ensures flow-style numeric response
+// status keys ("responses: {200: ...}") are preserved via their raw source
+// text instead of being silently dropped (C-1).
+func TestConvertV30FlowNumericResponseKeys(t *testing.T) {
+	data := []byte(`openapi: "3.0.0"
+info: {title: T, version: "1"}
+paths:
+  /pets:
+    get:
+      operationId: listPets
+      responses: {200: {description: OK}, 404: {description: Not Found}}
+`)
+	root, err := LoadFileAsYAML("flow.yaml", data)
+	if err != nil {
+		t.Fatalf("LoadFileAsYAML: %v", err)
+	}
+	spec, diags, err := ConvertV30(root)
+	if err != nil {
+		t.Fatalf("ConvertV30: %v", err)
+	}
+	if len(diags) != 0 {
+		t.Fatalf("unexpected diagnostics: %v", diags)
+	}
+	op := spec.Paths["/pets"].Get
+	if op == nil {
+		t.Fatal("missing GET /pets")
+	}
+	if len(op.Responses) != 2 {
+		t.Fatalf("responses = %v, want 2 entries (200, 404)", keysOf(op.Responses))
+	}
+	if _, ok := op.Responses["200"]; !ok {
+		t.Errorf("missing 200 response, got %v", keysOf(op.Responses))
+	}
+	if _, ok := op.Responses["404"]; !ok {
+		t.Errorf("missing 404 response, got %v", keysOf(op.Responses))
+	}
+}
+
+func keysOf[V any](m map[string]V) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	return out
+}
+
+// TestConvertV30BooleanSchemaWarns ensures a boolean schema (valid in OAS 3.1)
+// is surfaced with a warning instead of being silently dropped (C-3).
+func TestConvertV30BooleanSchemaWarns(t *testing.T) {
+	data := []byte(`openapi: "3.1.0"
+info: {title: T, version: "1"}
+paths:
+  /pets:
+    get:
+      operationId: listPets
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - true
+                  - {type: object}
+`)
+	root, err := LoadFileAsYAML("bool.yaml", data)
+	if err != nil {
+		t.Fatalf("LoadFileAsYAML: %v", err)
+	}
+	spec, diags, err := ConvertV31(root)
+	if err != nil {
+		t.Fatalf("ConvertV31: %v", err)
+	}
+	var warned bool
+	for _, d := range diags {
+		if d.Summary == "boolean schema is not modeled" {
+			warned = true
+		}
+	}
+	if !warned {
+		t.Error("expected a 'boolean schema is not modeled' warning, got none")
+	}
+	op := spec.Paths["/pets"].Get
+	if op == nil {
+		t.Fatal("missing GET /pets")
+	}
+	resp := op.Responses["200"]
+	if resp == nil || resp.Content == nil {
+		t.Fatal("missing 200 response content")
+	}
+	sch := resp.Content["application/json"].Schema
+	if sch == nil || len(sch.AllOf) != 1 {
+		t.Fatalf("AllOf = %v, want 1 member (boolean dropped, object kept)", sch)
+	}
+}
+
+// TestConvertV30ContentSchemaPreserved ensures the legal 3.1 contentSchema
+// keyword is modeled instead of being validated-then-discarded (C-4).
+func TestConvertV30ContentSchemaPreserved(t *testing.T) {
+	data := []byte(`openapi: "3.1.0"
+info: {title: T, version: "1"}
+paths:
+  /pets:
+    get:
+      operationId: listPets
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: string
+                contentMediaType: text/plain
+                contentSchema:
+                  type: object
+`)
+	root, err := LoadFileAsYAML("content.yaml", data)
+	if err != nil {
+		t.Fatalf("LoadFileAsYAML: %v", err)
+	}
+	spec, diags, err := ConvertV31(root)
+	if err != nil {
+		t.Fatalf("ConvertV31: %v", err)
+	}
+	if len(diags) != 0 {
+		t.Fatalf("unexpected diagnostics: %v", diags)
+	}
+	op := spec.Paths["/pets"].Get
+	sch := op.Responses["200"].Content["application/json"].Schema
+	if sch.ContentSchema == nil {
+		t.Fatal("contentSchema was dropped; want it preserved")
+	}
+	if sch.ContentSchema.Type != "object" {
+		t.Errorf("contentSchema type = %q, want object", sch.ContentSchema.Type)
 	}
 }
