@@ -31,13 +31,29 @@ import (
 // run the generator, check generated schemas for framework-validity, and preview
 // the effect of generator.yaml overrides.
 
+// specInputSchema is the input schema for the spec argument shared by the
+// eidos/* tools. It accepts both inline content (a string) and a parsed object,
+// because LLM clients commonly pass the spec as a decoded JSON object rather
+// than a serialized string. Without the object branch, the MCP SDK's input
+// validation rejects the call with "has type object, want string" and the tool
+// reports an empty result (M-83). normalizeSpec handles both shapes.
+func specInputSchema() *jsonschema.Schema {
+	return &jsonschema.Schema{
+		Description: "OpenAPI spec as inline JSON/YAML content, a parsed object, a local file path, a file:// URL, or an http(s):// URL (https-only; http requires EIDOS_SPEC_ALLOW_HTTP=1)",
+		OneOf: []*jsonschema.Schema{
+			{Type: "string"},
+			{Type: "object"},
+		},
+	}
+}
+
 // ---------------------------------------------------------------------------
 // eidos/inspect — IR preview with per-resource CRUD completeness + wired status
 // ---------------------------------------------------------------------------
 
 // InspectArgs is the input to eidos/inspect.
 type InspectArgs struct {
-	Spec   string `json:"spec"`
+	Spec   any    `json:"spec"`
 	Config string `json:"config,omitempty"`
 }
 
@@ -95,7 +111,7 @@ func InspectTool() *sdkmcp.Tool {
 		InputSchema: &jsonschema.Schema{
 			Type: "object",
 			Properties: map[string]*jsonschema.Schema{
-				"spec":   {Type: "string", Description: "OpenAPI spec as inline JSON/YAML content, a local file path, a file:// URL, or an http(s):// URL (https-only; http requires EIDOS_SPEC_ALLOW_HTTP=1)"},
+				"spec":   specInputSchema(),
 				"config": {Type: "string", Description: "Optional generator.yaml as inline YAML/JSON content, a local file path, or a file:// URL. When set, overrides (e.g. generate_resource) shape the IR preview."},
 			},
 			Required: []string{"spec"},
@@ -173,7 +189,7 @@ func HandleInspect(ctx context.Context, _ *sdkmcp.CallToolRequest, args InspectA
 
 // GenerateArgs is the input to eidos/generate.
 type GenerateArgs struct {
-	Spec   string `json:"spec"`
+	Spec   any    `json:"spec"`
 	Config string `json:"config,omitempty"`
 	Output string `json:"output,omitempty"`
 	// DryRun, when true, collects and returns the planned file list without
@@ -200,7 +216,7 @@ type GenerateArgs struct {
 // destructive footgun for a tool whose caller expects a no-op plan (M-75).
 func (a *GenerateArgs) UnmarshalJSON(data []byte) error {
 	var raw struct {
-		Spec        string `json:"spec"`
+		Spec        any    `json:"spec"`
 		Config      string `json:"config,omitempty"`
 		Output      string `json:"output,omitempty"`
 		DryRun      bool   `json:"dry_run,omitempty"`
@@ -250,7 +266,7 @@ func GenerateTool() *sdkmcp.Tool {
 		InputSchema: &jsonschema.Schema{
 			Type: "object",
 			Properties: map[string]*jsonschema.Schema{
-				"spec":    {Type: "string", Description: "OpenAPI spec as inline JSON/YAML content, a local file path, a file:// URL, or an http(s):// URL (https-only; http requires EIDOS_SPEC_ALLOW_HTTP=1)"},
+				"spec":    specInputSchema(),
 				"config":  {Type: "string", Description: "Optional generator.yaml as inline YAML/JSON content, a local file path, or a file:// URL. When set, overrides shape the generated provider and summaries."},
 				"output":  {Type: "string", Description: "Optional directory to write the generated provider to"},
 				"dry_run": {Type: "boolean", Description: "Collect and return the planned file list without writing. When output is set, also reports would-overwrite and stale files."},
@@ -366,7 +382,7 @@ func HandleGenerate(ctx context.Context, _ *sdkmcp.CallToolRequest, args Generat
 			result.Files = fileSummaries(entries, output)
 			if output != "" {
 				result.OutputDir = output
-				stale, sErr := staleFilesInOutput(output, entries)
+				stale, sErr := staleFilesInOutput(output, entries, genOpts.IncludeConfig)
 				if sErr != nil {
 					result.Diagnostics = append(result.Diagnostics, api.DiagnosticJSON{
 						Severity: "warning", Summary: "Could not scan output directory for stale files", Detail: sErr.Error(),
@@ -388,7 +404,7 @@ func HandleGenerate(ctx context.Context, _ *sdkmcp.CallToolRequest, args Generat
 			// WouldOverwrite is not meaningful after a forced write, so the
 			// written files are listed without it.
 			result.Files = fileSummaries(entries, "")
-			stale, sErr := staleFilesInOutput(output, entries)
+			stale, sErr := staleFilesInOutput(output, entries, genOpts.IncludeConfig)
 			if sErr != nil {
 				result.Diagnostics = append(result.Diagnostics, api.DiagnosticJSON{
 					Severity: "warning", Summary: "Could not scan output directory for stale files", Detail: sErr.Error(),
@@ -424,7 +440,7 @@ func HandleGenerate(ctx context.Context, _ *sdkmcp.CallToolRequest, args Generat
 
 // ValidateSchemasArgs is the input to eidos/validate-schemas.
 type ValidateSchemasArgs struct {
-	Spec   string `json:"spec"`
+	Spec   any    `json:"spec"`
 	Config string `json:"config,omitempty"`
 }
 
@@ -451,7 +467,7 @@ func ValidateSchemasTool() *sdkmcp.Tool {
 		InputSchema: &jsonschema.Schema{
 			Type: "object",
 			Properties: map[string]*jsonschema.Schema{
-				"spec":   {Type: "string", Description: "OpenAPI spec as inline JSON/YAML content, a local file path, a file:// URL, or an http(s):// URL (https-only; http requires EIDOS_SPEC_ALLOW_HTTP=1)"},
+				"spec":   specInputSchema(),
 				"config": {Type: "string", Description: "Optional generator.yaml as inline YAML/JSON content, a local file path, or a file:// URL. When set, schema issues are reported against the override-shaped IR."},
 			},
 			Required: []string{"spec"},
@@ -519,7 +535,7 @@ func HandleValidateSchemas(ctx context.Context, _ *sdkmcp.CallToolRequest, args 
 
 // OverridePreviewArgs is the input to eidos/override-preview.
 type OverridePreviewArgs struct {
-	Spec   string `json:"spec"`
+	Spec   any    `json:"spec"`
 	Config string `json:"config"`
 }
 
@@ -547,7 +563,7 @@ func OverridePreviewTool() *sdkmcp.Tool {
 		InputSchema: &jsonschema.Schema{
 			Type: "object",
 			Properties: map[string]*jsonschema.Schema{
-				"spec":   {Type: "string", Description: "OpenAPI spec as inline JSON/YAML content, a local file path, a file:// URL, or an http(s):// URL (https-only; http requires EIDOS_SPEC_ALLOW_HTTP=1)"},
+				"spec":   specInputSchema(),
 				"config": {Type: "string", Description: "generator.yaml as inline YAML/JSON content, a local file path, or a file:// URL (required)"},
 			},
 			Required: []string{"spec", "config"},
@@ -894,6 +910,22 @@ func generateCollectOptions(configYAML string) generator.CollectOptions {
 			if cfg.SignRelease != nil {
 				opts.SignRelease = cfg.SignRelease
 			}
+			// Dynamic release is opt-in via generation.dynamic_release.enabled.
+			// Thread the image and spec_path through so the emitted
+			// regenerate-and-release workflow regenerates from the configured
+			// remote spec instead of the hardcoded "spec.yaml" default (M-84).
+			if cfg.Generation.DynamicRelease != nil && cfg.Generation.DynamicRelease.Enabled {
+				opts.IncludeDynamicRelease = true
+				opts.DynamicReleaseImage = cfg.Generation.DynamicRelease.Image
+				opts.DynamicReleaseSpecPath = cfg.Generation.DynamicRelease.SpecPath
+			}
+			// When dynamic_release.spec_path is unset, fall back to the top-level
+			// spec.path so a remote spec URL configured there drives the
+			// regeneration workflow (M-79, mirrored from the CLI's
+			// collectOptionsFor).
+			if opts.IncludeDynamicRelease && strings.TrimSpace(opts.DynamicReleaseSpecPath) == "" {
+				opts.DynamicReleaseSpecPath = cfg.Spec.Path
+			}
 		}
 	}
 	opts.IncludeConfig = false
@@ -945,7 +977,7 @@ func pathExists(p string) bool {
 // file from a previous run whose resource was since removed from the spec). The
 // .git directory and dot-prefixed entries are skipped to reduce noise. A missing
 // outputDir yields an empty slice (nothing is stale yet).
-func staleFilesInOutput(outputDir string, planned []generator.FileEntry) ([]string, error) {
+func staleFilesInOutput(outputDir string, planned []generator.FileEntry, includeConfig bool) ([]string, error) {
 	info, err := os.Stat(outputDir)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -984,6 +1016,13 @@ func staleFilesInOutput(outputDir string, planned []generator.FileEntry) ([]stri
 			return nil
 		}
 		if strings.HasPrefix(base, ".") {
+			return nil
+		}
+		// A generator.yaml the current run is not configured to emit is not
+		// "stale": it is the caller's source-of-truth config, and the write path
+		// never deletes it (M-82). Reporting it as stale would contradict the
+		// cleanup behavior and invite a caller to delete the config itself.
+		if !includeConfig && rel == "generator.yaml" {
 			return nil
 		}
 		if !plannedSet[rel] {

@@ -59,13 +59,7 @@ func GenerateConfigTool() *mcp.Tool {
 		InputSchema: &jsonschema.Schema{
 			Type: "object",
 			Properties: map[string]*jsonschema.Schema{
-				"spec": {
-					Description: "OpenAPI spec as inline JSON/YAML content, a parsed object, a local file path, a file:// URL, or an http(s):// URL (https-only; http requires EIDOS_SPEC_ALLOW_HTTP=1)",
-					OneOf: []*jsonschema.Schema{
-						{Type: "string"},
-						{Type: "object"},
-					},
-				},
+				"spec": specInputSchema(),
 				"format": {
 					Type:        "string",
 					Description: "Output format for the generated config: yaml (default) or json",

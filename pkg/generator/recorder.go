@@ -111,7 +111,7 @@ func Run(provider *ir.ProviderIR, opts Options) ([]FileEntry, error) {
 		if err != nil {
 			return nil, err
 		}
-		if _, err := removeStaleGeneratedFiles(opts.OutputDir, prev, planned, currentMode, opts.Force); err != nil {
+		if _, err := removeStaleGeneratedFiles(opts.OutputDir, prev, planned, currentMode, opts.Force, opts.IncludeConfig); err != nil {
 			return nil, err
 		}
 		if err := writeGenerationManifest(opts.OutputDir, &generationManifest{Mode: currentMode, Generated: planned}); err != nil {
@@ -678,7 +678,14 @@ func writeGenerationManifest(dir string, m *generationManifest) error {
 // wrote (per the manifest), so hand-written files are untouched even when they
 // sit at a path the generator would own. Empty parent directories are pruned up
 // to (but never including) the output root. It returns the removed paths.
-func removeStaleGeneratedFiles(dir string, prev *generationManifest, planned []string, currentMode string, force bool) ([]string, error) {
+//
+// includeConfig guards the generator.yaml path: when the current run is not
+// configured to emit it (IncludeConfig=false, e.g. the MCP generate tool which
+// deliberately omits it), a generator.yaml recorded by a previous run is never
+// deleted. The config is the caller's source-of-truth input, not a provider
+// deliverable, and removing it would silently destroy the very config the
+// current run was invoked with (M-82).
+func removeStaleGeneratedFiles(dir string, prev *generationManifest, planned []string, currentMode string, force, includeConfig bool) ([]string, error) {
 	if !force || prev == nil || prev.Mode != currentMode {
 		return nil, nil
 	}
@@ -689,6 +696,9 @@ func removeStaleGeneratedFiles(dir string, prev *generationManifest, planned []s
 	var removed []string
 	for _, p := range prev.Generated {
 		if _, ok := plannedSet[p]; ok {
+			continue
+		}
+		if !includeConfig && p == "generator.yaml" {
 			continue
 		}
 		if err := os.Remove(filepath.Join(dir, filepath.FromSlash(p))); err != nil {
