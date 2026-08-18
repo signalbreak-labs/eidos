@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.3](https://github.com/signalbreak-labs/eidos/compare/v0.4.2...v0.4.3) (2026-08-18)
+
+
+### Bug Fixes
+
+* heavy duty audit cleanup ([a75ea74](https://github.com/signalbreak-labs/eidos/commit/a75ea74c94bc50e316a1edee0e3762b9d444b6cf))
+* **mcp:** resolve config file/URL, full-provider emit, only-build+dynamic ([89c9a16](https://github.com/signalbreak-labs/eidos/commit/89c9a167ce562f23f2d1c7578cc98577580e36db))
+
 ## [0.4.2](https://github.com/signalbreak-labs/eidos/compare/v0.4.1...v0.4.2) (2026-08-17)
 
 
