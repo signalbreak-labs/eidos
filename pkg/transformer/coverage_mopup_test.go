@@ -189,16 +189,15 @@ func TestTopLevelUnionSpec(t *testing.T) {
 	}
 }
 
-// TestIsWriteOnly covers the nil, attribute-flag, schema-flag, and neither cases.
+// TestIsWriteOnly covers the nil, attribute-flag, and neither cases. Since N-49
+// the AttributeIR flag is the single source of truth; the embedded SchemaIR no
+// longer carries a duplicate copy for isWriteOnly to read.
 func TestIsWriteOnly(t *testing.T) {
 	if isWriteOnly(nil) {
 		t.Error("nil attribute should not be write-only")
 	}
 	if !isWriteOnly(&ir.AttributeIR{WriteOnly: true}) {
 		t.Error("attribute WriteOnly flag should count")
-	}
-	if !isWriteOnly(&ir.AttributeIR{Schema: ir.SchemaIR{WriteOnly: true}}) {
-		t.Error("schema WriteOnly flag should count")
 	}
 	if isWriteOnly(&ir.AttributeIR{Schema: ir.SchemaIR{Type: ir.TypeString}}) {
 		t.Error("plain attribute should not be write-only")

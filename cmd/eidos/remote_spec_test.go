@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -8,6 +9,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/signalbreak-labs/eidos/pkg/specsource"
 )
 
 func TestIsRemoteSpecURL(t *testing.T) {
@@ -37,7 +40,7 @@ func TestLoadSpecBytes_LocalFile(t *testing.T) {
 	if err := os.WriteFile(path, []byte("openapi: 3.0.0"), 0o600); err != nil {
 		t.Fatalf("write spec: %v", err)
 	}
-	data, ct, err := loadSpecBytes(path, remoteSpecOptions{})
+	data, ct, err := loadSpecBytes(context.Background(), path, remoteSpecOptions{})
 	if err != nil {
 		t.Fatalf("loadSpecBytes local file: %v", err)
 	}
@@ -50,7 +53,7 @@ func TestLoadSpecBytes_LocalFile(t *testing.T) {
 }
 
 func TestLoadSpecBytes_MissingLocalFile(t *testing.T) {
-	_, _, err := loadSpecBytes("/nonexistent/api.yaml", remoteSpecOptions{})
+	_, _, err := loadSpecBytes(context.Background(), "/nonexistent/api.yaml", remoteSpecOptions{})
 	if err == nil || !strings.Contains(err.Error(), "failed to read spec") {
 		t.Fatalf("expected file-read error, got %v", err)
 	}
@@ -63,7 +66,7 @@ func TestFetchRemoteSpec_Success(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	data, ct, err := fetchRemoteSpec(srv.URL, remoteSpecOptions{allowHTTP: true, skipHostCheck: true})
+	data, ct, err := fetchRemoteSpec(context.Background(), srv.URL, remoteSpecOptions{allowHTTP: true, skipHostCheck: true})
 	if err != nil {
 		t.Fatalf("fetchRemoteSpec: %v", err)
 	}
@@ -81,7 +84,7 @@ func TestFetchRemoteSpec_Non2xx(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	_, _, err := fetchRemoteSpec(srv.URL, remoteSpecOptions{allowHTTP: true, skipHostCheck: true})
+	_, _, err := fetchRemoteSpec(context.Background(), srv.URL, remoteSpecOptions{allowHTTP: true, skipHostCheck: true})
 	if err == nil || !strings.Contains(err.Error(), "server returned 404") {
 		t.Fatalf("expected 404 error, got %v", err)
 	}
@@ -89,14 +92,14 @@ func TestFetchRemoteSpec_Non2xx(t *testing.T) {
 
 func TestFetchRemoteSpec_HTTPSRequired(t *testing.T) {
 	// http without --spec-allow-http is rejected before any connection.
-	_, _, err := fetchRemoteSpec("http://example.com/api.yaml", remoteSpecOptions{skipHostCheck: true})
+	_, _, err := fetchRemoteSpec(context.Background(), "http://example.com/api.yaml", remoteSpecOptions{skipHostCheck: true})
 	if err == nil || !strings.Contains(err.Error(), "scheme") {
 		t.Fatalf("expected scheme error, got %v", err)
 	}
 }
 
 func TestFetchRemoteSpec_UserinfoRejected(t *testing.T) {
-	_, _, err := fetchRemoteSpec("https://user:pass@example.com/api.yaml", remoteSpecOptions{skipHostCheck: true})
+	_, _, err := fetchRemoteSpec(context.Background(), "https://user:pass@example.com/api.yaml", remoteSpecOptions{skipHostCheck: true})
 	if err == nil || !strings.Contains(err.Error(), "must not embed credentials") {
 		t.Fatalf("expected userinfo error, got %v", err)
 	}
@@ -107,11 +110,11 @@ func TestFetchRemoteSpec_SSRFGuardBlocksPrivateIP(t *testing.T) {
 	// EIDOS_SPEC_ALLOW_PRIVATE=1 in their shell does not bypass the guard here.
 	t.Setenv("EIDOS_SPEC_ALLOW_PRIVATE", "")
 	// A literal private IP is rejected before any connection is attempted.
-	_, _, err := fetchRemoteSpec("https://127.0.0.1/api.yaml", remoteSpecOptions{})
+	_, _, err := fetchRemoteSpec(context.Background(), "https://127.0.0.1/api.yaml", remoteSpecOptions{})
 	if err == nil || !strings.Contains(err.Error(), "private/local IP") {
 		t.Fatalf("expected SSRF guard error, got %v", err)
 	}
-	_, _, err = fetchRemoteSpec("https://169.254.169.254/latest/meta-data", remoteSpecOptions{})
+	_, _, err = fetchRemoteSpec(context.Background(), "https://169.254.169.254/latest/meta-data", remoteSpecOptions{})
 	if err == nil || !strings.Contains(err.Error(), "private/local IP") {
 		t.Fatalf("expected SSRF guard error for metadata IP, got %v", err)
 	}
@@ -125,20 +128,20 @@ func TestFetchRemoteSpec_RedirectToPrivateIPBlocked(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	_, _, err := fetchRemoteSpec(srv.URL, remoteSpecOptions{allowHTTP: true, skipHostCheck: true})
+	_, _, err := fetchRemoteSpec(context.Background(), srv.URL, remoteSpecOptions{allowHTTP: true, skipHostCheck: true})
 	if err == nil || !strings.Contains(err.Error(), "private/local IP") {
 		t.Fatalf("expected redirect SSRF guard error, got %v", err)
 	}
 }
 
 func TestFetchRemoteSpec_SizeCap(t *testing.T) {
-	big := strings.Repeat("x", remoteSpecMaxBytes+1)
+	big := strings.Repeat("x", specsource.DefaultMaxBytes+1)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = fmt.Fprint(w, big) //nolint:errcheck // test handler: response write error is non-actionable
 	}))
 	defer srv.Close()
 
-	_, _, err := fetchRemoteSpec(srv.URL, remoteSpecOptions{allowHTTP: true, skipHostCheck: true})
+	_, _, err := fetchRemoteSpec(context.Background(), srv.URL, remoteSpecOptions{allowHTTP: true, skipHostCheck: true})
 	if err == nil || !strings.Contains(err.Error(), "maximum") {
 		t.Fatalf("expected size cap error, got %v", err)
 	}
@@ -158,7 +161,7 @@ func TestFetchRemoteSpec_BearerAuth(t *testing.T) {
 		skipHostCheck: true,
 		auth:          &specAuth{Scheme: "bearer", TokenEnv: "EIDOS_TEST_SPEC_TOKEN"},
 	}
-	if _, _, err := fetchRemoteSpec(srv.URL, opts); err != nil {
+	if _, _, err := fetchRemoteSpec(context.Background(), srv.URL, opts); err != nil {
 		t.Fatalf("fetchRemoteSpec: %v", err)
 	}
 	if gotAuth != "Bearer s3cret-token" {
@@ -171,12 +174,14 @@ func TestFetchRemoteSpec_BearerAuthMissingEnv(t *testing.T) {
 	t.Setenv("EIDOS_TEST_SPEC_TOKEN_ABSENT", "")
 	opts := remoteSpecOptions{allowHTTP: true, skipHostCheck: true,
 		auth: &specAuth{Scheme: "bearer", TokenEnv: "EIDOS_TEST_SPEC_TOKEN_ABSENT"}}
-	_, _, err := fetchRemoteSpec("https://example.com/api.yaml", opts)
+	_, _, err := fetchRemoteSpec(context.Background(), "https://example.com/api.yaml", opts)
 	if err == nil || !strings.Contains(err.Error(), "EIDOS_TEST_SPEC_TOKEN_ABSENT") {
 		t.Fatalf("expected missing-env error, got %v", err)
 	}
 }
 
+// TestFetchClientCredentialsToken exercises the shared OAuth2 token flow that
+// the CLI's spec-auth oauth2-client-credentials scheme drives.
 func TestFetchClientCredentialsToken(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if err := r.ParseForm(); err != nil {
@@ -192,7 +197,7 @@ func TestFetchClientCredentialsToken(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	tok, err := fetchClientCredentialsToken(srv.URL, "cid", "csecret")
+	tok, err := specsource.FetchClientCredentialsToken(context.Background(), srv.URL, "cid", "csecret", 0, 0)
 	if err != nil {
 		t.Fatalf("fetchClientCredentialsToken: %v", err)
 	}
@@ -201,6 +206,7 @@ func TestFetchClientCredentialsToken(t *testing.T) {
 	}
 }
 
+// TestJsonField exercises the shared token-response field extractor.
 func TestJsonField(t *testing.T) {
 	for _, tc := range []struct {
 		body string
@@ -215,7 +221,7 @@ func TestJsonField(t *testing.T) {
 		{`{"other":"x"}`, "access_token", "", true},
 		{`{"access_token":""}`, "access_token", "", false},
 	} {
-		got, err := jsonField([]byte(tc.body), tc.key)
+		got, err := specsource.JSONField([]byte(tc.body), tc.key)
 		if tc.err {
 			if err == nil {
 				t.Errorf("jsonField(%q, %q): expected error, got %q", tc.body, tc.key, got)

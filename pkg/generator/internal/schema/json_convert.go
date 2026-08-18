@@ -7,14 +7,14 @@ package schema
 const JSONConvertTemplate = `package provider
 
 import (
-	"bytes"
-	"context"
-	"encoding/json"
+{{ if .IncludeXML }}	"bytes"
 	"encoding/xml"
+{{ end }}	"context"
+	"encoding/json"
 	"fmt"
 	"reflect"
-	"sort"
-
+{{ if .IncludeXML }}	"sort"
+{{ end }}
 	"github.com/hashicorp/terraform-plugin-framework/attr"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/hashicorp/terraform-plugin-framework/types/basetypes"
@@ -564,13 +564,16 @@ func nullAttrValueOfType(attrType attr.Type) (attr.Value, error) {
 	return nil, fmt.Errorf("unsupported attribute type %T", attrType)
 }
 
+{{ if .IncludeXML }}
 // mapToXML encodes a JSON-ready map as an XML document wrapped in a root
 // element. Map keys are emitted as child elements in sorted order so the output
 // is deterministic for the same input. Nested maps nest as child elements,
 // arrays repeat the parent element name (the conventional XML array shape), and
 // scalars become element character data. Custom XML element/attribute names and
 // the OpenAPI xml keyword are out of scope (A2); the encoding is a best-effort
-// body for APIs that accept application/xml.
+// body for APIs that accept application/xml. It is emitted only when a resource
+// wired CRUD body serializes application/xml (N-37); JSON-only providers carry
+// no dead XML serialization helpers.
 func mapToXML(m map[string]any, root string) ([]byte, error) {
 	var buf bytes.Buffer
 	enc := xml.NewEncoder(&buf)
@@ -623,7 +626,7 @@ func writeXMLValue(enc *xml.Encoder, name string, v any) error {
 		return enc.EncodeToken(xml.CharData(fmt.Sprintf("%v", x)))
 	}
 }
-
+{{ end }}
 // preserveStateIntoPlan copies attributes known in state into plan when the
 // plan value is unknown, so an Update request body carries persisted computed
 // values (e.g. an optimistic-concurrency version field) that the plan does not

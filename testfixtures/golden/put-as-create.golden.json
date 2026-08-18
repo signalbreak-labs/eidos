@@ -1,114 +1,142 @@
 [
   {
     "path": ".github/workflows/release.yml",
-    "reason": "GitHub Actions release workflow"
+    "reason": "GitHub Actions release workflow",
+    "body_hash": "1ef0f61f780332fa"
   },
   {
     "path": ".goreleaser.yml",
-    "reason": "GoReleaser release configuration"
+    "reason": "GoReleaser release configuration",
+    "body_hash": "25b27f03f72759d9"
   },
   {
     "path": "GNUmakefile",
-    "reason": "build and test automation"
+    "reason": "build and test automation",
+    "body_hash": "771e0e9e2aefba94"
   },
   {
     "path": "README.md",
-    "reason": "provider overview and usage guide"
+    "reason": "provider overview and usage guide",
+    "body_hash": "917a302fb3a04039"
   },
   {
     "path": "docs/index.md",
-    "reason": "provider overview and authentication guide"
+    "reason": "provider overview and authentication guide",
+    "body_hash": "63709930558d1102"
   },
   {
     "path": "docs/resources/alarm.md",
-    "reason": "documentation for resource alarm"
+    "reason": "documentation for resource alarm",
+    "body_hash": "9fc3db8950c27037"
   },
   {
     "path": "examples/resources/alarm/resource.tf",
-    "reason": "example for resource alarm"
+    "reason": "example for resource alarm",
+    "body_hash": "b5b284a0a8a140df"
   },
   {
     "path": "generator.yaml",
-    "reason": "generated generator configuration"
+    "reason": "generated generator configuration",
+    "body_hash": "14d3415e091cda16"
   },
   {
     "path": "go.mod",
-    "reason": "Go module definition"
+    "reason": "Go module definition",
+    "body_hash": "04f2d3a92a51273d"
   },
   {
     "path": "internal/client/client.go",
-    "reason": "generated HTTP client"
+    "reason": "generated HTTP client",
+    "body_hash": "d6ce9f7b822bcaac"
   },
   {
     "path": "internal/client/client_test.go",
-    "reason": "generated HTTP client unit tests"
+    "reason": "generated HTTP client unit tests",
+    "body_hash": "ba5d3fc2fa7b3852"
   },
   {
     "path": "internal/client/errors.go",
-    "reason": "typed API error helpers"
+    "reason": "typed API error helpers",
+    "body_hash": "7b69b0dda148a6d5"
   },
   {
     "path": "internal/client/logging.go",
-    "reason": "request/response trace logging"
+    "reason": "request/response trace logging",
+    "body_hash": "9defaf534cc08195"
   },
   {
     "path": "internal/client/logging_test.go",
-    "reason": "trace logging unit tests"
+    "reason": "trace logging unit tests",
+    "body_hash": "3d1b897c8a09d762"
   },
   {
     "path": "internal/client/models.go",
-    "reason": "request/response model structs"
+    "reason": "request/response model structs",
+    "body_hash": "1efd23827e83c14f"
   },
   {
     "path": "internal/client/pagination.go",
-    "reason": "pagination helpers"
+    "reason": "pagination helpers",
+    "body_hash": "80e851435c7a25d6"
   },
   {
     "path": "internal/client/retry.go",
-    "reason": "retry logic with exponential backoff"
+    "reason": "retry logic with exponential backoff",
+    "body_hash": "bf53c919903fb008"
   },
   {
     "path": "internal/provider/json_convert.go",
-    "reason": "JSON/model conversion helpers for wired CRUD bodies"
+    "reason": "JSON/model conversion helpers for wired CRUD bodies",
+    "body_hash": "f6d9a056cb8d5d0d"
   },
   {
     "path": "internal/provider/provider.go",
-    "reason": "provider schema and registration"
+    "reason": "provider schema and registration",
+    "body_hash": "85eff104774b2af2"
   },
   {
     "path": "internal/provider/provider_test.go",
-    "reason": "provider-level unit tests"
+    "reason": "provider-level unit tests",
+    "body_hash": "54b72a81b9716a21"
   },
   {
     "path": "internal/provider/resource_alarm.go",
-    "reason": "resource upsert-api_alarm"
+    "reason": "resource upsert-api_alarm",
+    "body_hash": "22e38265082a6d57"
   },
   {
     "path": "internal/provider/resource_alarm_acceptance_test.go",
-    "reason": "acceptance tests for resource alarm"
+    "reason": "acceptance tests for resource alarm",
+    "body_hash": "b4bc18488eaac215"
   },
   {
     "path": "internal/provider/resource_alarm_remote_test.go",
-    "reason": "coverage tests for resource alarm remote helpers"
+    "reason": "coverage tests for resource alarm remote helpers",
+    "body_hash": "3f51458e8dfc383f"
   },
   {
     "path": "internal/provider/resource_alarm_test.go",
-    "reason": "unit tests for resource alarm"
+    "reason": "unit tests for resource alarm",
+    "body_hash": "ec20a5122de332ed"
   },
   {
     "path": "internal/provider/testing_helpers_test.go",
-    "reason": "shared httptest helpers for coverage tests"
+    "reason": "shared httptest helpers for coverage tests",
+    "body_hash": "bb7305d6a155347e"
   },
   {
     "path": "internal/provider/validators.go",
-    "reason": "custom schema validators"
+    "reason": "custom schema validators",
+    "body_hash": "94a192299dab9088"
   },
   {
     "path": "main.go",
-    "reason": "provider server entrypoint"
+    "reason": "provider server entrypoint",
+    "body_hash": "cbb63d1140f1a434"
   },
   {
     "path": "terraform-registry-manifest.json",
-    "reason": "Terraform Registry manifest"
+    "reason": "Terraform Registry manifest",
+    "body_hash": "76ac85aa7f3a523b"
   }
 ]

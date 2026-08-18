@@ -349,6 +349,97 @@ func TestDetectPaginationStyle(t *testing.T) {
 			},
 			want: PaginationNone,
 		},
+		// N-17: bare substrings must not misread unrelated names as pagination
+		// signals. "afternoon"/"safe_after"/"updated_after" are not cursors;
+		// "per_page" is a size limit, not the page indicator.
+		{
+			name: "afternoon is not a cursor",
+			op: Operation{
+				Method: MethodGet,
+				Path:   "/pets",
+				Parameters: []Parameter{
+					{Name: "afternoon", In: "query"},
+				},
+			},
+			want: PaginationNone,
+		},
+		{
+			name: "safe_after is not a cursor",
+			op: Operation{
+				Method: MethodGet,
+				Path:   "/pets",
+				Parameters: []Parameter{
+					{Name: "safe_after", In: "query"},
+				},
+			},
+			want: PaginationNone,
+		},
+		{
+			name: "updated_after is not a cursor",
+			op: Operation{
+				Method: MethodGet,
+				Path:   "/pets",
+				Parameters: []Parameter{
+					{Name: "updated_after", In: "query"},
+				},
+			},
+			want: PaginationNone,
+		},
+		{
+			name: "per_page alone is not offset",
+			op: Operation{
+				Method: MethodGet,
+				Path:   "/pets",
+				Parameters: []Parameter{
+					{Name: "per_page", In: "query"},
+				},
+			},
+			want: PaginationNone,
+		},
+		{
+			name: "after_id is a cursor",
+			op: Operation{
+				Method: MethodGet,
+				Path:   "/pets",
+				Parameters: []Parameter{
+					{Name: "after_id", In: "query"},
+				},
+			},
+			want: PaginationCursor,
+		},
+		{
+			name: "afterId camelCase is a cursor",
+			op: Operation{
+				Method: MethodGet,
+				Path:   "/pets",
+				Parameters: []Parameter{
+					{Name: "afterId", In: "query"},
+				},
+			},
+			want: PaginationCursor,
+		},
+		{
+			name: "offset_value is offset",
+			op: Operation{
+				Method: MethodGet,
+				Path:   "/pets",
+				Parameters: []Parameter{
+					{Name: "offset_value", In: "query"},
+				},
+			},
+			want: PaginationOffset,
+		},
+		{
+			name: "skip_flag is offset",
+			op: Operation{
+				Method: MethodGet,
+				Path:   "/pets",
+				Parameters: []Parameter{
+					{Name: "skip_flag", In: "query"},
+				},
+			},
+			want: PaginationOffset,
+		},
 	}
 
 	for _, tt := range tests {

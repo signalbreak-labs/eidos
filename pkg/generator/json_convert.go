@@ -16,9 +16,13 @@ import (
 // response payloads back to Terraform state, so no per-attribute mapping code
 // has to be generated. The file carries a per-provider wire-name map so nested
 // object attributes round-trip under the API's original property names (G18).
+// The XML serialization helpers (mapToXML and friends) and their imports are
+// emitted only when a resource wired CRUD body serializes application/xml
+// (N-37); JSON-only providers carry no dead XML code.
 func JSONConvertFile(provider *ir.ProviderIR) File {
 	return Template("internal/provider/json_convert.go", schema.JSONConvertTemplate, map[string]any{
 		"WireNamesBody": renderWireNames(provider),
+		"IncludeXML":    AnyResourceXMLBody(provider.Resources),
 	})
 }
 

@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"syscall"
 	"time"
 
@@ -84,7 +85,10 @@ func runAPI(cmd *cobra.Command, flags *apiFlags) error {
 	logger := slog.New(slog.NewJSONHandler(cmd.ErrOrStderr(), nil))
 	handler := newAPIHandler(logger)
 
-	addr := fmt.Sprintf("%s:%d", flags.host, flags.port)
+	// net.JoinHostPort brackets a bare IPv6 literal host ("::1" -> "[::1]:8080"),
+	// which the old fmt.Sprintf("%s:%d") produced as "::1:8080" — a string
+	// net.SplitHostPort rejects with "too many colons" (N-64).
+	addr := net.JoinHostPort(flags.host, strconv.Itoa(flags.port))
 	// Use the command context so a canceled/timeout cmd.Context() can abort the
 	// bind itself, not just the serve loop (L-5).
 	listener, err := (&net.ListenConfig{}).Listen(cmd.Context(), "tcp", addr)

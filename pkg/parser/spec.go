@@ -112,20 +112,26 @@ type PathItem struct {
 
 // Operation corresponds to the OpenAPI operation object.
 type Operation struct {
-	Tags           []string              `json:"tags,omitempty"`
-	Summary        string                `json:"summary,omitempty"`
-	Description    string                `json:"description,omitempty"`
-	ExternalDocs   *ExternalDocs         `json:"externalDocs,omitempty"`
-	OperationID    string                `json:"operationId,omitempty"`
-	Parameters     []Parameter           `json:"parameters,omitempty"`
-	RequestBody    *RequestBody          `json:"requestBody,omitempty"`
-	Responses      map[string]*Response  `json:"responses,omitempty"`
-	Callbacks      map[string]Callback   `json:"callbacks,omitempty"`
-	Deprecated     bool                  `json:"deprecated,omitempty"`
-	Security       []SecurityRequirement `json:"security,omitempty"`
-	Servers        []Server              `json:"servers,omitempty"`
-	SourceLocation SourceLocation        `json:"sourceLocation,omitempty"`
-	Extensions     map[string]any        `json:"-"`
+	Tags         []string              `json:"tags,omitempty"`
+	Summary      string                `json:"summary,omitempty"`
+	Description  string                `json:"description,omitempty"`
+	ExternalDocs *ExternalDocs         `json:"externalDocs,omitempty"`
+	OperationID  string                `json:"operationId,omitempty"`
+	Parameters   []Parameter           `json:"parameters,omitempty"`
+	RequestBody  *RequestBody          `json:"requestBody,omitempty"`
+	Responses    map[string]*Response  `json:"responses,omitempty"`
+	Callbacks    map[string]Callback   `json:"callbacks,omitempty"`
+	Deprecated   bool                  `json:"deprecated,omitempty"`
+	Security     []SecurityRequirement `json:"security,omitempty"`
+	Servers      []Server              `json:"servers,omitempty"`
+	// Schemes holds a Swagger 2.0 operation-level transport-scheme override
+	// (e.g. ["https"]). OpenAPI 3.x has no operation-level schemes; the field is
+	// only populated by the v2 parser. The pipeline does not honor per-operation
+	// scheme overrides, so a non-empty value that differs from the document
+	// schemes is surfaced as a warning at parse time (N-9).
+	Schemes        []string       `json:"schemes,omitempty"`
+	SourceLocation SourceLocation `json:"sourceLocation,omitempty"`
+	Extensions     map[string]any `json:"-"`
 }
 
 // Parameter corresponds to the OpenAPI parameter object.
@@ -524,6 +530,7 @@ type Schema struct {
 	Const                 any                 `json:"const,omitempty"`
 	ContentMediaType      string              `json:"contentMediaType,omitempty"`
 	ContentEncoding       string              `json:"contentEncoding,omitempty"`
+	ContentSchema         *Schema             `json:"contentSchema,omitempty"`
 	// Opaque is set by the parser when this schema (or a schema referenced by
 	// one of its $refs) participates in a circular reference. Downstream consumers
 	// should treat Opaque schemas as opaque reference boundaries rather than

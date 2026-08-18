@@ -325,6 +325,31 @@ paths:
 			wantErr:    false,
 			wantFormat: "openapi31",
 		},
+		{
+			// N-57: error-severity diagnostics (duplicate operationIds) must
+			// withhold the starter config, mirroring the MCP generate-config tool.
+			name: "duplicate operationIds refuses write",
+			specContent: `openapi: 3.0.0
+info:
+  title: Test API
+  version: 1.0.0
+paths:
+  /pets:
+    get:
+      operationId: listPets
+      responses:
+        "200":
+          description: ok
+  /pets2:
+    get:
+      operationId: listPets
+      responses:
+        "200":
+          description: ok
+`,
+			wantErr:         true,
+			wantErrContains: "refusing to write starter config",
+		},
 	}
 
 	for _, tc := range cases {

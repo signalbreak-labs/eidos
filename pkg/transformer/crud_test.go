@@ -2,7 +2,10 @@ package transformer
 
 import (
 	"reflect"
+	"strings"
 	"testing"
+
+	"github.com/signalbreak-labs/eidos/pkg/diagnostics"
 )
 
 func op(m HTTPMethod, path string) Operation {
@@ -210,6 +213,28 @@ func TestInferResourceCRUD(t *testing.T) {
 			},
 		},
 		{
+			// N-18: a path parameter whose name is a reserved Terraform root
+			// ("provider") must sanitize to "provider_" so the inferred ID
+			// AttributeName matches the schema attribute the state shape produces.
+			// A bare ToSnakeCase "provider" would leave the synthetic-id check and
+			// forcePutAsCreateIdentifiers looking up the wrong name.
+			name: "reserved root path parameter sanitized",
+			paths: map[string]map[HTTPMethod]Operation{
+				"/providers/{provider}": {
+					MethodGet: op(MethodGet, "/providers/{provider}"),
+				},
+			},
+			want: []ResourceCRUD{
+				{
+					Name:           "provider",
+					CollectionPath: "/providers",
+					InstancePath:   "/providers/{provider}",
+					Read:           opPtr(MethodGet, "/providers/{provider}"),
+					ID:             IDInfo{Kind: IDSimple, ParameterNames: []string{"provider"}, AttributeName: "provider_", ImportFormat: "%s"},
+				},
+			},
+		},
+		{
 			name: "path parameter regex constraint parsed",
 			paths: map[string]map[HTTPMethod]Operation{
 				"/pets/{petId:uuid}": {
@@ -272,6 +297,21 @@ func TestSingularize(t *testing.T) {
 		{"categories", "category"},
 		{"geese", "geese"},
 		{"species", "species"},
+		// N-12: plurals of sibilant-final words add "es"; stripping only the
+		// trailing "s" would mangle them.
+		{"statuses", "status"},
+		{"classes", "class"},
+		{"addresses", "address"},
+		{"processes", "process"},
+		{"boxes", "box"},
+		{"churches", "church"},
+		{"dishes", "dish"},
+		{"aliases", "alias"},
+		{"buses", "bus"},
+		// The "e"-final class keeps the generic strip.
+		{"cases", "case"},
+		{"houses", "house"},
+		{"phases", "phase"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.in, func(t *testing.T) {
@@ -319,6 +359,110 @@ func TestInferResourceCRUDDedupsNameCollisions(t *testing.T) {
 		if resources[0].CollectionPath != "/v1/pets" {
 			t.Fatalf("expected surviving collection /v1/pets, got %q", resources[0].CollectionPath)
 		}
+	}
+}
+
+// TestInferResourceCRUDWithDiagnosticsWarnsOnNameCollision locks in the N-19
+// fix: when dedupCRUDByName drops a same-named group, the diagnostics channel
+// carries a Warning naming both the surviving and the dropped collection paths,
+// so the loss is never silent (AGENTS.md "fail loud, never silently").
+func TestInferResourceCRUDWithDiagnosticsWarnsOnNameCollision(t *testing.T) {
+	pathOps := map[string]map[HTTPMethod]Operation{
+		"/v1/pets": {
+			MethodPost: {Method: MethodPost, Path: "/v1/pets", OperationID: "createV1Pet"},
+			MethodGet:  {Method: MethodGet, Path: "/v1/pets", OperationID: "listV1Pets"},
+		},
+		"/v1/pets/{petId}": {
+			MethodGet:    {Method: MethodGet, Path: "/v1/pets/{petId}", OperationID: "showV1Pet"},
+			MethodDelete: {Method: MethodDelete, Path: "/v1/pets/{petId}", OperationID: "deleteV1Pet"},
+		},
+		"/v2/pets": {
+			MethodPost: {Method: MethodPost, Path: "/v2/pets", OperationID: "createV2Pet"},
+			MethodGet:  {Method: MethodGet, Path: "/v2/pets", OperationID: "listV2Pets"},
+		},
+		"/v2/pets/{petId}": {
+			MethodGet:    {Method: MethodGet, Path: "/v2/pets/{petId}", OperationID: "showV2Pet"},
+			MethodDelete: {Method: MethodDelete, Path: "/v2/pets/{petId}", OperationID: "deleteV2Pet"},
+		},
+	}
+
+	var diags diagnostics.Diagnostics
+	resources := InferResourceCRUDWithDiagnostics(pathOps, false, &diags)
+	if len(resources) != 1 {
+		t.Fatalf("expected 1 deduped resource, got %d: %+v", len(resources), resources)
+	}
+	if !hasWarning(diags, "resource name collision \"pet\" dropped a CRUD group") {
+		t.Fatalf("expected a name-collision Warning naming the surviving and dropped paths, got diags: %+v", diags)
+	}
+	if !hasWarning(diags, "/v2/pets") {
+		t.Fatalf("expected the Warning to name the dropped path /v2/pets, got diags: %+v", diags)
+	}
+	if !hasWarning(diags, "/v1/pets") {
+		t.Fatalf("expected the Warning to name the surviving path /v1/pets, got diags: %+v", diags)
+	}
+
+	// The no-diagnostics entry point must stay silent-capable: passing a nil
+	// channel never panics and emits nothing.
+	resources2 := InferResourceCRUD(pathOps, false)
+	if len(resources2) != 1 {
+		t.Fatalf("expected 1 deduped resource via InferResourceCRUD, got %d", len(resources2))
+	}
+}
+
+// TestDedupByNameWarnsOnDuplicate locks in the generic dedupByName fail-loud
+// behavior used by list resources (N-19): a later same-named entry is dropped
+// with a Warning rather than silently.
+func TestDedupByNameWarnsOnDuplicate(t *testing.T) {
+	items := []struct {
+		Name string
+	}{
+		{Name: "pets"},
+		{Name: "pets"},
+	}
+	var diags diagnostics.Diagnostics
+	out := dedupByName(items, func(it struct{ Name string }) string { return it.Name }, &diags)
+	if len(out) != 1 {
+		t.Fatalf("expected 1 deduped item, got %d: %+v", len(out), out)
+	}
+	if !hasWarning(diags, `duplicate`) || !hasWarning(diags, `"pets"`) {
+		t.Fatalf("expected a duplicate-name Warning for %q, got diags: %+v", "pets", diags)
+	}
+}
+
+// TestInferListResourcesWithDiagnosticsWarnsOnDuplicate locks in the live
+// list-resource path surfacing a same-named dedup as a Warning (N-19).
+func TestInferListResourcesWithDiagnosticsWarnsOnDuplicate(t *testing.T) {
+	resources := []ResourceCRUD{
+		{
+			Name:           "pet",
+			CollectionPath: "/v1/pets",
+			InstancePath:   "/v1/pets/{petId}",
+			Read:           &Operation{Method: MethodGet, Path: "/v1/pets/{petId}"},
+			List:           &Operation{Method: MethodGet, Path: "/v1/pets"},
+		},
+		{
+			Name:           "pet",
+			CollectionPath: "/v2/pets",
+			InstancePath:   "/v2/pets/{petId}",
+			Read:           &Operation{Method: MethodGet, Path: "/v2/pets/{petId}"},
+			List:           &Operation{Method: MethodGet, Path: "/v2/pets"},
+		},
+	}
+
+	var diags diagnostics.Diagnostics
+	lists := InferListResourcesWithDiagnostics(resources, &diags)
+	if len(lists) != 1 {
+		t.Fatalf("expected 1 deduped list resource, got %d: %+v", len(lists), lists)
+	}
+	var found bool
+	for _, d := range diags {
+		if d.Severity == diagnostics.Warning && strings.Contains(d.String(), "pets") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected a duplicate-name Warning for %q, got diags: %+v", "pets", diags)
 	}
 }
 

@@ -352,10 +352,12 @@ func TestFunctionName(t *testing.T) {
 	}
 }
 
-// TestFunctionFile_ReturnDefaultsToString verifies that a function with no
-// return type information still emits a default StringReturn so the framework
-// definition validation does not fail with an undefined Return field.
-func TestFunctionFile_ReturnDefaultsToString(t *testing.T) {
+// TestFunctionFile_ReturnDefaultsToDynamic verifies that a function with no
+// return type information still emits a default DynamicReturn so the framework
+// definition validation does not fail with an undefined Return field, and that
+// the default is honest: an unrecognized return shape is surfaced as Dynamic
+// (accepts any value) rather than silently mislabeled as String (N-27).
+func TestFunctionFile_ReturnDefaultsToDynamic(t *testing.T) {
 	fn := ir.FunctionIR{
 		Name:     "noop",
 		TypeName: "noop",
@@ -371,8 +373,57 @@ func TestFunctionFile_ReturnDefaultsToString(t *testing.T) {
 	if !strings.Contains(got, "Return:") {
 		t.Errorf("generated function missing Return field\ncontent:\n%s", got)
 	}
-	if !strings.Contains(got, "function.StringReturn{}") {
-		t.Errorf("expected default StringReturn for empty ReturnType\ncontent:\n%s", got)
+	if !strings.Contains(got, "function.DynamicReturn{}") {
+		t.Errorf("expected default DynamicReturn for empty ReturnType\ncontent:\n%s", got)
+	}
+	if strings.Contains(got, "function.StringReturn{}") {
+		t.Errorf("empty ReturnType must not silently degrade to StringReturn\ncontent:\n%s", got)
+	}
+}
+
+// TestFunctionFile_UnionAndUnknownDegradeToDynamic locks in the N-27 fail-loud
+// fix: a function parameter or return that is a union, an unknown collection
+// kind, or an unknown primitive type must render as Dynamic (honest about the
+// untyped shape) rather than silently degrading to String, which would make the
+// documented signature differ from what Terraform sees.
+func TestFunctionFile_UnionAndUnknownDegradeToDynamic(t *testing.T) {
+	fn := ir.FunctionIR{
+		Name:     "flex",
+		TypeName: "flex",
+		Arguments: []ir.AttributeIR{
+			{Name: "choice", Schema: ir.SchemaIR{Union: &ir.UnionType{Kind: ir.AnyOf, Variants: []ir.SchemaIR{{Type: ir.TypeString}, {Type: ir.TypeInt}}}}},
+			{Name: "mystery_collection", Schema: ir.SchemaIR{Collection: &ir.CollectionType{Kind: "matrix", ElementType: ir.SchemaIR{Type: ir.TypeString}}}},
+			{Name: "mystery_primitive", Schema: ir.SchemaIR{Type: "hyper"}},
+		},
+		ReturnType: ir.SchemaIR{Union: &ir.UnionType{Kind: ir.AnyOf, Variants: []ir.SchemaIR{{Type: ir.TypeBool}}}},
+	}
+
+	file := FunctionFile(fn)
+	var buf bytes.Buffer
+	if err := file.Render(&buf); err != nil {
+		t.Fatalf("Render() error = %v", err)
+	}
+	got := buf.String()
+
+	for _, want := range []string{
+		`function.DynamicParameter{Name: "choice"`,
+		`function.DynamicParameter{Name: "mystery_collection"`,
+		`function.DynamicParameter{Name: "mystery_primitive"`,
+		"function.DynamicReturn{}",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("generated function missing %q\ncontent:\n%s", want, got)
+		}
+	}
+	for _, unwanted := range []string{
+		`function.StringParameter{Name: "choice"`,
+		`function.StringParameter{Name: "mystery_collection"`,
+		`function.StringParameter{Name: "mystery_primitive"`,
+		"function.StringReturn{}",
+	} {
+		if strings.Contains(got, unwanted) {
+			t.Errorf("generated function must not degrade to %q\ncontent:\n%s", unwanted, got)
+		}
 	}
 }
 

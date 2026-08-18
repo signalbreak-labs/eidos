@@ -88,7 +88,17 @@ func (f *File) AddCommentf(formatStr string, args ...any) {
 
 // AST returns the assembled *ast.File. It includes the generated import
 // declaration when imports have been registered.
+//
+// A comment queued via AddComment but never attached to a declaration (because
+// the file ends, or a non-commentable decl intervenes) is a generator-author
+// bug: the comment would be silently dropped, with no signal to the author
+// (N-33). AST panics on leftover pending comments so the omission surfaces as
+// a render error via the render-recovery wrappers instead of disappearing from
+// the emitted file.
 func (f *File) AST() *ast.File {
+	if len(f.pending) > 0 {
+		panic(fmt.Sprintf("astgen: %d pending comment(s) were never attached to a declaration (AddComment must be followed by AddDecl); first: %q", len(f.pending), f.pending[0]))
+	}
 	decls := f.Decls
 	if len(f.imports) > 0 {
 		decls = append(f.renderImportDecls(), decls...)
@@ -148,15 +158,37 @@ func RenderExpr(expr ast.Expr) ([]byte, error) {
 	return []byte(s), nil
 }
 
-// isStdlibImport reports whether path is a Go standard-library import path.
-//
-// The heuristic is "no dot ⇒ stdlib": standard-library paths contain no dot
-// while third-party module paths always do. Its known limitation is that a
-// dot-less internal module path (rare, but legal) would be misfiled as
-// stdlib. The generator always emits fully-qualified third-party paths (which
-// contain a dot), so this does not arise for generated output (L-59).
+// stdlibRoots is the set of Go standard-library top-level package names. Every
+// standard-library import path begins with one of these roots (net/http,
+// encoding/json, runtime, ...), and no third-party module path can begin with
+// one because module paths are dot-qualified domains. Classifying against this
+// finite, well-known set — rather than the old "no dot anywhere ⇒ stdlib"
+// rule — files a dot-less internal module path such as "providers/foo" into
+// the third-party group, where it belongs, instead of misclassifying it as
+// stdlib (N-36).
+var stdlibRoots = map[string]struct{}{
+	"archive": {}, "bufio": {}, "builtin": {}, "bytes": {}, "cmp": {},
+	"compress": {}, "container": {}, "context": {}, "crypto": {}, "database": {},
+	"debug": {}, "embed": {}, "encoding": {}, "errors": {}, "expvar": {},
+	"flag": {}, "fmt": {}, "go": {}, "hash": {}, "html": {}, "image": {},
+	"index": {}, "internal": {}, "io": {}, "iter": {}, "log": {}, "maps": {},
+	"math": {}, "mime": {}, "net": {}, "os": {}, "path": {}, "plugin": {},
+	"reflect": {}, "regexp": {}, "runtime": {}, "slices": {}, "sort": {},
+	"strconv": {}, "strings": {}, "structs": {}, "sync": {}, "syscall": {},
+	"testing": {}, "text": {}, "time": {}, "unique": {}, "unicode": {},
+	"unsafe": {}, "weak": {},
+}
+
+// isStdlibImport reports whether path is a Go standard-library import path. A
+// path is stdlib exactly when its first segment is a known stdlib root; any
+// other path — including a dot-less internal module path — is third-party.
 func isStdlibImport(path string) bool {
-	return !strings.Contains(path, ".")
+	root := path
+	if i := strings.IndexByte(path, '/'); i >= 0 {
+		root = path[:i]
+	}
+	_, ok := stdlibRoots[root]
+	return ok
 }
 
 // renderImportDecls renders the registered imports as one or two import

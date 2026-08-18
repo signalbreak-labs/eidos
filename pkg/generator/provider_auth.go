@@ -107,7 +107,7 @@ func authSchemeStmts(scheme ir.SecuritySchemeIR, allSchemes []ir.SecuritySchemeI
 
 	switch scheme.Type {
 	case ir.SecuritySchemeAPIKey:
-		return apiKeyStmts(scheme, byName), nil
+		return apiKeyStmts(scheme, byName, allSchemes), nil
 	case ir.SecuritySchemeHTTP:
 		return httpAuthStmts(scheme, byName, allSchemes), nil
 	case ir.SecuritySchemeOAuth2:
@@ -121,9 +121,12 @@ func authSchemeStmts(scheme ir.SecuritySchemeIR, allSchemes []ir.SecuritySchemeI
 
 // apiKeyStmts emits the guarded append of a client.APIKeyAuth interceptor.
 // The key location and header/query/cookie name default to header / X-API-Key
-// when the spec omits them, matching transformer.mapAPIKey.
-func apiKeyStmts(scheme ir.SecuritySchemeIR, byName map[string]ir.AttributeIR) []ast.Stmt {
-	field, ok := authFieldName(byName, "api_key")
+// when the spec omits them, matching transformer.mapAPIKey. The config
+// attribute name is resolved through transformer.APIKeyAttributeName so a
+// multi-apiKey spec reads each scheme's qualified attribute (e.g. the scheme
+// name) instead of assuming a single "api_key" (N-13).
+func apiKeyStmts(scheme ir.SecuritySchemeIR, byName map[string]ir.AttributeIR, allSchemes []ir.SecuritySchemeIR) []ast.Stmt {
+	field, ok := authFieldName(byName, transformer.APIKeyAttributeName(scheme, allSchemes))
 	if !ok {
 		return nil
 	}

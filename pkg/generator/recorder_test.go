@@ -57,7 +57,6 @@ func TestRecorderNilSafe(t *testing.T) {
 		t.Fatalf("nil recorder should return nil entries")
 	}
 	rec.Sort()
-	rec.Recordf("main.go", "formatted %s", "reason")
 }
 
 func TestRecorderSort(t *testing.T) {
@@ -581,6 +580,45 @@ func TestRun_WriteMode(t *testing.T) {
 	assertContains(t, pathsFrom(entries), "internal/provider/provider.go")
 }
 
+// TestRun_WriteModeReturnsFilesActuallyWritten locks in the N-30 fix: the
+// write-mode return value is built from the files actually written to disk,
+// not re-run through the record-mode collector. Every returned entry must have
+// a real file on disk, and every file written must appear in the returned
+// plan, so a future divergence between FilesForProviderIR and the collector is
+// visible instead of silently producing a plan that does not match disk.
+func TestRun_WriteModeReturnsFilesActuallyWritten(t *testing.T) {
+	out := t.TempDir()
+	opts := Options{Mode: ModeWrite, OutputDir: out, CollectOptions: DefaultCollectOptions()}
+	entries, err := Run(&ir.ProviderIR{Name: "test"}, opts)
+	if err != nil {
+		t.Fatalf("unexpected error in write mode: %v", err)
+	}
+	if len(entries) == 0 {
+		t.Fatal("write mode returned no entries")
+	}
+
+	returned := make(map[string]struct{}, len(entries))
+	for _, e := range entries {
+		returned[e.Path] = struct{}{}
+		if _, statErr := os.Stat(filepath.Join(out, filepath.FromSlash(e.Path))); statErr != nil {
+			t.Errorf("returned entry %q has no file on disk: %v", e.Path, statErr)
+		}
+	}
+
+	onDisk := collectPaths(t, out)
+	for _, p := range onDisk {
+		if p == manifestName {
+			// .eidos-generated.json is write-mode bookkeeping, not a provider
+			// deliverable, so it is deliberately outside the returned plan
+			// (N-70). Every other written file must appear in the plan.
+			continue
+		}
+		if _, ok := returned[p]; !ok {
+			t.Errorf("file %q was written to disk but is missing from the write-mode plan (N-30)", p)
+		}
+	}
+}
+
 func TestRun_WriteModeRefusesOverwrite(t *testing.T) {
 	out := t.TempDir()
 	if err := os.WriteFile(filepath.Join(out, "go.mod"), []byte("existing"), 0o600); err != nil {
@@ -605,6 +643,135 @@ func TestRun_WriteModeForceOverwrites(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error in write mode with force: %v", err)
 	}
+}
+
+// TestRun_WriteModeForceRemovesStaleFiles locks in the N-70 fix: a forced
+// regeneration deletes the files a previous write-mode run generated that the
+// current spec no longer produces (a renamed/removed resource), prunes the
+// now-empty directories (the removed resource's example subdir), and never
+// touches a hand-written file.
+func TestRun_WriteModeForceRemovesStaleFiles(t *testing.T) {
+	out := t.TempDir()
+	opts := Options{Mode: ModeWrite, OutputDir: out, Force: true, CollectOptions: DefaultCollectOptions()}
+
+	// First run: a provider with resource "pet".
+	first := &ir.ProviderIR{Name: "test", Resources: []ir.ResourceIR{
+		{Name: "pet", TypeName: "test_pet"},
+	}}
+	if _, err := Run(first, opts); err != nil {
+		t.Fatalf("first write run: %v", err)
+	}
+	oldFile := "internal/provider/resource_pet.go"
+	oldExampleDir := filepath.Join(out, "examples", "resources", "pet")
+	if _, err := os.Stat(filepath.Join(out, filepath.FromSlash(oldFile))); err != nil {
+		t.Fatalf("first run did not write %q: %v", oldFile, err)
+	}
+	if _, err := os.Stat(filepath.Join(oldExampleDir, "resource.tf")); err != nil {
+		t.Fatalf("first run did not write the example under %q: %v", oldExampleDir, err)
+	}
+
+	// A hand-written file at the output root must survive stale cleanup even
+	// though it is in no plan.
+	handwritten := "custom.go"
+	if err := os.WriteFile(filepath.Join(out, handwritten), []byte("// user file\n"), 0o600); err != nil {
+		t.Fatalf("create handwritten file: %v", err)
+	}
+
+	// Second run: resource renamed "pet" -> "cat" (same spec shape, new name).
+	second := &ir.ProviderIR{Name: "test", Resources: []ir.ResourceIR{
+		{Name: "cat", TypeName: "test_cat"},
+	}}
+	if _, err := Run(second, opts); err != nil {
+		t.Fatalf("second write run: %v", err)
+	}
+
+	if _, err := os.Stat(filepath.Join(out, filepath.FromSlash(oldFile))); !os.IsNotExist(err) {
+		t.Errorf("stale %q was not removed by the forced regeneration (N-70)", oldFile)
+	}
+	if _, err := os.Stat(oldExampleDir); !os.IsNotExist(err) {
+		t.Errorf("empty example directory %q was not pruned after stale removal", oldExampleDir)
+	}
+	if _, err := os.Stat(filepath.Join(out, handwritten)); err != nil {
+		t.Errorf("hand-written file %q was deleted by stale cleanup: %v", handwritten, err)
+	}
+
+	// The manifest is refreshed to the current run's file set (and excludes the
+	// manifest itself).
+	prev, err := readGenerationManifest(out)
+	if err != nil {
+		t.Fatalf("read manifest: %v", err)
+	}
+	if prev.Mode != generationModeFull {
+		t.Errorf("manifest mode = %q, want %q", prev.Mode, generationModeFull)
+	}
+	for _, want := range []string{"internal/provider/resource_cat.go", "internal/provider/provider.go"} {
+		if !containsStr(prev.Generated, want) {
+			t.Errorf("manifest does not list %q: %v", want, prev.Generated)
+		}
+	}
+	if containsStr(prev.Generated, manifestName) {
+		t.Errorf("manifest must not list itself: %v", prev.Generated)
+	}
+	if containsStr(prev.Generated, oldFile) {
+		t.Errorf("manifest still lists stale %q: %v", oldFile, prev.Generated)
+	}
+}
+
+// TestRun_WriteModeOnlyBuildKeepsProviderCode locks in the mode scoping of
+// N-70: an --only-build forced run writes only the build/CI/release scaffolding
+// and must not delete the provider files a previous full run recorded — the two
+// workflows write disjoint file sets on purpose.
+func TestRun_WriteModeOnlyBuildKeepsProviderCode(t *testing.T) {
+	out := t.TempDir()
+	opts := Options{Mode: ModeWrite, OutputDir: out, Force: true, CollectOptions: DefaultCollectOptions()}
+	provider := &ir.ProviderIR{Name: "test", Resources: []ir.ResourceIR{
+		{Name: "pet", TypeName: "test_pet"},
+	}}
+	if _, err := Run(provider, opts); err != nil {
+		t.Fatalf("full write run: %v", err)
+	}
+	providerFile := "internal/provider/resource_pet.go"
+	if _, err := os.Stat(filepath.Join(out, filepath.FromSlash(providerFile))); err != nil {
+		t.Fatalf("full run did not write %q: %v", providerFile, err)
+	}
+
+	onlyBuildOpts := Options{Mode: ModeWrite, OutputDir: out, Force: true, CollectOptions: CollectOptions{OnlyBuild: true}}
+	if _, err := Run(provider, onlyBuildOpts); err != nil {
+		t.Fatalf("only-build write run: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(out, filepath.FromSlash(providerFile))); err != nil {
+		t.Errorf("only-build forced run deleted provider file %q (N-70 mode scoping)", providerFile)
+	}
+	if _, err := os.Stat(filepath.Join(out, "GNUmakefile")); err != nil {
+		t.Errorf("only-build run did not write GNUmakefile: %v", err)
+	}
+}
+
+// TestRun_WriteModeForceWithoutManifestSkipsCleanup verifies a forced run into a
+// directory that was never generated before (no manifest) succeeds and leaves
+// unrelated pre-existing files alone.
+func TestRun_WriteModeForceWithoutManifestSkipsCleanup(t *testing.T) {
+	out := t.TempDir()
+	unrelated := "notes.txt"
+	if err := os.WriteFile(filepath.Join(out, unrelated), []byte("keep me"), 0o600); err != nil {
+		t.Fatalf("create unrelated file: %v", err)
+	}
+	opts := Options{Mode: ModeWrite, OutputDir: out, Force: true, CollectOptions: DefaultCollectOptions()}
+	if _, err := Run(&ir.ProviderIR{Name: "test"}, opts); err != nil {
+		t.Fatalf("forced write run: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(out, unrelated)); err != nil {
+		t.Errorf("unrelated file %q was deleted by stale cleanup: %v", unrelated, err)
+	}
+}
+
+func containsStr(slice []string, want string) bool {
+	for _, s := range slice {
+		if s == want {
+			return true
+		}
+	}
+	return false
 }
 
 func pathsFrom(entries []FileEntry) []string {

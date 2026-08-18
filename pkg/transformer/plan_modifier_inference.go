@@ -16,6 +16,11 @@ import (
 //   - writeOnly fields           -> UseStateForUnknown
 //   - forceNew / x-terraform-force-new -> RequiresReplace
 //   - default values             -> typed Static* default plan modifier
+//
+// Deprecated: unreachable from production. The live pipeline infers plan
+// modifiers in schemaIRFromSpecRecursive (resource_schema.go) instead; this
+// function and its helpers are retained only for their test coverage and must
+// not be extended (M-7). See AUDIT.md.
 func InferPlanModifiers(schema *ir.SchemaIR) []ir.PlanModifierIR {
 	if schema == nil {
 		return nil
@@ -59,6 +64,11 @@ func InferPlanModifiers(schema *ir.SchemaIR) []ir.PlanModifierIR {
 
 // ApplyPlanModifiers populates schema.PlanModifiers with the entries returned by
 // InferPlanModifiers. Existing plan modifiers are preserved.
+//
+// Deprecated: unreachable from production. The live pipeline infers plan
+// modifiers in schemaIRFromSpecRecursive (resource_schema.go) instead; this
+// function is retained only for its test coverage and must not be extended
+// (M-7). See AUDIT.md.
 func ApplyPlanModifiers(schema *ir.SchemaIR) {
 	if schema == nil {
 		return

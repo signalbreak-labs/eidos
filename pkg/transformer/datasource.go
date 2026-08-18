@@ -6,7 +6,10 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 
+	"github.com/signalbreak-labs/eidos/pkg/diagnostics"
 	"github.com/signalbreak-labs/eidos/pkg/ir"
 )
 
@@ -53,6 +56,11 @@ type ListResource struct {
 // inferences. The returned List operation is an isolated copy (Parameters,
 // ResponseHeaders and Extensions are cloned; schema pointers are shared), so
 // callers may inspect or mutate it without affecting the source ResourceCRUD.
+//
+// Deprecated: unreachable from production. The live pipeline classifies
+// operations in pkg/api (classifyOperation) and builds data-source IR there;
+// this function is retained only for its test coverage and must not be
+// extended (M-7). See AUDIT.md.
 func InferDataSources(resources []ResourceCRUD) []DataSource {
 	var sources []DataSource
 	for _, r := range resources {
@@ -74,7 +82,7 @@ func InferDataSources(resources []ResourceCRUD) []DataSource {
 	sort.SliceStable(sources, func(i, j int) bool {
 		return sources[i].Name < sources[j].Name
 	})
-	sources = dedupByName(sources, func(s DataSource) string { return s.Name })
+	sources = dedupByName(sources, func(s DataSource) string { return s.Name }, nil)
 	return sources
 }
 
@@ -85,6 +93,14 @@ func InferDataSources(resources []ResourceCRUD) []DataSource {
 // are cloned; schema pointers are shared), so callers may inspect or mutate it
 // without affecting the source ResourceCRUD.
 func InferListResources(resources []ResourceCRUD) []ListResource {
+	return InferListResourcesWithDiagnostics(resources, nil)
+}
+
+// InferListResourcesWithDiagnostics is InferListResources with a diagnostics
+// channel. When diags is non-nil, a list resource dropped by the same-named
+// dedup surfaces a Warning instead of vanishing silently (AGENTS.md "fail loud,
+// never silently").
+func InferListResourcesWithDiagnostics(resources []ResourceCRUD, diags *diagnostics.Diagnostics) []ListResource {
 	var lists []ListResource
 	for _, r := range resources {
 		if r.List == nil || r.InstancePath == "" || r.Read == nil {
@@ -102,7 +118,7 @@ func InferListResources(resources []ResourceCRUD) []ListResource {
 	sort.SliceStable(lists, func(i, j int) bool {
 		return lists[i].Name < lists[j].Name
 	})
-	lists = dedupByName(lists, func(l ListResource) string { return l.Name })
+	lists = dedupByName(lists, func(l ListResource) string { return l.Name }, diags)
 	return lists
 }
 
@@ -132,13 +148,16 @@ func DetectPaginationStyle(op Operation) PaginationStyle {
 		if !strings.EqualFold(p.In, "query") {
 			continue
 		}
-		name := strings.ToLower(p.Name)
+		// Word-boundary matching (N-17): a bare substring would misread
+		// "afternoon"/"updated_after" as a cursor and "per_page" as the page
+		// indicator. Each token must be the whole name or a snake_case/camelCase
+		// leading segment.
 		switch {
-		case strings.Contains(name, "cursor"), strings.Contains(name, "after"):
+		case paramNameMatchesToken(p.Name, "cursor"), paramNameMatchesToken(p.Name, "after"):
 			hasCursor = true
-		case strings.Contains(name, "page"),
-			strings.Contains(name, "offset"),
-			strings.Contains(name, "skip"):
+		case paramNameMatchesToken(p.Name, "page"),
+			paramNameMatchesToken(p.Name, "offset"),
+			paramNameMatchesToken(p.Name, "skip"):
 			hasOffset = true
 		}
 	}
@@ -149,6 +168,29 @@ func DetectPaginationStyle(op Operation) PaginationStyle {
 		return PaginationOffset
 	}
 	return PaginationNone
+}
+
+// paramNameMatchesToken reports whether a query parameter name carries token as
+// a standalone word rather than as a bare substring: the whole name ("page",
+// "after"), a snake_case leading segment ("offset_value", "after_id"), or a
+// camelCase leading segment ("afterId", "pageNumber"). A token buried mid-name
+// ("updated_after", "afternoon") does not match, so a timestamp filter or an
+// unrelated word is not misread as a pagination signal (N-17). Matching is
+// case-insensitive; the camelCase boundary is checked on the original name
+// because lowercasing erases it.
+func paramNameMatchesToken(rawName, token string) bool {
+	name := strings.ToLower(rawName)
+	if name == token {
+		return true
+	}
+	if strings.HasPrefix(name, token+"_") {
+		return true
+	}
+	if len(rawName) > len(token) && strings.EqualFold(rawName[:len(token)], token) {
+		r, _ := utf8.DecodeRuneInString(rawName[len(token):])
+		return unicode.IsUpper(r)
+	}
+	return false
 }
 
 // paginationFromExtension returns the PaginationStyle declared by the

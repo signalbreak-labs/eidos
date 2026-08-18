@@ -1,154 +1,192 @@
 [
   {
     "path": ".github/workflows/release.yml",
-    "reason": "GitHub Actions release workflow"
+    "reason": "GitHub Actions release workflow",
+    "body_hash": "44274890ebed8f3c"
   },
   {
     "path": ".goreleaser.yml",
-    "reason": "GoReleaser release configuration"
+    "reason": "GoReleaser release configuration",
+    "body_hash": "1ff662ab629fb20b"
   },
   {
     "path": "GNUmakefile",
-    "reason": "build and test automation"
+    "reason": "build and test automation",
+    "body_hash": "771e0e9e2aefba94"
   },
   {
     "path": "README.md",
-    "reason": "provider overview and usage guide"
+    "reason": "provider overview and usage guide",
+    "body_hash": "365d7d5ffe427f19"
   },
   {
     "path": "docs/data-sources/list_pets.md",
-    "reason": "documentation for data source list_pets"
+    "reason": "documentation for data source list_pets",
+    "body_hash": "d9a9a638266910d0"
   },
   {
     "path": "docs/index.md",
-    "reason": "provider overview and authentication guide"
+    "reason": "provider overview and authentication guide",
+    "body_hash": "bc9dd987615ee456"
   },
   {
     "path": "docs/list-resources/list_pets.md",
-    "reason": "documentation for list resource list_pets"
+    "reason": "documentation for list resource list_pets",
+    "body_hash": "67ab42b5614f4334"
   },
   {
     "path": "docs/resources/pet.md",
-    "reason": "documentation for resource pet"
+    "reason": "documentation for resource pet",
+    "body_hash": "99a30ff73426892f"
   },
   {
     "path": "examples/data-sources/list_pets/data-source.tf",
-    "reason": "example for data source list_pets"
+    "reason": "example for data source list_pets",
+    "body_hash": "775de29a80fedf96"
   },
   {
     "path": "examples/resources/pet/resource.tf",
-    "reason": "example for resource pet"
+    "reason": "example for resource pet",
+    "body_hash": "78fb8ad565f4ac62"
   },
   {
     "path": "generator.yaml",
-    "reason": "generated generator configuration"
+    "reason": "generated generator configuration",
+    "body_hash": "3b3e5fc554f30646"
   },
   {
     "path": "go.mod",
-    "reason": "Go module definition"
+    "reason": "Go module definition",
+    "body_hash": "24ab8b0c8ea92155"
   },
   {
     "path": "internal/client/auth.go",
-    "reason": "authentication middleware"
+    "reason": "authentication middleware",
+    "body_hash": "0beee19e2c55a414"
   },
   {
     "path": "internal/client/auth_test.go",
-    "reason": "authentication middleware unit tests"
+    "reason": "authentication middleware unit tests",
+    "body_hash": "e7953227ea13b9b9"
   },
   {
     "path": "internal/client/client.go",
-    "reason": "generated HTTP client"
+    "reason": "generated HTTP client",
+    "body_hash": "c3cf6b871cbd6898"
   },
   {
     "path": "internal/client/client_test.go",
-    "reason": "generated HTTP client unit tests"
+    "reason": "generated HTTP client unit tests",
+    "body_hash": "9bac472b0d2d50be"
   },
   {
     "path": "internal/client/errors.go",
-    "reason": "typed API error helpers"
+    "reason": "typed API error helpers",
+    "body_hash": "7b69b0dda148a6d5"
   },
   {
     "path": "internal/client/logging.go",
-    "reason": "request/response trace logging"
+    "reason": "request/response trace logging",
+    "body_hash": "9defaf534cc08195"
   },
   {
     "path": "internal/client/logging_test.go",
-    "reason": "trace logging unit tests"
+    "reason": "trace logging unit tests",
+    "body_hash": "3d1b897c8a09d762"
   },
   {
     "path": "internal/client/models.go",
-    "reason": "request/response model structs"
+    "reason": "request/response model structs",
+    "body_hash": "1efd23827e83c14f"
   },
   {
     "path": "internal/client/pagination.go",
-    "reason": "pagination helpers"
+    "reason": "pagination helpers",
+    "body_hash": "80e851435c7a25d6"
   },
   {
     "path": "internal/client/retry.go",
-    "reason": "retry logic with exponential backoff"
+    "reason": "retry logic with exponential backoff",
+    "body_hash": "bf53c919903fb008"
   },
   {
     "path": "internal/provider/data_source_list_pets.go",
-    "reason": "data source mycloud-pets_list_pets"
+    "reason": "data source mycloud-pets_list_pets",
+    "body_hash": "a9d665da0ca54200"
   },
   {
     "path": "internal/provider/data_source_list_pets_remote_test.go",
-    "reason": "coverage tests for data source list_pets remote helpers"
+    "reason": "coverage tests for data source list_pets remote helpers",
+    "body_hash": "3bd3ab7b9f355bbf"
   },
   {
     "path": "internal/provider/data_source_list_pets_test.go",
-    "reason": "unit tests for data source list_pets"
+    "reason": "unit tests for data source list_pets",
+    "body_hash": "68a4d8f577727a3b"
   },
   {
     "path": "internal/provider/json_convert.go",
-    "reason": "JSON/model conversion helpers for wired CRUD bodies"
+    "reason": "JSON/model conversion helpers for wired CRUD bodies",
+    "body_hash": "f6d9a056cb8d5d0d"
   },
   {
     "path": "internal/provider/list_list_pets.go",
-    "reason": "list resource mycloud-pets_list_pets"
+    "reason": "list resource mycloud-pets_list_pets",
+    "body_hash": "40157c09ea99fa98"
   },
   {
     "path": "internal/provider/list_list_pets_remote_test.go",
-    "reason": "coverage tests for list resource list_pets remote helper"
+    "reason": "coverage tests for list resource list_pets remote helper",
+    "body_hash": "9b48c97ef13067a3"
   },
   {
     "path": "internal/provider/provider.go",
-    "reason": "provider schema and registration"
+    "reason": "provider schema and registration",
+    "body_hash": "57cfc0f30f5a3baf"
   },
   {
     "path": "internal/provider/provider_test.go",
-    "reason": "provider-level unit tests"
+    "reason": "provider-level unit tests",
+    "body_hash": "351f6eb947077d65"
   },
   {
     "path": "internal/provider/resource_pet.go",
-    "reason": "resource mycloud-pets_pet"
+    "reason": "resource mycloud-pets_pet",
+    "body_hash": "3206c753a1ea7414"
   },
   {
     "path": "internal/provider/resource_pet_acceptance_test.go",
-    "reason": "acceptance tests for resource pet"
+    "reason": "acceptance tests for resource pet",
+    "body_hash": "bd215b289514ba40"
   },
   {
     "path": "internal/provider/resource_pet_remote_test.go",
-    "reason": "coverage tests for resource pet remote helpers"
+    "reason": "coverage tests for resource pet remote helpers",
+    "body_hash": "f50a06d6f721631f"
   },
   {
     "path": "internal/provider/resource_pet_test.go",
-    "reason": "unit tests for resource pet"
+    "reason": "unit tests for resource pet",
+    "body_hash": "b755cfd0135d6081"
   },
   {
     "path": "internal/provider/testing_helpers_test.go",
-    "reason": "shared httptest helpers for coverage tests"
+    "reason": "shared httptest helpers for coverage tests",
+    "body_hash": "5ecd65338d5f7136"
   },
   {
     "path": "internal/provider/validators.go",
-    "reason": "custom schema validators"
+    "reason": "custom schema validators",
+    "body_hash": "94a192299dab9088"
   },
   {
     "path": "main.go",
-    "reason": "provider server entrypoint"
+    "reason": "provider server entrypoint",
+    "body_hash": "beb1ddff452487c0"
   },
   {
     "path": "terraform-registry-manifest.json",
-    "reason": "Terraform Registry manifest"
+    "reason": "Terraform Registry manifest",
+    "body_hash": "76ac85aa7f3a523b"
   }
 ]

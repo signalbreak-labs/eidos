@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -403,6 +404,55 @@ func TestValidate_InvalidNamingTransform(t *testing.T) {
 	}
 }
 
+func TestValidate_UnimplementedNamingTransformRejected(t *testing.T) {
+	// N-46: camelCase/PascalCase were validated and documented but never
+	// implemented (applyNamingOverrides treats transform as a no-op). They must
+	// fail loud instead of silently producing snake_case names.
+	for _, transform := range []string{"camelCase", "PascalCase"} {
+		t.Run(transform, func(t *testing.T) {
+			cfg := Config{
+				Provider: ProviderConfig{Name: "test", Version: "1.0.0"},
+				Naming:   &NamingConfig{Transform: transform},
+			}
+			err := Validate(&cfg)
+			if err == nil {
+				t.Fatalf("expected validation error for unimplemented naming.transform %q", transform)
+			}
+			if !strings.Contains(err.Error(), "not implemented") {
+				t.Errorf("error %q does not explain the transform is not implemented", err)
+			}
+		})
+	}
+}
+
+func TestValidate_EmptySkipIncludePatternsRejected(t *testing.T) {
+	// M-15: a pasted trailing "- " (or an empty string threaded through an LLM)
+	// would silently exclude every operation — MatchName("", opID) is false for
+	// every non-empty operationId — and generate a provider with zero resources.
+	// Both skip_operations and include_operations must reject empty entries
+	// fail-loud, mirroring the generation.<kind>.include/exclude checks.
+	base := Config{Provider: ProviderConfig{Name: "test", Version: "1.0.0"}}
+	for _, tc := range []struct {
+		name string
+		cfg  Config
+	}{
+		{name: "skip empty", cfg: Config{Provider: base.Provider, SkipOperations: []string{""}}},
+		{name: "skip whitespace", cfg: Config{Provider: base.Provider, SkipOperations: []string{"  "}}},
+		{name: "include empty", cfg: Config{Provider: base.Provider, IncludeOperations: []string{""}}},
+		{name: "include whitespace", cfg: Config{Provider: base.Provider, IncludeOperations: []string{"\t"}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := Validate(&tc.cfg)
+			if err == nil {
+				t.Fatalf("expected validation error for empty %s entry", tc.name)
+			}
+			if !strings.Contains(err.Error(), "is empty") {
+				t.Errorf("error %q does not name the empty entry", err)
+			}
+		})
+	}
+}
+
 func TestApplyDefaults_NamingTransform(t *testing.T) {
 	cases := []struct {
 		name      string
@@ -484,6 +534,83 @@ func TestValidate_InvalidPolymorphismStrategy(t *testing.T) {
 	}
 	if err := Validate(&cfg); err == nil {
 		t.Fatal("expected validation error for invalid polymorphism strategy")
+	}
+}
+
+func TestValidate_GenerateResourceRequiresOperation(t *testing.T) {
+	// N-45: generate_resource: true builds a resource from an operation. Without
+	// one, applyResourceCreationOverrides silently continues and the opt-in does
+	// nothing. Validate must reject it fail-loud.
+	base := Config{Provider: ProviderConfig{Name: "test", Version: "1.0.0"}}
+
+	noOp := true
+	withOp := true
+	disabled := false
+	cases := []struct {
+		name      string
+		override  ResourceOverride
+		wantError bool
+	}{
+		{
+			name:      "generate_resource true without operation",
+			override:  ResourceOverride{Schema: "Pet", GenerateResource: &noOp},
+			wantError: true,
+		},
+		{
+			name:      "generate_resource true with operation",
+			override:  ResourceOverride{Schema: "Pet", Operation: "createPet", GenerateResource: &withOp},
+			wantError: false,
+		},
+		{
+			name:      "generate_resource true with create_operation",
+			override:  ResourceOverride{Schema: "Pet", CreateOperation: "createPet", GenerateResource: &withOp},
+			wantError: false,
+		},
+		{
+			name:      "generate_resource false does not require operation",
+			override:  ResourceOverride{Schema: "Pet", GenerateResource: &disabled},
+			wantError: false,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := base
+			cfg.ResourceOverrides = []ResourceOverride{tc.override}
+			err := Validate(&cfg)
+			if tc.wantError && err == nil {
+				t.Fatal("expected validation error")
+			}
+			if !tc.wantError && err != nil {
+				t.Fatalf("unexpected validation error: %v", err)
+			}
+		})
+	}
+}
+
+func TestValidate_GenerateResourceFalseWarns(t *testing.T) {
+	// N-45: generate_resource: false is a documented no-op (the escape hatch is
+	// skip: true). It must surface a warning so the practitioner is pointed at
+	// the supported knob instead of a silent no-op.
+	disabled := false
+	cfg := Config{Provider: ProviderConfig{Name: "test", Version: "1.0.0"}}
+	cfg.ResourceOverrides = []ResourceOverride{{Schema: "Pet", GenerateResource: &disabled}}
+
+	if err := Validate(&cfg); err != nil {
+		t.Fatalf("unexpected validation error: %v", err)
+	}
+	if len(cfg.Warnings) == 0 {
+		t.Fatal("expected a warning for generate_resource: false")
+	}
+	found := false
+	for _, w := range cfg.Warnings {
+		if strings.Contains(w, "skip: true") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("warnings %v do not point at skip: true", cfg.Warnings)
 	}
 }
 
@@ -960,6 +1087,96 @@ func TestValidate_StateUpgradeConfig(t *testing.T) {
 	}
 }
 
+func TestLoadBytes_Empty(t *testing.T) {
+	// N-41: empty / whitespace / comment-only configs used to fail yaml's Decode
+	// with a bare "EOF". They must fail with an actionable message instead.
+	for _, tc := range []struct {
+		name string
+		in   string
+	}{
+		{name: "empty", in: ""},
+		{name: "whitespace", in: "   \n\t  \n"},
+		{name: "comments-only", in: "# just a comment\n# and another"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := LoadBytes([]byte(tc.in))
+			if err == nil {
+				t.Fatal("expected error for empty config, got nil")
+			}
+			if !strings.Contains(err.Error(), "generator.yaml is empty") {
+				t.Errorf("error %q does not mention the actionable empty-config message", err)
+			}
+		})
+	}
+}
+
+func TestLoadBytes_MultipleDocuments(t *testing.T) {
+	// N-40: a concatenated config or stray "---" silently drops everything after
+	// the first document. It must be rejected fail-loud.
+	in := `
+provider:
+  name: mycloud
+  version: "0.1.0"
+---
+provider:
+  name: second
+  version: "0.2.0"
+`
+	_, err := LoadBytes([]byte(in))
+	if err == nil {
+		t.Fatal("expected error for multiple YAML documents, got nil")
+	}
+	if !strings.Contains(err.Error(), "multiple YAML documents") {
+		t.Errorf("error %q does not mention multiple YAML documents", err)
+	}
+}
+
+func TestLoadBytes_MultipleDocumentsToleratedWhenEmpty(t *testing.T) {
+	// A trailing "---" with no second document is not "multiple documents";
+	// Decode of the second (empty) doc returns io.EOF and is accepted.
+	in := "provider:\n  name: mycloud\n  version: \"0.1.0\"\n---\n"
+	cfg, err := LoadBytes([]byte(in))
+	if err != nil {
+		t.Fatalf("unexpected error for trailing document separator: %v", err)
+	}
+	if cfg.Provider.Name != "mycloud" {
+		t.Errorf("got provider name %q, want %q", cfg.Provider.Name, "mycloud")
+	}
+}
+
+func TestValidate_StateUpgradeRenamesDeterministic(t *testing.T) {
+	// N-42: iterating a Go map is non-deterministic; when several rename entries
+	// are invalid the reported error must be stable across runs. Sorted-key
+	// iteration makes the first offending key deterministic ("a", not "b").
+	cfg := Config{Provider: ProviderConfig{Name: "test", Version: "1.0.0"}}
+	cfg.ResourceOverrides = []ResourceOverride{{
+		Schema:        "Pet",
+		SchemaVersion: 1,
+		StateUpgrades: []StateUpgradeConfig{{
+			From:    0,
+			Renames: map[string]string{"b": "", "a": ""},
+		}},
+	}}
+
+	var lastErr string
+	for i := 0; i < 50; i++ {
+		err := Validate(&cfg)
+		if err == nil {
+			t.Fatal("expected validation error")
+		}
+		if i == 0 {
+			lastErr = err.Error()
+			continue
+		}
+		if err.Error() != lastErr {
+			t.Fatalf("error message changed across runs (run %d):\n got %q\n want %q", i, err.Error(), lastErr)
+		}
+	}
+	if !strings.Contains(lastErr, `renames["a"]`) {
+		t.Errorf("error %q does not deterministically name the lexicographically-first offending key \"a\"", lastErr)
+	}
+}
+
 func TestValidate_AuthConfig(t *testing.T) {
 	base := Config{Provider: ProviderConfig{Name: "test", Version: "1.0.0"}}
 
@@ -1248,9 +1465,10 @@ func TestDuration_MarshalYAML(t *testing.T) {
 
 func TestFormatDuration(t *testing.T) {
 	cases := []struct {
-		name  string
-		input time.Duration
-		want  string
+		name          string
+		input         time.Duration
+		want          string
+		skipRoundTrip bool // N-43: MinInt64's magnitude (2^63 ns) is not parseable by time.ParseDuration, so the YAML round-trip is inherently lossy for it.
 	}{
 		{name: "zero", input: 0, want: "0s"},
 		{name: "minutes", input: 30 * time.Minute, want: "30m"},
@@ -1261,6 +1479,10 @@ func TestFormatDuration(t *testing.T) {
 		{name: "nanoseconds", input: 100 * time.Nanosecond, want: "100ns"},
 		{name: "negative", input: -(30 * time.Minute), want: "-30m"},
 		{name: "mixed-precision", input: 2*time.Hour + 3*time.Minute + 4*time.Second + 5*time.Millisecond + 6*time.Microsecond + 7*time.Nanosecond, want: "2h3m4s5ms6us7ns"},
+		// N-43: math.MinInt64 has no positive int64 counterpart; the magnitude
+		// must be computed in uint64 or the output is malformed ("-").
+		{name: "min-int64", input: time.Duration(math.MinInt64), want: "-2562047h47m16s854ms775us808ns", skipRoundTrip: true},
+		{name: "negative-min-int64-plus-one", input: time.Duration(math.MinInt64 + 1), want: "-2562047h47m16s854ms775us807ns", skipRoundTrip: true},
 	}
 
 	for _, tc := range cases {
@@ -1277,6 +1499,9 @@ func TestFormatDuration(t *testing.T) {
 			}
 			if string(out) != tc.want+"\n" {
 				t.Errorf("Duration.MarshalYAML(%v) = %q, want %q", tc.input, string(out), tc.want+"\n")
+			}
+			if tc.skipRoundTrip {
+				return
 			}
 
 			var roundTrip Duration

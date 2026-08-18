@@ -20,19 +20,9 @@ import (
 // used when the Invoke body is wired to the API client.
 func ActionFile(a ir.ActionIR, clientImport string) File {
 	path := filepath.Join("internal", "provider", fmt.Sprintf("action_%s.go", naming.SnakeCase(a.Name)))
-	file, err := func() (f *ast.File, err error) {
-		defer func() {
-			if rec := recover(); rec != nil {
-				if recErr, ok := rec.(error); ok {
-					err = fmt.Errorf("renderer panic: %w", recErr)
-				} else {
-					err = fmt.Errorf("renderer panic: %v", rec)
-				}
-			}
-		}()
-		f = generateActionFile(a, clientImport)
-		return
-	}()
+	file, err := renderEntitySafely(func() (*ast.File, error) {
+		return generateActionFile(a, clientImport), nil
+	})
 	if err != nil {
 		return ErrorFile(path, err)
 	}
@@ -296,11 +286,21 @@ func generateActionFile(a ir.ActionIR, clientImport string) *ast.File {
 	if actionNeedsTypesImport(a) {
 		f.AddImport("github.com/hashicorp/terraform-plugin-framework/types", "types")
 	}
-	// The schema/validator package is referenced only by a discriminated
-	// union's DiscriminatorValidator ([]validator.Object, D2); gate the import
-	// on that condition to avoid "imported and not used".
-	if schema.ObjectSchemaHasDiscriminatedUnion(a.ConfigSchema) {
+	// The schema/validator package is referenced by a discriminated union's
+	// DiscriminatorValidator ([]validator.Object, D2) and by a List/Set block's
+	// size validators ([]validator.List / []validator.Set, N-24); gate the import
+	// on either condition to avoid "imported and not used".
+	if schema.ObjectSchemaHasDiscriminatedUnion(a.ConfigSchema) || objectSchemaNeedsBlockSizeValidators(a.ConfigSchema) {
 		f.AddImport("github.com/hashicorp/terraform-plugin-framework/schema/validator", "validator")
+	}
+	// List/Set blocks with MinItems/MaxItems constraints reference
+	// listvalidator.SizeAtLeast/SizeAtMost or setvalidator equivalents (N-24).
+	needsList, needsSet := blockValidatorPackageImports(a.ConfigSchema)
+	if needsList {
+		f.AddImport("github.com/hashicorp/terraform-plugin-framework-validators/listvalidator", "listvalidator")
+	}
+	if needsSet {
+		f.AddImport("github.com/hashicorp/terraform-plugin-framework-validators/setvalidator", "setvalidator")
 	}
 
 	return f.AST()
@@ -379,7 +379,7 @@ func actionStructName(a ir.ActionIR) string {
 	if strings.TrimSpace(a.Name) == "" {
 		panic(fmt.Errorf("%w: name is empty", ErrEmptyActionName))
 	}
-	return naming.PascalCase(a.Name) + "Action"
+	return naming.GoTypeName(a.Name) + "Action"
 }
 
 // actionModelName returns the generated model struct name for an IR action.
@@ -387,7 +387,7 @@ func actionModelName(a ir.ActionIR) string {
 	if strings.TrimSpace(a.Name) == "" {
 		panic(fmt.Errorf("%w: name is empty", ErrEmptyActionName))
 	}
-	return naming.PascalCase(a.Name) + "ActionModel"
+	return naming.GoTypeName(a.Name) + "ActionModel"
 }
 
 // actionTypeName returns the Terraform action type name. It prefers
@@ -613,12 +613,24 @@ func actionBlockExpr(block ir.BlockIR) ast.Expr {
 			astgen.QualExpr("schema", "NestedBlockObject"),
 			astgen.KeyValue("Attributes", attrs),
 		)))
+		if exprs := blockSizeValidatorExprs(block, "List", "listvalidator"); len(exprs) > 0 {
+			elems = append(elems, astgen.KeyValueExpr(
+				astgen.Ident("Validators"),
+				astgen.CompositeLit(astgen.SliceType(astgen.QualExpr("validator", "List")), exprs...),
+			))
+		}
 	case ir.NestingSet:
 		kind = "SetNestedBlock"
 		elems = append(elems, astgen.KeyValue("NestedObject", astgen.CompositeLit(
 			astgen.QualExpr("schema", "NestedBlockObject"),
 			astgen.KeyValue("Attributes", attrs),
 		)))
+		if exprs := blockSizeValidatorExprs(block, "Set", "setvalidator"); len(exprs) > 0 {
+			elems = append(elems, astgen.KeyValueExpr(
+				astgen.Ident("Validators"),
+				astgen.CompositeLit(astgen.SliceType(astgen.QualExpr("validator", "Set")), exprs...),
+			))
+		}
 	default:
 		panic(fmt.Errorf("%w: %q for block %q", ErrUnknownActionBlockNesting, block.NestingMode, block.Name))
 	}

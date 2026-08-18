@@ -94,11 +94,19 @@ func planEphemeralWiring(er ir.EphemeralResourceIR) ephemeralWiringPlan {
 		}
 	}
 	plan.privateParams = lifecyclePrivateParams(plan.renew, plan.close)
-	if len(plan.privateParams) > 0 {
-		// The Renew/Close bodies rebuild their paths with strings.ReplaceAll and
-		// url.PathEscape.
-		plan.needsStrings = true
-		plan.needsURL = true
+	// strings.ReplaceAll and url.PathEscape are referenced only by the path
+	// substitution loops in the Renew/Close bodies; query/header/cookie
+	// parameters render through httpReq.URL.Query()/Header/AddCookie and never
+	// reference the strings or url packages. Gate the imports on actual path
+	// placeholders, not on the presence of any lifecycle parameter (M-12) —
+	// an ephemeral with query/header/cookie params but no path placeholders
+	// would otherwise import both packages unused.
+	for _, lp := range []*crudOperationPlan{plan.renew, plan.close} {
+		if lp != nil && len(lp.subs) > 0 {
+			plan.needsStrings = true
+			plan.needsURL = true
+			break
+		}
 	}
 	// strings.ReplaceAll is only referenced by requestPathStmts for path
 	// placeholders; query/header/cookie parameters render through url.Values /

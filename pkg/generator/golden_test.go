@@ -4,8 +4,11 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"go/format"
+	"hash/fnv"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -77,9 +80,26 @@ func stubMarkerContains(body, marker string) bool {
 
 // goldenEntry is the subset of generator.FileEntry that we snapshot. The
 // recorder sorts entries by path, so the resulting JSON is deterministic.
+//
+// BodyHash is an FNV-1a 64-bit hash of the rendered file body. Recording it
+// makes body regressions and body nondeterminism visible in the snapshot
+// itself: a generated file whose content silently changes — without a change
+// to its path or reason — now fails TestGoldenFiles, and a generation run that
+// is nondeterministic across two invocations produces a different hash that the
+// determinism check in CI (regenerate + git diff) catches immediately (N-29).
 type goldenEntry struct {
-	Path   string `json:"path"`
-	Reason string `json:"reason"`
+	Path     string `json:"path"`
+	Reason   string `json:"reason"`
+	BodyHash string `json:"body_hash,omitempty"`
+}
+
+// bodyHash returns an FNV-1a 64-bit hash of b, formatted as 16 lowercase hex
+// digits. It is collision-resistant enough to detect any body regression or
+// run-to-run nondeterminism in the golden corpus.
+func bodyHash(b []byte) string {
+	h := fnv.New64a()
+	_, _ = h.Write(b)
+	return fmt.Sprintf("%016x", h.Sum64())
 }
 
 // TestGoldenFiles runs the parse/normalize/transform/generator pipeline for
@@ -117,14 +137,25 @@ func TestGoldenFiles(t *testing.T) {
 				t.Fatalf("generator.Run for %s: %v", tc.spec, err)
 			}
 
+			// Attach a body hash to every planned entry so a body regression or a
+			// run-to-run nondeterministic body is visible in the snapshot (N-29).
+			// The hash map is rendered from the same FilesForProviderIR source of
+			// truth as write mode, so the hashed bodies are exactly what write
+			// mode would emit.
+			hashes := renderAllFileHashes(t, resp.IRPreview)
 			got := make([]goldenEntry, 0, len(entries))
 			for _, e := range entries {
-				got = append(got, goldenEntry{Path: e.Path, Reason: e.Reason})
+				got = append(got, goldenEntry{Path: e.Path, Reason: e.Reason, BodyHash: hashes[e.Path]})
 			}
 
 			rendered := renderSourceFiles(t, resp.IRPreview)
 			assertHonestScaffolds(t, rendered)
 			assertCorpusWiring(t, tc.name, rendered)
+			// Cheap, always-on syntax guard (also under -short): every generated
+			// .go body must at least parse and reformat. This catches
+			// syntactically broken Go in short mode, where the full compile
+			// corpus (TestGoldenFiles_Compile) is skipped (N-29).
+			assertGoSyntax(t, rendered)
 
 			goldenPath := filepath.Join("..", "..", "testfixtures", "golden", tc.name+".golden.json")
 
@@ -239,6 +270,45 @@ func renderSourceFiles(t *testing.T, provider *ir.ProviderIR) []sourceFile {
 	return out
 }
 
+// renderAllFileHashes renders the complete generated file set for the provider
+// — the same FilesForProviderIR source of truth that write mode emits — and
+// returns a map from output path to an FNV-1a body hash (N-29). Any render
+// failure is a test failure: the golden test asserts every planned file can
+// actually be rendered, which the record-mode {path, reason} list alone cannot.
+func renderAllFileHashes(t *testing.T, provider *ir.ProviderIR) map[string]string {
+	t.Helper()
+	cfg := buildConfigFor(provider)
+	files, err := generator.FilesForProviderIR(provider, cfg, generator.DefaultCollectOptions())
+	if err != nil {
+		t.Fatalf("FilesForProviderIR: %v", err)
+	}
+	hashes := make(map[string]string, len(files))
+	for _, f := range files {
+		var buf bytes.Buffer
+		if err := f.Render(&buf); err != nil {
+			t.Fatalf("render %s for body hash: %v", f.Path, err)
+		}
+		hashes[f.Path] = bodyHash(buf.Bytes())
+	}
+	return hashes
+}
+
+// assertGoSyntax parses and reformats every generated .go body so syntactically
+// broken Go is caught in every test run, including -short mode where the full
+// compile corpus is skipped. format.Source parses the file and would error on
+// malformed syntax; name resolution is intentionally out of scope (N-29).
+func assertGoSyntax(t *testing.T, files []sourceFile) {
+	t.Helper()
+	for _, f := range files {
+		if !strings.HasSuffix(f.Path, ".go") {
+			continue
+		}
+		if _, err := format.Source([]byte(f.Body)); err != nil {
+			t.Errorf("generated Go file %q does not parse/reformat: %v", f.Path, err)
+		}
+	}
+}
+
 // buildConfigFor returns a BuildConfig derived from a provider IR for use
 // during golden-file rendering. The namespace falls back to the provider name
 // because the IR does not carry a registry namespace.
@@ -309,51 +379,40 @@ func isConstructFile(path string) bool {
 	return false
 }
 
-// wiredMarker identifies a generated resource file whose CRUD bodies are wired
-// to the generated API client. Wired resources legitimately drop the "not
-// wired" scaffold marker because their bodies make real HTTP calls.
-const wiredMarker = "r.client.NewRequest"
-
-// wiredDataSourceMarker identifies a generated data source file whose Read body
-// is wired to the generated API client (the data source receiver is `d`, so its
-// client access is d.client, not r.client).
-const wiredDataSourceMarker = "d.client.NewRequest"
-
-// wiredEphemeralMarker identifies a generated ephemeral resource file whose
-// Open body is wired to the generated API client (the ephemeral receiver is
-// `e`, so its client access is e.client).
-const wiredEphemeralMarker = "e.client.NewRequest"
-
-// wiredActionMarker identifies a generated action file whose Invoke body is
-// wired to the generated API client. The action receiver is `r`, the same as a
-// resource, so its client access is r.client.NewRequest — identical to the
-// resource marker. isWiredConstruct distinguishes the two by path prefix.
-const wiredActionMarker = "r.client.NewRequest"
-
-// wiredListResourceMarker identifies a generated list resource file whose List
-// body is wired to the generated API client (the list resource receiver is
-// `l`, so its client access is l.client).
-const wiredListResourceMarker = "l.client.NewRequest"
+// wiredClientCallRE matches an actual call on the generated client field —
+// r.client.NewRequest(ctx, ...), d.client.Read(...), l.client.List(...), etc.
+// It keys wired-vs-scaffolded detection on the call idiom rather than a bare
+// method-name substring, addressing both brittleness directions of the old
+// `client.NewRequest` match (N-34):
+//
+//   - a comment that merely mentions "NewRequest" does not match, because a
+//     real call requires the `.client.<Method>(` shape with the opening paren;
+//   - a method rename (e.g. NewRequest → NewRequestWithContext) still counts as
+//     wired, because any method call on the client field matches;
+//   - the receiver name (r/d/e/l) is unconstrained, so a receiver rename does
+//     not flip wired constructs to "missing honest scaffold marker".
+//
+// Wired construct bodies always make HTTP calls through the client field, so
+// the pattern matches exactly the bodies that legitimately drop the scaffold
+// marker; scaffolded bodies never reference `.client.<Method>(`.
+var wiredClientCallRE = regexp.MustCompile(`\.client\.[A-Z][A-Za-z0-9]*\(`)
 
 // isWiredConstruct reports whether a generated construct implementation file is
 // wired to the generated API client, and so legitimately drops the "not wired"
-// scaffold marker. Resources and actions both use r.client.NewRequest (the
-// resource and action receivers are both `r`); data sources use
-// d.client.NewRequest; ephemeral resources use e.client.NewRequest; list
-// resources use l.client.NewRequest. The path prefix distinguishes resources
-// from actions.
+// scaffold marker. Any construct file whose body contains an actual call on the
+// client field counts as wired; the path prefix restricts the check to
+// construct files (functions are never wired — they have no client receiver).
 func isWiredConstruct(path, body string) bool {
-	switch {
-	case strings.HasPrefix(path, "internal/provider/resource_"):
-		return strings.Contains(body, wiredMarker)
-	case strings.HasPrefix(path, "internal/provider/action_"):
-		return strings.Contains(body, wiredActionMarker)
-	case strings.HasPrefix(path, "internal/provider/data_source_"):
-		return strings.Contains(body, wiredDataSourceMarker)
-	case strings.HasPrefix(path, "internal/provider/ephemeral_"):
-		return strings.Contains(body, wiredEphemeralMarker)
-	case strings.HasPrefix(path, "internal/provider/list_"):
-		return strings.Contains(body, wiredListResourceMarker)
+	for _, prefix := range []string{
+		"internal/provider/resource_",
+		"internal/provider/action_",
+		"internal/provider/data_source_",
+		"internal/provider/ephemeral_",
+		"internal/provider/list_",
+	} {
+		if strings.HasPrefix(path, prefix) {
+			return wiredClientCallRE.MatchString(body)
+		}
 	}
 	return false
 }
@@ -439,7 +498,7 @@ func goldenEqual(a, b []goldenEntry) bool {
 		return false
 	}
 	for i := range a {
-		if a[i].Path != b[i].Path || a[i].Reason != b[i].Reason {
+		if a[i].Path != b[i].Path || a[i].Reason != b[i].Reason || a[i].BodyHash != b[i].BodyHash {
 			return false
 		}
 	}

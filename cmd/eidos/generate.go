@@ -2,10 +2,12 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
+	"runtime/debug"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -85,7 +87,7 @@ func newGenerateCmd() *cobra.Command {
 		Long: `Runs the Eidos generation pipeline to turn an OpenAPI spec into a
 Terraform provider. Use --dry-run to preview what would be generated.`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			return runGenerate(cmd, flags)
+			return recoverCommand(cmd, func() error { return runGenerate(cmd, flags) })
 		},
 	}
 
@@ -114,6 +116,38 @@ Terraform provider. Use --dry-run to preview what would be generated.`,
 	return cmd
 }
 
+// printConfigWarnings surfaces non-fatal config validation warnings (both
+// schema and operation set on an override, env-var collisions). cfg.Warnings
+// carries yaml:"-" so a generator.yaml round-trip cannot hold them; without
+// this they would be written by config.Validate and immediately lost (M-16).
+func printConfigWarnings(cmd *cobra.Command, cfg *config.Config) {
+	if cfg == nil {
+		return
+	}
+	for _, w := range cfg.Warnings {
+		printDiagnostic(cmd.ErrOrStderr(), diagnostics.Diagnostic{
+			Severity: diagnostics.Warning,
+			Summary:  w,
+		})
+	}
+}
+
+// recoverCommand converts a panic in a command's RunE body into a returned
+// error, so a bug in the generation pipeline fails the CLI with a clean
+// non-zero exit (Cobra prints the error) plus a logged stack trace instead of
+// crashing the process mid-run. The generator already converts its own panics
+// into render errors (renderFileSafely); this is the outer safety net for any
+// other panic in the command path (N-65).
+func recoverCommand(cmd *cobra.Command, run func() error) (err error) {
+	defer func() {
+		if rec := recover(); rec != nil {
+			_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "eidos: internal panic in %q:\n%v\n%s\n", cmd.Name(), rec, debug.Stack()) //nolint:errcheck // best-effort panic log to stderr; the converted error is what matters
+			err = fmt.Errorf("internal error in %q: %v", cmd.Name(), rec)
+		}
+	}()
+	return run()
+}
+
 func runGenerate(cmd *cobra.Command, flags *generateFlags) error {
 	if err := validateDryRunOutput(flags.dryRunOutput, flags.dryRun); err != nil {
 		return err
@@ -128,8 +162,9 @@ func runGenerate(cmd *cobra.Command, flags *generateFlags) error {
 	if err != nil {
 		return err
 	}
+	printConfigWarnings(cmd, cfg)
 
-	specBytes, contentType, specPath, specDisplay, err := resolveGenerateSpec(flags, cfg)
+	specBytes, contentType, specPath, specDisplay, err := resolveGenerateSpec(cmd.Context(), flags, cfg)
 	if err != nil {
 		return err
 	}
@@ -276,21 +311,23 @@ func collectOptionsFor(cfg *config.Config, flags *generateFlags) generator.Colle
 	if opts.IncludeDynamicRelease && strings.TrimSpace(opts.DynamicReleaseSpecPath) == "" && cfg != nil {
 		opts.DynamicReleaseSpecPath = cfg.Spec.Path
 	}
-	if flags.onlyBuild {
-		// OnlyBuild emits exactly the build/CI/release scaffolding and nothing
-		// else, but still honors an opted-in dynamic release workflow.
-		return generator.CollectOptions{
-			OnlyBuild:              true,
-			IncludeDynamicRelease:  opts.IncludeDynamicRelease,
-			DynamicReleaseImage:    opts.DynamicReleaseImage,
-			DynamicReleaseSpecPath: opts.DynamicReleaseSpecPath,
-		}
-	}
 	// sign_release is the opt-out for default-on GPG signing. Thread the *bool
 	// through so an explicit false disables signing; nil (no config) keeps the
 	// BuildConfigFromIR default of signed releases.
 	if cfg != nil {
 		opts.SignRelease = cfg.SignRelease
+	}
+	if flags.onlyBuild {
+		// OnlyBuild emits exactly the build/CI/release scaffolding and nothing
+		// else, but still honors an opted-in dynamic release workflow and an
+		// explicit sign_release opt-out (N-39).
+		return generator.CollectOptions{
+			OnlyBuild:              true,
+			IncludeDynamicRelease:  opts.IncludeDynamicRelease,
+			DynamicReleaseImage:    opts.DynamicReleaseImage,
+			DynamicReleaseSpecPath: opts.DynamicReleaseSpecPath,
+			SignRelease:            opts.SignRelease,
+		}
 	}
 	return opts
 }
@@ -327,7 +364,7 @@ func configOutputCollidesWithInput(configPath, outputDir string) (bool, error) {
 // override). Fail loud when neither is set rather than silently producing
 // nothing. The display path is the absolute local path for a file spec, or the
 // URL itself for a remote spec (filepath.Abs would mangle a URL).
-func resolveGenerateSpec(flags *generateFlags, cfg *config.Config) ([]byte, string, string, string, error) {
+func resolveGenerateSpec(ctx context.Context, flags *generateFlags, cfg *config.Config) ([]byte, string, string, string, error) {
 	specPath := flags.spec
 	if specPath == "" && cfg != nil {
 		specPath = strings.TrimSpace(cfg.Spec.Path)
@@ -335,7 +372,7 @@ func resolveGenerateSpec(flags *generateFlags, cfg *config.Config) ([]byte, stri
 	if specPath == "" {
 		return nil, "", "", "", fmt.Errorf("--spec is required (or set spec.path in the generator.yaml passed via --config)")
 	}
-	specBytes, contentType, err := loadSpecBytes(specPath, flags.remote.options(cfg))
+	specBytes, contentType, err := loadSpecBytes(ctx, specPath, flags.remote.options(cfg))
 	if err != nil {
 		return nil, "", "", "", err
 	}
@@ -396,11 +433,13 @@ func handleGenerateConfig(cmd *cobra.Command, flags *generateFlags, specBytes []
 	// in the emitted starter config.
 	usePutAsCreate := !flags.noUsePutAsCreate
 	convertDiags, err := writeStarterConfigFromSpec(specBytes, specDisplay, outputPath, providerName, flags.force, usePutAsCreate)
-	if err != nil {
-		return false, err
-	}
+	// Print diagnostics before the error check so a refused write (error-severity
+	// diagnostics, N-57) still surfaces the reasons.
 	for _, d := range convertDiags {
 		printDiagnostic(cmd.ErrOrStderr(), d)
+	}
+	if err != nil {
+		return false, err
 	}
 	return true, writeStarterConfigHint(cmd.OutOrStdout(), outputPath, specDisplay)
 }

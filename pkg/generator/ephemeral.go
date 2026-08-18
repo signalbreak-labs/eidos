@@ -1,6 +1,7 @@
 package generator
 
 import (
+	"errors"
 	"fmt"
 	"go/ast"
 	"go/token"
@@ -14,25 +15,23 @@ import (
 	"github.com/signalbreak-labs/eidos/pkg/ir"
 )
 
+// ErrUnknownEphemeralBlockNesting is the sentinel returned (via panic, then
+// recovered into an ErrorFile by the per-file wrapper) when an ephemeral
+// resource block has a NestingMode the generator does not recognize. Ephemeral
+// blocks fail closed — like resource/datasource/action blocks — rather than
+// silently degrading to SingleNestedBlock, so an unexpected IR shape is surfaced
+// instead of producing a wrong schema (N-24).
+var ErrUnknownEphemeralBlockNesting = errors.New("unknown ephemeral block nesting mode")
+
 // EphemeralFile returns the generated internal/provider/ephemeral_<name>.go file
 // for a Terraform plugin-framework ephemeral resource built from the supplied
 // EphemeralResourceIR. clientImport is the import path of the generated
 // internal/client package, used when the Open body is wired to the API client.
 func EphemeralFile(er ir.EphemeralResourceIR, clientImport string) File {
 	path := filepath.Join("internal", "provider", fmt.Sprintf("ephemeral_%s.go", naming.SnakeCase(er.Name)))
-	file, err := func() (f *ast.File, err error) {
-		defer func() {
-			if rec := recover(); rec != nil {
-				if recErr, ok := rec.(error); ok {
-					err = fmt.Errorf("renderer panic: %w", recErr)
-				} else {
-					err = fmt.Errorf("renderer panic: %v", rec)
-				}
-			}
-		}()
-		f = generateEphemeralFile(er, clientImport)
-		return
-	}()
+	file, err := renderEntitySafely(func() (*ast.File, error) {
+		return generateEphemeralFile(er, clientImport), nil
+	})
 	if err != nil {
 		return ErrorFile(path, err)
 	}
@@ -120,11 +119,17 @@ func generateEphemeralFile(er ir.EphemeralResourceIR, clientImport string) *ast.
 	// Model struct.
 	f.AddCommentf("%s describes the ephemeral resource config and result shape.", modelName)
 	modelFields := []*ast.Field{}
-	// ephemeralModelAttributes already deduplicates by name, so no seen map is
+	// The model iterates the SAME merged list the schema renders from
+	// (ephemeralMergedAttributes), not the naive config-first dedup of
+	// ephemeralModelAttributes. When config and result disagree on an
+	// attribute's shape the merge degrades it to Dynamic, and the model field
+	// must be types.Dynamic to match the schema's DynamicAttribute — a typed
+	// field under a DynamicAttribute fails state decoding at runtime (N-22).
+	// ephemeralMergedAttributes already deduplicates by name, so no seen map is
 	// needed here. The prior seen map was redundant and, worse, marked a name
 	// seen before skipAttrForModel was applied, which could suppress a later
 	// same-name field (L-36).
-	for _, attr := range ephemeralModelAttributes(er) {
+	for _, attr := range ephemeralMergedAttributes(er) {
 		if schema.SkipAttrForModel(attr) {
 			continue
 		}
@@ -342,7 +347,7 @@ func ephemeralNeedsValidatorImport(er ir.EphemeralResourceIR) bool {
 
 // ephemeralResourceModelName returns the generated model struct name for an ephemeral resource.
 func ephemeralResourceModelName(er ir.EphemeralResourceIR) string {
-	return naming.PascalCase(er.Name) + "EphemeralResourceModel"
+	return naming.GoTypeName(er.Name) + "EphemeralResourceModel"
 }
 
 // ephemeralResourceTypeName returns the Terraform ephemeral resource type name. It prefers
@@ -353,28 +358,6 @@ func ephemeralResourceTypeName(er ir.EphemeralResourceIR) string {
 		return strings.TrimSpace(er.TypeName)
 	}
 	return typeNameFallback(er.Name)
-}
-
-// ephemeralModelAttributes returns the deduplicated list of attributes that
-// appear in the ephemeral resource model, combining config and result schemas.
-func ephemeralModelAttributes(er ir.EphemeralResourceIR) []ir.AttributeIR {
-	seen := make(map[string]struct{})
-	attrs := make([]ir.AttributeIR, 0, len(er.ConfigSchema.Attributes)+len(er.ResultSchema.Attributes))
-	for _, attr := range er.ConfigSchema.Attributes {
-		if _, ok := seen[attr.Name]; ok {
-			continue
-		}
-		seen[attr.Name] = struct{}{}
-		attrs = append(attrs, attr)
-	}
-	for _, attr := range er.ResultSchema.Attributes {
-		if _, ok := seen[attr.Name]; ok {
-			continue
-		}
-		seen[attr.Name] = struct{}{}
-		attrs = append(attrs, attr)
-	}
-	return attrs
 }
 
 // ephemeralSchemaValues builds the []ast.Expr key/value elements for ephemeralschema.Schema{...}.
@@ -423,7 +406,8 @@ func ephemeralSchemaValues(er ir.EphemeralResourceIR) []ast.Expr {
 // flags; result attributes are marked Computed. Attributes present in both
 // schemas are merged so they can be configured and computed. The config
 // schema takes precedence for the type definition; if the result schema
-// defines the same attribute with an incompatible type, generation panics.
+// defines the same attribute with an incompatible type, the merged attribute
+// degrades to Dynamic (G2) rather than panicking.
 func ephemeralMergedAttributes(er ir.EphemeralResourceIR) []ir.AttributeIR {
 	byName := make(map[string]ir.AttributeIR)
 	for _, attr := range er.ConfigSchema.Attributes {
@@ -793,11 +777,13 @@ func ephemeralBlockExpr(block ir.BlockIR, resourceName string) ast.Expr {
 				astgen.CompositeLit(astgen.SliceType(astgen.QualExpr("validator", "Set")), exprs...),
 			))
 		}
-	default:
+	case ir.NestingSingle:
 		// SingleNestedBlock does not support cardinality constraints and exposes its
 		// attributes directly; MinItems/MaxItems are only emitted for List/Set blocks.
 		kind = "SingleNestedBlock"
 		elems = append(elems, astgen.KeyValue("Attributes", attrs))
+	default:
+		panic(fmt.Errorf("%w: %q for block %q", ErrUnknownEphemeralBlockNesting, block.NestingMode, block.Name))
 	}
 
 	if block.Description != "" {
@@ -845,6 +831,12 @@ func ephemeralBlockSizeValidatorExprs(block ir.BlockIR, validatorPkg string) []a
 // resource schema attribute. Ephemeral attributes preserve the Required/Optional
 // flags from the IR and mark result-only attributes Computed.
 func ephemeralAttributeValues(attr ir.AttributeIR, extra []ast.Expr) []ast.Expr {
+	// Resolve a Required+Computed conflict before emitting flags. The top-level
+	// merge (ephemeralMergedAttributes) already does this, but nested attributes
+	// bypass the merge; the renderer still must never produce a
+	// framework-invalid schema (N-25).
+	attr = normalizeAttributeFlags(attr)
+
 	elems := []ast.Expr{}
 
 	if attr.MarkdownDescription != "" {

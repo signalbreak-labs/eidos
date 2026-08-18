@@ -13,9 +13,14 @@ import (
 // inference for values, nested flow collections, and null values. Multi-line
 // flow collections remain unsupported (see the package doc).
 type yamlFlowParser struct {
-	file  string
-	text  string
-	pos   int
+	file string
+	text string
+	pos  int
+	// line is the 1-based line of the flow text within the source document.
+	// The flow parser operates on a single extracted line, so its own positions
+	// are all "line 1"; error messages and node locations must report the
+	// document line instead (N-7).
+	line  int
 	depth int
 }
 
@@ -24,9 +29,10 @@ type yamlFlowParser struct {
 // input; otherwise ok is false and callers fall back to plain-scalar handling
 // (preserving the pre-existing lenient behavior for values that merely look
 // like flow, e.g. a description of "{foo}"). ErrMaxNestingDepth is propagated
-// so deeply-nested input cannot blow the stack.
-func parseYAMLFlow(file, text string, depth int) (node Node, ok bool, err error) {
-	p := &yamlFlowParser{file: file, text: text, depth: depth}
+// so deeply-nested input cannot blow the stack. line is the 1-based source
+// line of text, used in error messages and node locations.
+func parseYAMLFlow(file, text string, line, depth int) (node Node, ok bool, err error) {
+	p := &yamlFlowParser{file: file, text: text, line: line, depth: depth}
 	p.skipWS()
 	if p.pos >= len(p.text) {
 		return nil, false, nil
@@ -55,7 +61,7 @@ func parseYAMLFlow(file, text string, depth int) (node Node, ok bool, err error)
 
 func (p *yamlFlowParser) enterComposite() error {
 	if p.depth >= maxNestingDepth {
-		return fmt.Errorf("%s:%d:%d: %w (%d)", p.file, 1, p.pos+1, ErrMaxNestingDepth, maxNestingDepth)
+		return fmt.Errorf("%s:%d:%d: %w (%d)", p.file, p.line, p.pos+1, ErrMaxNestingDepth, maxNestingDepth)
 	}
 	p.depth++
 	return nil
@@ -70,11 +76,11 @@ func (p *yamlFlowParser) skipWS() {
 }
 
 func (p *yamlFlowParser) loc() SourceLocation {
-	return SourceLocation{File: p.file, Line: 1, Column: p.pos + 1}
+	return SourceLocation{File: p.file, Line: p.line, Column: p.pos + 1}
 }
 
 func (p *yamlFlowParser) errorf(format string, args ...any) error {
-	return fmt.Errorf("%s:%d:%d: %s", p.file, 1, p.pos+1, fmt.Sprintf(format, args...))
+	return fmt.Errorf("%s:%d:%d: %s", p.file, p.line, p.pos+1, fmt.Sprintf(format, args...))
 }
 
 // parseMap parses a flow mapping starting at the '{' at p.pos.

@@ -39,9 +39,9 @@ func TestQuoteEach(t *testing.T) {
 	}
 }
 
-// TestFormatDuration covers every branch of formatDuration from zero through
+// TestGoDurationExpr covers every branch of goDurationExpr from zero through
 // the sub-microsecond fallback.
-func TestFormatDuration(t *testing.T) {
+func TestGoDurationExpr(t *testing.T) {
 	cases := []struct {
 		d    time.Duration
 		want string
@@ -55,8 +55,8 @@ func TestFormatDuration(t *testing.T) {
 		{time.Duration(1), "1 * time.Nanosecond"}, // 1ns falls through to nanos
 	}
 	for _, tc := range cases {
-		if got := formatDuration(tc.d); got != tc.want {
-			t.Errorf("formatDuration(%v) = %q, want %q", tc.d, got, tc.want)
+		if got := goDurationExpr(tc.d); got != tc.want {
+			t.Errorf("goDurationExpr(%v) = %q, want %q", tc.d, got, tc.want)
 		}
 	}
 }

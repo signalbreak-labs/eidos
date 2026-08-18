@@ -868,6 +868,44 @@ func TestValidateContextWithContentType_CanceledAborts(t *testing.T) {
 	}
 }
 
+// TestValidate_YAMLMislabeledAsJSONFallsBack covers N-56: a YAML spec body
+// sent with Content-Type: application/json (a mislabeled HTTP response, or a
+// client that always tags bodies as JSON) would previously be rejected by the
+// JSON parser. The JSON-first attempt must fall back to YAML for a document
+// that the YAML parser recognizes as an OpenAPI root. Genuine JSON is
+// unaffected (the YAML parser is a JSON superset, so the fallback can never
+// mis-parse a document that was really JSON).
+func TestValidate_YAMLMislabeledAsJSONFallsBack(t *testing.T) {
+	// Block-style YAML spec, deliberately tagged as JSON by the caller.
+	body := []byte("openapi: 3.0.1\ninfo:\n  title: X\n  version: '1'\npaths: {}\n")
+	resp := ValidateContextWithContentType(context.Background(), body, "application/json")
+	if !resp.Valid {
+		t.Fatalf("expected YAML fallback to validate, diagnostics = %+v", resp.Diagnostics)
+	}
+
+	// Genuine JSON must still parse on the JSON path (no fallback triggered).
+	jsonBody := []byte(`{"openapi":"3.0.1","info":{"title":"X","version":"1"},"paths":{}}`)
+	resp = ValidateContextWithContentType(context.Background(), jsonBody, "application/json")
+	if !resp.Valid {
+		t.Fatalf("expected genuine JSON to validate, diagnostics = %+v", resp.Diagnostics)
+	}
+}
+
+// TestValidate_FlowRootGarbageRejected ensures the N-56 fallback guard does not
+// accept a `{`-leading flow-style document that the block YAML parser mis-reads
+// as a literal "{openapi" key. Such a body must fail with the JSON parse error
+// (the precise diagnosis), not sail through as garbage.
+func TestValidate_FlowRootGarbageRejected(t *testing.T) {
+	body := []byte(`{openapi: 3.0.1, info: {title: X, version: '1'}, paths: {}}`)
+	_, err := loadRequestBody(body, "", "request.yaml", "request.json")
+	if err == nil {
+		t.Fatal("expected flow-root document that is neither valid JSON nor block YAML to error")
+	}
+	if !strings.Contains(err.Error(), "request.json") {
+		t.Fatalf("expected the JSON error to be surfaced, got %v", err)
+	}
+}
+
 func TestOperationMappingFromString(t *testing.T) {
 	tests := []struct {
 		input      string
@@ -2994,6 +3032,240 @@ func TestValidate_ResourceOverrideCreatesResourceFromAction(t *testing.T) {
 	for _, a := range resp.IRPreview.Actions {
 		if a.Name == "post_dashboard" {
 			t.Errorf("postDashboard should be consumed by the override-created resource, but an action was emitted")
+		}
+	}
+}
+
+// TestValidate_ResourceOverrideGenerateDatasource verifies M-17: a
+// resource_overrides entry with generate_datasource: true emits a data source
+// mirroring the matched managed resource. The resource's read operation is
+// consumed by its CRUD group (no standalone data source is inferred for it), so
+// the opt-in re-emits the read as a data source. The data source is read-shaped
+// (path params as inputs, response properties as Computed) and carries the
+// resource's SourceOperation as its round-trip marker.
+func TestValidate_ResourceOverrideGenerateDatasource(t *testing.T) {
+	body := []byte(`{
+		"openapi": "3.0.1",
+		"info": {"title": "Pet API", "version": "1.0.0"},
+		"config": "provider:\n  name: pet\n  version: \"1.0.0\"\nresource_overrides:\n  - operation: createPet\n    generate_datasource: true\n",
+		"paths": {
+			"/pets": {
+				"post": {
+					"operationId": "createPet",
+					"requestBody": {"content": {"application/json": {"schema": {"type": "object", "properties": {"name": {"type": "string"}}}}}},
+					"responses": {"200": {"description": "ok", "content": {"application/json": {"schema": {"type": "object", "properties": {"id": {"type": "integer"}, "name": {"type": "string"}}}}}}}
+				}
+			},
+			"/pets/{id}": {
+				"get": {
+					"operationId": "getPet",
+					"parameters": [{"name": "id", "in": "path", "required": true, "schema": {"type": "integer"}}],
+					"responses": {"200": {"description": "ok", "content": {"application/json": {"schema": {"type": "object", "properties": {"id": {"type": "integer"}, "name": {"type": "string"}}}}}}}
+				},
+				"delete": {
+					"operationId": "deletePet",
+					"parameters": [{"name": "id", "in": "path", "required": true, "schema": {"type": "integer"}}],
+					"responses": {"200": {"description": "ok"}}
+				}
+			}
+		}
+	}`)
+
+	resp := Validate(body)
+	if !resp.Valid {
+		t.Fatalf("expected valid response, got diagnostics: %+v", resp.Diagnostics)
+	}
+	if resp.IRPreview == nil {
+		t.Fatal("no IR preview")
+	}
+
+	// The resource is inferred from the CRUD group (create POST /pets, read+delete
+	// on /pets/{id}), with the read operation consumed.
+	var pet *ir.ResourceIR
+	for i := range resp.IRPreview.Resources {
+		if resp.IRPreview.Resources[i].Name == "pet" {
+			pet = &resp.IRPreview.Resources[i]
+			break
+		}
+	}
+	if pet == nil {
+		t.Fatalf("expected a pet resource, got %+v", resp.IRPreview.Resources)
+	}
+
+	// generate_datasource must emit a matching data source.
+	var ds *ir.DataSourceIR
+	for i := range resp.IRPreview.DataSources {
+		if resp.IRPreview.DataSources[i].Name == "pet" {
+			ds = &resp.IRPreview.DataSources[i]
+			break
+		}
+	}
+	if ds == nil {
+		t.Fatalf("expected a pet data source from generate_datasource, got %+v", resp.IRPreview.DataSources)
+	}
+	if ds.ReadMapping.PathTemplate != "/pets/{id}" || ds.ReadMapping.Method != http.MethodGet {
+		t.Errorf("data source read mapping = %s %s, want GET /pets/{id}", ds.ReadMapping.Method, ds.ReadMapping.PathTemplate)
+	}
+	// The data source must carry the resource's SourceOperation as its round-trip
+	// marker (create op), not the read operation's id.
+	if ds.SourceOperation != "createPet" {
+		t.Errorf("data source SourceOperation = %q, want createPet (resource marker)", ds.SourceOperation)
+	}
+	// Read-shaped schema: the path param is a Required input, the response-only
+	// property is a Computed output.
+	foundID, foundName := false, false
+	for _, a := range ds.Schema.Attributes {
+		switch a.Name {
+		case "id":
+			foundID = true
+			if !a.Required {
+				t.Errorf("data source id must be Required (path-param input)")
+			}
+		case "name":
+			foundName = true
+			if !a.Computed {
+				t.Errorf("data source name must be Computed (response output)")
+			}
+		}
+	}
+	if !foundID || !foundName {
+		t.Errorf("data source schema missing path-param input or response output; got %+v", ds.Schema.Attributes)
+	}
+}
+
+// TestValidate_GenerateDatasourceNoMatchWarns verifies M-17's fail-loud path: a
+// generate_datasource: true entry whose operation matches no resource emits a
+// warning instead of silently producing nothing.
+func TestValidate_GenerateDatasourceNoMatchWarns(t *testing.T) {
+	body := []byte(`{
+		"openapi": "3.0.1",
+		"info": {"title": "Pet API", "version": "1.0.0"},
+		"config": "provider:\n  name: pet\n  version: \"1.0.0\"\nresource_overrides:\n  - operation: noSuchOp\n    generate_datasource: true\n",
+		"paths": {
+			"/pets": {
+				"post": {
+					"operationId": "createPet",
+					"responses": {"200": {"description": "ok"}}
+				}
+			},
+			"/pets/{id}": {
+				"get": {
+					"operationId": "getPet",
+					"parameters": [{"name": "id", "in": "path", "required": true, "schema": {"type": "string"}}],
+					"responses": {"200": {"description": "ok"}}
+				},
+				"delete": {
+					"operationId": "deletePet",
+					"responses": {"200": {"description": "ok"}}
+				}
+			}
+		}
+	}`)
+
+	resp := Validate(body)
+	if !resp.Valid {
+		t.Fatalf("expected valid response, got diagnostics: %+v", resp.Diagnostics)
+	}
+	warned := false
+	for _, d := range resp.Diagnostics {
+		if d.Severity == diagnostics.Warning.String() && strings.Contains(d.Summary, "generate_datasource") {
+			warned = true
+		}
+	}
+	if !warned {
+		t.Errorf("expected a generate_datasource no-match warning, got diagnostics: %+v", resp.Diagnostics)
+	}
+}
+
+// TestValidate_ResourceOverrideNoMatchWarns verifies M-18: a resource_overrides
+// entry that matches no resource (a typo'd operation or schema name) surfaces a
+// warning in the generate/validate path instead of being silently ignored. The
+// MCP override-preview tool already reported per-entry matches; this closes the
+// gap for the CLI generate path.
+func TestValidate_ResourceOverrideNoMatchWarns(t *testing.T) {
+	body := []byte(`{
+		"openapi": "3.0.1",
+		"info": {"title": "Pet API", "version": "1.0.0"},
+		"config": "provider:\n  name: pet\n  version: \"1.0.0\"\nresource_overrides:\n  - operation: creatPett\n    resource_name: renamed\n",
+		"paths": {
+			"/pets": {
+				"post": {
+					"operationId": "createPet",
+					"responses": {"200": {"description": "ok"}}
+				}
+			},
+			"/pets/{id}": {
+				"get": {
+					"operationId": "getPet",
+					"responses": {"200": {"description": "ok"}}
+				},
+				"delete": {
+					"operationId": "deletePet",
+					"responses": {"200": {"description": "ok"}}
+				}
+			}
+		}
+	}`)
+
+	resp := Validate(body)
+	if !resp.Valid {
+		t.Fatalf("expected valid response, got diagnostics: %+v", resp.Diagnostics)
+	}
+	warned := false
+	for _, d := range resp.Diagnostics {
+		if d.Severity == diagnostics.Warning.String() && strings.Contains(d.Summary, "did not match any generated resource") {
+			warned = true
+			if !strings.Contains(d.Detail, "creatPett") {
+				t.Errorf("warning detail should name the offending override; got %q", d.Detail)
+			}
+		}
+	}
+	if !warned {
+		t.Errorf("expected a resource-override no-match warning, got diagnostics: %+v", resp.Diagnostics)
+	}
+}
+
+// TestValidate_ResourceOverrideNoMatch_SkipDoesNotWarn verifies M-18's guard: a
+// resource_overrides entry that legitimately matches a resource (here a skip
+// opt-out) must not be flagged as a no-match.
+func TestValidate_ResourceOverrideNoMatch_SkipDoesNotWarn(t *testing.T) {
+	body := []byte(`{
+		"openapi": "3.0.1",
+		"info": {"title": "Pet API", "version": "1.0.0"},
+		"config": "provider:\n  name: pet\n  version: \"1.0.0\"\nresource_overrides:\n  - operation: createPet\n    skip: true\n",
+		"paths": {
+			"/pets": {
+				"post": {
+					"operationId": "createPet",
+					"responses": {"200": {"description": "ok"}}
+				}
+			},
+			"/pets/{id}": {
+				"get": {
+					"operationId": "getPet",
+					"responses": {"200": {"description": "ok"}}
+				},
+				"delete": {
+					"operationId": "deletePet",
+					"responses": {"200": {"description": "ok"}}
+				}
+			}
+		}
+	}`)
+
+	resp := Validate(body)
+	if !resp.Valid {
+		t.Fatalf("expected valid response, got diagnostics: %+v", resp.Diagnostics)
+	}
+	for _, d := range resp.Diagnostics {
+		if strings.Contains(d.Summary, "did not match any generated resource") {
+			t.Errorf("skip override matched its resource and must not warn: %+v", d)
+		}
+	}
+	// The skip must still have removed the resource.
+	for _, r := range resp.IRPreview.Resources {
+		if r.Name == "pet" {
+			t.Errorf("pet should be skipped by the override")
 		}
 	}
 }

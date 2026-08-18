@@ -3,6 +3,7 @@ package generator
 import (
 	"bytes"
 	"errors"
+	"go/ast"
 	"io"
 	"os"
 	"path/filepath"
@@ -476,6 +477,84 @@ func TestHarness_Generate_RecoversRendererPanic(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "renderer panic") {
 		t.Errorf("expected error to mention renderer panic, got %v", err)
+	}
+}
+
+// TestRenderEntitySafely_RecoversConstructionPanic locks in the N-23 contract
+// for every entity file (resource, data source, action, ephemeral, list
+// resource, provider, function): AST construction is routed through
+// renderEntitySafely so a renderer panic is surfaced as an error the caller can
+// turn into an ErrorFile, instead of crashing the whole eidos generate run.
+// The string panic is the common hostile case; the error-valued panic proves
+// the error (and its wrapping via %w) is preserved rather than re-stringified.
+func TestRenderEntitySafely_RecoversConstructionPanic(t *testing.T) {
+	t.Run("string panic becomes renderer panic error", func(t *testing.T) {
+		_, err := renderEntitySafely(func() (*ast.File, error) {
+			panic("intentional construction panic")
+		})
+		if err == nil {
+			t.Fatal("expected error for construction panic, got nil")
+		}
+		if !strings.Contains(err.Error(), "renderer panic") {
+			t.Errorf("expected error to mention renderer panic, got %v", err)
+		}
+		if !strings.Contains(err.Error(), "intentional construction panic") {
+			t.Errorf("expected error to carry the panic value, got %v", err)
+		}
+	})
+
+	t.Run("error panic wraps original error", func(t *testing.T) {
+		sentinel := errors.New("hostile IR sentinel")
+		_, err := renderEntitySafely(func() (*ast.File, error) {
+			panic(sentinel)
+		})
+		if err == nil {
+			t.Fatal("expected error for construction panic, got nil")
+		}
+		if !strings.Contains(err.Error(), "renderer panic") {
+			t.Errorf("expected error to mention renderer panic, got %v", err)
+		}
+		if !errors.Is(err, sentinel) {
+			t.Errorf("expected %v to wrap sentinel %v", err, sentinel)
+		}
+	})
+
+	t.Run("no panic returns the built file", func(t *testing.T) {
+		got, err := renderEntitySafely(func() (*ast.File, error) {
+			return astgen.NewFile("provider").AST(), nil
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if got == nil || got.Name == nil || got.Name.Name != "provider" {
+			t.Fatalf("expected provider AST file, got %#v", got)
+		}
+	})
+}
+
+// TestRenderFileSafely_PreservesErrorChain locks in the N-32 fix: renderFileSafely
+// wraps an error-valued panic with %w so errors.Is/errors.As work through the
+// render boundary (previously %v flattened it, so the same panic that
+// errors.Is-matched through the construction wrappers failed to match through
+// Render).
+func TestRenderFileSafely_PreservesErrorChain(t *testing.T) {
+	sentinel := errors.New("hostile render sentinel")
+
+	var buf bytes.Buffer
+	err := renderFileSafely(File{
+		Path: "x.go",
+		Render: func(_ io.Writer) error {
+			panic(sentinel)
+		},
+	}, &buf)
+	if err == nil {
+		t.Fatal("expected error for render panic, got nil")
+	}
+	if !strings.Contains(err.Error(), "renderer panic") {
+		t.Errorf("expected error to mention renderer panic, got %v", err)
+	}
+	if !errors.Is(err, sentinel) {
+		t.Errorf("expected %v to wrap sentinel %v (N-32)", err, sentinel)
 	}
 }
 

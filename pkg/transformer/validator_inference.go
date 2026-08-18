@@ -15,6 +15,11 @@ import (
 // validators listed in PROJECT_DESIGN.md Section 8.3 for the task scope:
 // enum, minLength/maxLength, minimum/maximum, pattern, format, not, const,
 // dependentRequired, patternProperties, and propertyNames.
+//
+// Deprecated: unreachable from production. The live pipeline infers validators
+// in schemaIRFromSpecRecursive (resource_schema.go) instead; this function and
+// its helpers are retained only for their test coverage and must not be
+// extended (M-7). See AUDIT.md.
 func InferValidators(schema *ir.SchemaIR) []ir.ValidatorIR {
 	if schema == nil {
 		return nil
@@ -71,6 +76,11 @@ func InferValidators(schema *ir.SchemaIR) []ir.ValidatorIR {
 
 // ApplyValidators populates schema.Validators with the entries returned by
 // InferValidators. Existing validators are preserved.
+//
+// Deprecated: unreachable from production. The live pipeline infers validators
+// in schemaIRFromSpecRecursive (resource_schema.go) instead; this function is
+// retained only for its test coverage and must not be extended (M-7). See
+// AUDIT.md.
 func ApplyValidators(schema *ir.SchemaIR) {
 	if schema == nil {
 		return
@@ -293,22 +303,27 @@ func inferLengthValidators(schema *ir.SchemaIR) []ir.ValidatorIR {
 func inferRangeValidators(schema *ir.SchemaIR) []ir.ValidatorIR {
 	switch schema.Type {
 	case ir.TypeInt:
+		// Round fractional bounds the same way the live path does
+		// (effectiveIntBounds): a non-whole inclusive minimum is rounded up and a
+		// non-whole inclusive maximum is rounded down, so minimum=0.5 means x >= 1
+		// and maximum=0.5 means x <= 0. The former int64() truncation produced
+		// silently wrong validators (M-7).
 		if schema.Minimum != nil && schema.Maximum != nil {
 			return []ir.ValidatorIR{{
 				Type: "int64validator.Between",
-				Args: []string{fmt.Sprintf("%d", int64(*schema.Minimum)), fmt.Sprintf("%d", int64(*schema.Maximum))},
+				Args: []string{fmt.Sprintf("%d", int64(math.Ceil(*schema.Minimum))), fmt.Sprintf("%d", int64(math.Floor(*schema.Maximum)))},
 			}}
 		}
 		if schema.Minimum != nil {
 			return []ir.ValidatorIR{{
 				Type: "int64validator.AtLeast",
-				Args: []string{fmt.Sprintf("%d", int64(*schema.Minimum))},
+				Args: []string{fmt.Sprintf("%d", int64(math.Ceil(*schema.Minimum)))},
 			}}
 		}
 		if schema.Maximum != nil {
 			return []ir.ValidatorIR{{
 				Type: "int64validator.AtMost",
-				Args: []string{fmt.Sprintf("%d", int64(*schema.Maximum))},
+				Args: []string{fmt.Sprintf("%d", int64(math.Floor(*schema.Maximum)))},
 			}}
 		}
 	case ir.TypeFloat:

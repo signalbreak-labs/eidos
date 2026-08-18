@@ -16,6 +16,11 @@ import (
 // differs from the OpenAPI/JSON Schema vacuously-true interpretation, but it
 // matches the downstream IR expectation that allOf always resolves to an
 // object schema in this transformer.
+//
+// Deprecated: unreachable from production. The live pipeline flattens allOf in
+// schemaSpecFromParser (from_parser.go) instead; this normalizer and its
+// helpers are retained only for their test coverage and must not be extended
+// (M-7). See AUDIT.md.
 func FlattenAllOf(schemas []*Schema) (*Schema, error) {
 	if len(schemas) == 0 {
 		return &Schema{Type: SchemaTypeObject}, nil

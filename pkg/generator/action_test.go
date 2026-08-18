@@ -762,6 +762,109 @@ func TestActionBlockExpr_NestingModes(t *testing.T) {
 	}
 }
 
+// TestActionBlockExpr_BlockSizeValidators verifies that action List/Set blocks
+// with MinItems/MaxItems constraints emit the same cardinality validators as
+// resource/datasource/ephemeral blocks (N-24). Before the fix, actionBlockExpr
+// silently dropped MinItems/MaxItems, so a future transformer change that
+// populated blocks would have produced schema that diverged from the other
+// entity types.
+func TestActionBlockExpr_BlockSizeValidators(t *testing.T) {
+	minItems := int64(1)
+	maxItems := int64(3)
+	cases := []struct {
+		name  string
+		block ir.BlockIR
+		want  []string
+	}{
+		{
+			name:  "list with min/max",
+			block: ir.BlockIR{Name: "tags", NestingMode: ir.NestingList, MinItems: &minItems, MaxItems: &maxItems, Schema: ir.ObjectSchemaIR{}},
+			want:  []string{"schema.ListNestedBlock", "validator.List", "listvalidator.SizeAtLeast(int64(1))", "listvalidator.SizeAtMost(int64(3))"},
+		},
+		{
+			name:  "set with min",
+			block: ir.BlockIR{Name: "tags", NestingMode: ir.NestingSet, MinItems: &minItems, Schema: ir.ObjectSchemaIR{}},
+			want:  []string{"schema.SetNestedBlock", "validator.Set", "setvalidator.SizeAtLeast(int64(1))"},
+		},
+		{
+			name:  "single ignores cardinality",
+			block: ir.BlockIR{Name: "meta", NestingMode: ir.NestingSingle, MinItems: &minItems, Schema: ir.ObjectSchemaIR{}},
+			want:  []string{"schema.SingleNestedBlock"},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			stmt := actionBlockExpr(tc.block)
+			got, err := astgen.RenderExpr(stmt)
+			if err != nil {
+				t.Fatalf("RenderExpr() error = %v", err)
+			}
+			for _, want := range tc.want {
+				if !strings.Contains(string(got), want) {
+					t.Errorf("actionBlockExpr(%q) missing %q\ncontent:\n%s", tc.name, want, string(got))
+				}
+			}
+		})
+	}
+}
+
+// TestActionFile_BlockSizeValidatorImports verifies that an action whose List/Set
+// blocks carry MinItems/MaxItems imports schema/validator and the matching
+// listvalidator/setvalidator package, while a block-free action (or one with
+// unconstrained blocks) does not (N-24).
+func TestActionFile_BlockSizeValidatorImports(t *testing.T) {
+	minItems := int64(1)
+	t.Run("constrained blocks import validators", func(t *testing.T) {
+		a := sampleActionIR()
+		a.ConfigSchema = ir.ObjectSchemaIR{
+			Blocks: []ir.BlockIR{
+				{Name: "tags", NestingMode: ir.NestingList, MinItems: &minItems, Schema: ir.ObjectSchemaIR{}},
+				{Name: "modes", NestingMode: ir.NestingSet, MinItems: &minItems, Schema: ir.ObjectSchemaIR{}},
+			},
+		}
+		file := ActionFile(a, testClientImport)
+		var buf bytes.Buffer
+		if err := file.Render(&buf); err != nil {
+			t.Fatalf("Render() error = %v", err)
+		}
+		got := buf.String()
+		for _, want := range []string{
+			"terraform-plugin-framework/schema/validator",
+			"terraform-plugin-framework-validators/listvalidator",
+			"terraform-plugin-framework-validators/setvalidator",
+		} {
+			if !strings.Contains(got, want) {
+				t.Errorf("generated action missing import %q\ncontent:\n%s", want, got)
+			}
+		}
+	})
+
+	t.Run("unconstrained blocks do not import validators", func(t *testing.T) {
+		a := sampleActionIR()
+		a.ConfigSchema = ir.ObjectSchemaIR{
+			Blocks: []ir.BlockIR{
+				{Name: "tags", NestingMode: ir.NestingList, Schema: ir.ObjectSchemaIR{}},
+			},
+		}
+		file := ActionFile(a, testClientImport)
+		var buf bytes.Buffer
+		if err := file.Render(&buf); err != nil {
+			t.Fatalf("Render() error = %v", err)
+		}
+		got := buf.String()
+		for _, unwanted := range []string{
+			"terraform-plugin-framework/schema/validator",
+			"terraform-plugin-framework-validators/listvalidator",
+			"terraform-plugin-framework-validators/setvalidator",
+		} {
+			if strings.Contains(got, unwanted) {
+				t.Errorf("generated action should not import %q\ncontent:\n%s", unwanted, got)
+			}
+		}
+	})
+}
+
 // TestActionFile_EmptyNameErrors verifies that generating an action file for an
 // unnamed action surfaces the naming conflict as a render error instead of
 // silently colliding on "Action".

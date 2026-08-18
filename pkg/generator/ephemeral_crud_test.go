@@ -395,6 +395,62 @@ func TestWiredEphemeralClose_Render(t *testing.T) {
 	}
 }
 
+// TestEphemeralLifecycleQueryParamsNoPathNoStrings asserts the M-12 fix: an
+// ephemeral whose Renew/Close carry query/header/cookie parameters but no path
+// placeholders must not set needsStrings/needsURL (strings.ReplaceAll and
+// url.PathEscape are referenced only by path substitution). Before the fix the
+// presence of any lifecycle private param forced both imports unused, and the
+// generated ephemeral file failed to compile.
+func TestEphemeralLifecycleQueryParamsNoPathNoStrings(t *testing.T) {
+	er := wiredEphemeralIR()
+	scope := []ir.ParamIR{{Name: "scope", In: "query", Schema: ir.SchemaIR{Type: ir.TypeString}}}
+	er.HasRenew = true
+	er.RenewMapping = &ir.OperationMappingIR{
+		Method:       "POST",
+		PathTemplate: "/token/renew",
+		SuccessCodes: []int{200},
+		QueryParams:  scope,
+	}
+	er.HasClose = true
+	er.CloseMapping = &ir.OperationMappingIR{
+		Method:       "DELETE",
+		PathTemplate: "/token",
+		SuccessCodes: []int{204},
+		QueryParams:  scope,
+	}
+	plan := planEphemeralWiring(er)
+	if !plan.wired {
+		t.Fatalf("plan.wired = false, want true")
+	}
+	if plan.renew == nil || plan.close == nil {
+		t.Fatalf("renew/close must resolve: renew=%v close=%v", plan.renew != nil, plan.close != nil)
+	}
+	if len(plan.privateParams) == 0 {
+		t.Fatalf("expected lifecycle private params (query scope), got none")
+	}
+	if plan.needsStrings {
+		t.Fatalf("plan.needsStrings = true, want false (query params never reference strings)")
+	}
+	if plan.needsURL {
+		t.Fatalf("plan.needsURL = true, want false (no path placeholders)")
+	}
+
+	file := EphemeralFile(er, testClientImport)
+	var buf bytes.Buffer
+	if err := file.Render(&buf); err != nil {
+		t.Fatalf("Render() error = %v", err)
+	}
+	got := buf.String()
+	for _, banned := range []string{
+		`strings.ReplaceAll`, // no path substitution in a placeholder-free lifecycle
+		`url.PathEscape`,
+	} {
+		if strings.Contains(got, banned) {
+			t.Errorf("placeholder-free lifecycle body must not contain %q\n--- body ---\n%s", banned, got)
+		}
+	}
+}
+
 // TestWiredEphemeralRenewClose_Render_Scaffolded asserts the counterpart: a
 // lifecycle mapping that does not resolve (request body present) keeps the
 // honest scaffold Renew/Close bodies even when Open is wired, and Open stashes

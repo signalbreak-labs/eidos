@@ -33,8 +33,14 @@ func importStateBody(r ir.ResourceIR) []ast.Stmt {
 		}
 	}
 
+	// used tracks parsed-import local variable names across every attribute so
+	// two attributes whose names PascalCase identically (e.g. pet_id and petId
+	// via overrides) cannot emit duplicate `importX, err :=` declarations, which
+	// would not compile (N-26).
+	used := make(map[string]bool)
+
 	if parsed.simple {
-		return importSetStmts(r, parsed.attrs[0], astgen.Selector(astgen.Ident("req"), "ID"))
+		return importSetStmts(r, parsed.attrs[0], astgen.Selector(astgen.Ident("req"), "ID"), used)
 	}
 
 	partsVar := importPartsVar(r)
@@ -69,11 +75,27 @@ func importStateBody(r ir.ResourceIR) []ast.Stmt {
 
 	for i, attr := range parsed.attrs {
 		stmts = append(stmts,
-			importSetStmts(r, attr, astgen.IndexExpr(astgen.Ident(partsVar), astgen.IntLit(i)))...,
+			importSetStmts(r, attr, astgen.IndexExpr(astgen.Ident(partsVar), astgen.IntLit(i)), used)...,
 		)
 	}
 
 	return stmts
+}
+
+// importVarName returns a unique Go identifier for a parsed-import local
+// variable derived from an attribute name. The base name is "import" plus the
+// attribute's PascalCase form; when a second attribute PascalCase to the same
+// identifier (e.g. pet_id and petId via overrides), a numeric suffix
+// disambiguates it so the generated import block does not declare the same
+// variable twice (N-26).
+func importVarName(attr string, used map[string]bool) string {
+	base := "import" + naming.SanitizeGoIdentifier(naming.PascalCase(attr))
+	name := base
+	for i := 2; used[name]; i++ {
+		name = fmt.Sprintf("%s%d", base, i)
+	}
+	used[name] = true
+	return name
 }
 
 // importAttributeType returns the schema primitive type of an import target
@@ -108,7 +130,7 @@ func importNeedsParsing(r ir.ResourceIR, attrs []string) bool {
 // into an Int64/Float64/Bool attribute makes the framework's SetAttribute fail
 // with a tftypes conversion error ("can't unmarshal tftypes.String into
 // *big.Float"). Dynamic and null attributes store the segment verbatim.
-func importSetStmts(r ir.ResourceIR, attr string, segment ast.Expr) []ast.Stmt {
+func importSetStmts(r ir.ResourceIR, attr string, segment ast.Expr, used map[string]bool) []ast.Stmt {
 	typ := importAttributeType(r, attr)
 	var parseFn string
 	var extraArgs []ast.Expr
@@ -125,7 +147,7 @@ func importSetStmts(r ir.ResourceIR, attr string, segment ast.Expr) []ast.Stmt {
 		return []ast.Stmt{setAttributeStmt(attr, segment)}
 	}
 
-	varName := "import" + naming.SanitizeGoIdentifier(naming.PascalCase(attr))
+	varName := importVarName(attr, used)
 	callArgs := append([]ast.Expr{segment}, extraArgs...)
 	// Parse, error guard, and the SetAttribute append: three statements.
 	stmts := make([]ast.Stmt, 0, 3)
@@ -179,7 +201,9 @@ func importPartsVar(r ir.ResourceIR) string {
 	if name == "" {
 		name = "resource"
 	}
-	return name + "ImportIDParts"
+	// Sanitize so a digit-leading resource name (e.g. "2fa") cannot produce the
+	// invalid local variable "2faImportIDParts" (M-10).
+	return naming.SanitizeGoIdentifier(name) + "ImportIDParts"
 }
 
 // importFormat holds the result of parsing an import ID format string.

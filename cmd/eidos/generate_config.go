@@ -33,7 +33,7 @@ func newGenerateConfigCmd() *cobra.Command {
 OpenAPI spec path. The emitted file is a scaffold that can be edited to add
 custom overrides and rename resources before running eidos generate.`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			return runGenerateConfig(cmd, flags)
+			return recoverCommand(cmd, func() error { return runGenerateConfig(cmd, flags) })
 		},
 	}
 
@@ -51,7 +51,7 @@ custom overrides and rename resources before running eidos generate.`,
 }
 
 func runGenerateConfig(cmd *cobra.Command, flags *generateConfigFlags) error {
-	specBytes, _, err := loadSpecBytes(flags.spec, flags.remote.options(nil))
+	specBytes, _, err := loadSpecBytes(cmd.Context(), flags.spec, flags.remote.options(nil))
 	if err != nil {
 		return err
 	}
@@ -82,11 +82,14 @@ func runGenerateConfig(cmd *cobra.Command, flags *generateConfigFlags) error {
 	usePutAsCreate := !flags.noUsePutAsCreate
 
 	convertDiags, err := writeStarterConfigFromSpec(specBytes, specDisplay, absOutput, strings.TrimSpace(flags.providerName), flags.force, usePutAsCreate)
-	if err != nil {
-		return err
-	}
+	// Print diagnostics before the error check: when the write is refused on
+	// error-severity diagnostics, the reason must be visible even though err is
+	// returned (N-57).
 	for _, d := range convertDiags {
 		printDiagnostic(cmd.ErrOrStderr(), d)
+	}
+	if err != nil {
+		return err
 	}
 
 	return writeStarterConfigHint(cmd.OutOrStdout(), absOutput, specDisplay)
@@ -97,10 +100,29 @@ func writeStarterConfigFromSpec(specData []byte, specPath, absOutput, providerNa
 	if err != nil {
 		return convertDiags, fmt.Errorf("failed to generate starter config: %w", err)
 	}
+	// A starter config is never written from a spec that carries error-severity
+	// diagnostics (duplicate operationIds, unsupported constructs): the emitted
+	// file would be a partial-validity scaffold that misrepresents the IR. This
+	// mirrors the MCP generate-config tool, which gates on resp.Valid (N-57);
+	// callers print convertDiags before returning so the reason stays visible.
+	if convertDiags.HasErrors() {
+		return convertDiags, fmt.Errorf("refusing to write starter config: spec has error-severity diagnostics")
+	}
 
 	cfg.Spec = config.SpecConfig{
 		Path:   specPath,
 		Format: formatFromVersion(version),
+	}
+
+	// Surface config validation warnings (both-schema-and-operation set, env-var
+	// collisions) as diagnostics. cfg.Warnings carries yaml:"-" json:"-" so the
+	// generated file cannot hold them; without this they would be written by
+	// config.Validate and immediately lost (M-16).
+	for _, w := range cfg.Warnings {
+		convertDiags = append(convertDiags, diagnostics.Diagnostic{
+			Severity: diagnostics.Warning,
+			Summary:  w,
+		})
 	}
 
 	data, err := yaml.Marshal(cfg)

@@ -15,6 +15,7 @@ import (
 	"text/template"
 
 	"github.com/signalbreak-labs/eidos/pkg/generator/astgen"
+	"github.com/signalbreak-labs/eidos/pkg/generator/internal/schema"
 )
 
 // ErrDuplicatePath is returned when two generated files target the same
@@ -147,16 +148,49 @@ func (h *Harness) Generate(files []File) error {
 	return nil
 }
 
+// recoverRenderPanic converts a recovered panic value into a render error.
+// A panic whose error wraps schema.ErrInvalidValidatorConstraint is surfaced as
+// an invalid-constraint failure (a spec problem, e.g. multipleOf: 2.5 on an
+// integer or an RE2-invalid patternProperties pattern) rather than a generic
+// "renderer panic" that reads like a generator bug (N-31). Any other panic is
+// wrapped with %w when it is an error (so errors.Is/errors.As work through the
+// render boundary, N-32) and %v otherwise.
+func recoverRenderPanic(rec any) error {
+	if recErr, ok := rec.(error); ok {
+		if errors.Is(recErr, schema.ErrInvalidValidatorConstraint) {
+			return fmt.Errorf("invalid validator constraint: %w", recErr)
+		}
+		return fmt.Errorf("renderer panic: %w", recErr)
+	}
+	return fmt.Errorf("renderer panic: %v", rec)
+}
+
 // renderFileSafely invokes file.Render while recovering from panics so that
 // generator bugs on unexpected IR shapes are surfaced as render errors instead
-// of crashing the caller.
+// of crashing the caller. Panics are classified via recoverRenderPanic.
 func renderFileSafely(file File, w io.Writer) (err error) {
 	defer func() {
 		if rec := recover(); rec != nil {
-			err = fmt.Errorf("renderer panic: %v", rec)
+			err = recoverRenderPanic(rec)
 		}
 	}()
 	return file.Render(w)
+}
+
+// renderEntitySafely runs an entity AST-construction function while recovering
+// from panics, so generator bugs on unexpected IR shapes are surfaced as
+// construction errors instead of crashing the whole generate run. It is the
+// construction-phase sibling of renderFileSafely: every entity file (resource,
+// data source, action, ephemeral, list resource, provider, function) routes its
+// generate*File call through this wrapper and turns the resulting error into an
+// ErrorFile (N-23: FunctionFile was the sole outlier without this contract).
+func renderEntitySafely(build func() (f *ast.File, err error)) (file *ast.File, err error) {
+	defer func() {
+		if rec := recover(); rec != nil {
+			err = recoverRenderPanic(rec)
+		}
+	}()
+	return build()
 }
 
 // templateKey identifies a cached parsed template.

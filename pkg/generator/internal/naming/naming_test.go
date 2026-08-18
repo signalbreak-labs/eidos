@@ -80,6 +80,27 @@ func TestSanitizeGoIdentifier(t *testing.T) {
 	}
 }
 
+func TestGoTypeName(t *testing.T) {
+	tests := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{name: "normal", in: "pet", want: "Pet"},
+		{name: "snake", in: "reboot_server", want: "RebootServer"},
+		{name: "hostile leading digit", in: "2fa", want: "X2fa"},
+		{name: "hostile separators only", in: "---", want: "X"},
+		{name: "empty", in: "", want: "X"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := GoTypeName(tt.in); got != tt.want {
+				t.Errorf("GoTypeName(%q) = %q, want %q", tt.in, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestGoFieldName(t *testing.T) {
 	tests := []struct {
 		name string

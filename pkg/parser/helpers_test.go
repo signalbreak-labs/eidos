@@ -42,12 +42,15 @@ func TestScalarStringMap(t *testing.T) {
 			{Key: &ScalarNode{Value: "a"}, Value: &ScalarNode{Value: "one"}},
 			// A non-string value must be omitted from the map and emit a warning.
 			{Key: &ScalarNode{Value: "b"}, Value: &ScalarNode{Value: 2}},
-			// A non-string key (integer) is skipped by forEachEntry (L-74).
-			{Key: &ScalarNode{Value: 3}, Value: &ScalarNode{Value: "three"}},
+			// A non-string key (integer) is passed through via its raw source
+			// text, matching the v2 keyString behavior (C-1).
+			{Key: &ScalarNode{Value: 3, Raw: "3"}, Value: &ScalarNode{Value: "three"}},
+			// A non-string key with no raw text is skipped (L-74).
+			{Key: &ScalarNode{Value: 4}, Value: &ScalarNode{Value: "four"}},
 		},
 	}
 	got := c.scalarStringMap(m, "test")
-	want := map[string]string{"a": "one"}
+	want := map[string]string{"a": "one", "3": "three"}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("scalarStringMap() = %v, want %v", got, want)
 	}

@@ -71,14 +71,6 @@ type DiscriminatorIR struct {
 	Mapping      map[string]string `json:"mapping"` // discriminator value → schema name
 }
 
-// SourceLocation records the position of a construct in the original OpenAPI
-// spec for diagnostic traceability.
-type SourceLocation struct {
-	File string `json:"file,omitempty"`
-	Line int    `json:"line,omitempty"`
-	Col  int    `json:"col,omitempty"`
-}
-
 // Validate reports a single error describing the structural inconsistencies it
 // checks. It is a partial, top-level sanity check, not an exhaustive validator:
 // it verifies that the mutually exclusive shape fields (Type, Collection, Union)

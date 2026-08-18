@@ -123,6 +123,37 @@ func TestPlanOperation_RequiredQueryParamDisablesWiring(t *testing.T) {
 	}
 }
 
+// TestPlanResourceWiring_QueryParamsNoPathNoStrings asserts the M-13 fix:
+// query/header/cookie parameters render through url.Values / http.Header /
+// strconv — never strings.ReplaceAll, which only path substitution uses. A
+// wired resource whose operations carry parameters but no path placeholders
+// must not set needsStrings (or the generated provider imports strings unused
+// and fails to compile).
+func TestPlanResourceWiring_QueryParamsNoPathNoStrings(t *testing.T) {
+	r := sampleResourceIR()
+	query := []ir.ParamIR{
+		{Name: "tag", In: "query", Required: false, Schema: ir.SchemaIR{Type: ir.TypeString}},
+	}
+	// All four operations are placeholder-free (a singleton-style resource); the
+	// identifier would be carried out-of-band. Every operation still resolves.
+	r.CRUDMapping = ir.CRUDMappingIR{
+		Create: ir.OperationMappingIR{Method: "POST", PathTemplate: "/pets", QueryParams: query, SuccessCodes: []int{201}},
+		Read:   ir.OperationMappingIR{Method: "GET", PathTemplate: "/pet", QueryParams: query, SuccessCodes: []int{200}},
+		Update: &ir.OperationMappingIR{Method: "PUT", PathTemplate: "/pet", QueryParams: query, SuccessCodes: []int{200}},
+		Delete: ir.OperationMappingIR{Method: "DELETE", PathTemplate: "/pet", QueryParams: query, SuccessCodes: []int{204}},
+	}
+	plan := planResourceWiring(r)
+	if !plan.wired {
+		t.Fatalf("plan.wired = false, want true (placeholder-free templates resolve)")
+	}
+	if plan.needsStrings {
+		t.Fatalf("plan.needsStrings = true, want false (query params never reference strings)")
+	}
+	if len(plan.create.queryParams) == 0 || len(plan.read.queryParams) == 0 {
+		t.Fatalf("expected query params to resolve against the schema, create=%d read=%d", len(plan.create.queryParams), len(plan.read.queryParams))
+	}
+}
+
 // cookieParamResourceIR returns a wired resource whose Read operation carries a
 // cookie parameter mapped to a same-named schema attribute, exercising the §2
 // cookie wiring (Cookie header via httpReq.AddCookie).

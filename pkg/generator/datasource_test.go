@@ -236,7 +236,10 @@ func TestDataSourceTypeName(t *testing.T) {
 	}
 }
 
-// TestDataSourceStructName verifies generated data source struct naming.
+// TestDataSourceStructName verifies generated data source struct naming. The
+// empty name is hostile IR: GoTypeName sanitizes it to "X" so the emitted
+// identifier stays a valid Go identifier rather than the bare "DataSource"
+// suffix (M-10).
 func TestDataSourceStructName(t *testing.T) {
 	cases := []struct {
 		name string
@@ -244,7 +247,7 @@ func TestDataSourceStructName(t *testing.T) {
 	}{
 		{"pets", "PetsDataSource"},
 		{"my_cloud", "MyCloudDataSource"},
-		{"", "DataSource"},
+		{"", "XDataSource"},
 	}
 
 	for _, tc := range cases {

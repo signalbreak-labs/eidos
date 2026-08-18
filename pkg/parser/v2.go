@@ -35,7 +35,10 @@ func ConvertV2(root Node, opts ...ConvertOption) (*Spec, []Diagnostic, error) {
 	// (maxNestingDepth) instead. See Limits.MaxDepth for the contract (M-29).
 	if err := budget.Account(estimateNodeMemory(root)); err != nil {
 		diags = append(diags, budgetExceededDiag(err, nodeLoc(root)))
-		return nil, diags, nil
+		// Return a non-nil empty spec (matching ConvertV30/ConvertV31) so
+		// callers that skip the error and dereference the spec do not panic
+		// (C-5).
+		return &Spec{SourceLocation: nodeLoc(root)}, diags, nil
 	}
 
 	spec := &Spec{
@@ -55,9 +58,10 @@ func ConvertV2(root Node, opts ...ConvertOption) (*Spec, []Diagnostic, error) {
 
 	globalProduces := v2StringSlice(findEntryValue(m, "produces"), "produces", &diags)
 	globalConsumes := v2StringSlice(findEntryValue(m, "consumes"), "consumes", &diags)
+	globalSchemes := v2StringSlice(findEntryValue(m, "schemes"), "schemes", &diags)
 
 	if pathsNode := findEntryValue(m, "paths"); pathsNode != nil {
-		paths, d := parsePaths(pathsNode, globalProduces, globalConsumes)
+		paths, d := parsePaths(pathsNode, globalProduces, globalConsumes, globalSchemes)
 		diags = append(diags, d...)
 		spec.Paths = paths
 	}
@@ -171,6 +175,25 @@ func buildServers(root *MapNode) ([]Server, []Diagnostic) {
 	return servers, diags
 }
 
+// sameStringSet reports whether a and b contain the same strings regardless of
+// order. Used to compare scheme lists, where ordering is not semantically
+// meaningful.
+func sameStringSet(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	set := make(map[string]bool, len(a))
+	for _, s := range a {
+		set[s] = true
+	}
+	for _, s := range b {
+		if !set[s] {
+			return false
+		}
+	}
+	return true
+}
+
 func composeServerURL(scheme, host, basePath string) string {
 	if basePath == "" {
 		basePath = "/"
@@ -240,7 +263,7 @@ func parseLicense(node Node) (*License, []Diagnostic) {
 	return l, diags
 }
 
-func parsePaths(node Node, produces, consumes []string) (map[string]*PathItem, []Diagnostic) {
+func parsePaths(node Node, produces, consumes, schemes []string) (map[string]*PathItem, []Diagnostic) {
 	m, ok := node.(*MapNode)
 	if !ok {
 		return nil, []Diagnostic{diagInvalidType("paths", "object", node)}
@@ -258,17 +281,21 @@ func parsePaths(node Node, produces, consumes []string) (map[string]*PathItem, [
 			diags = append(diags, diagInvalidType("paths."+key, "object", entry.Value))
 			continue
 		}
-		item, d := parsePathItem(pathMap, produces, consumes)
+		item, d := parsePathItem(pathMap, produces, consumes, schemes)
 		diags = append(diags, d...)
 		paths[key] = item
 	}
 	return paths, diags
 }
 
-func parsePathItem(node *MapNode, produces, consumes []string) (*PathItem, []Diagnostic) {
+func parsePathItem(node *MapNode, produces, consumes, schemes []string) (*PathItem, []Diagnostic) {
 	item := &PathItem{SourceLocation: nodeLoc(node)}
 	var diags []Diagnostic
 
+	// A path item may be a Reference Object ({"$ref": "..."}) in Swagger 2.0.
+	// Preserve the ref so it is not silently lost; downstream resolution is the
+	// transformer's concern (N-8).
+	item.Ref = v2ScalarString(findEntryValue(node, "$ref"), "path.$ref", &diags)
 	item.Summary = v2ScalarString(findEntryValue(node, "summary"), "path.summary", &diags)
 	item.Description = v2ScalarString(findEntryValue(node, "description"), "path.description", &diags)
 
@@ -283,7 +310,7 @@ func parsePathItem(node *MapNode, produces, consumes []string) (*PathItem, []Dia
 		if opNode == nil {
 			continue
 		}
-		op, d := parseOperation(opNode, produces, consumes)
+		op, d := parseOperation(opNode, produces, consumes, schemes)
 		diags = append(diags, d...)
 		switch method {
 		case "get":
@@ -307,7 +334,7 @@ func parsePathItem(node *MapNode, produces, consumes []string) (*PathItem, []Dia
 	return item, diags
 }
 
-func parseOperation(node Node, produces, consumes []string) (*Operation, []Diagnostic) {
+func parseOperation(node Node, produces, consumes, schemes []string) (*Operation, []Diagnostic) {
 	m, ok := node.(*MapNode)
 	if !ok {
 		return nil, []Diagnostic{diagInvalidType("operation", "object", node)}
@@ -337,6 +364,23 @@ func parseOperation(node Node, produces, consumes []string) (*Operation, []Diagn
 	if opConsumesNode == nil && len(opConsumes) == 0 {
 		opConsumes = consumes
 	}
+
+	// Swagger 2.0 lets an operation override the document-level transport
+	// schemes. The pipeline does not honor per-operation scheme overrides (the
+	// generated client uses the document-level server URL), so a differing
+	// override is surfaced as a warning rather than silently dropped (N-9).
+	opSchemesNode := findEntryValue(m, "schemes")
+	opSchemes := v2StringSlice(opSchemesNode, "operation.schemes", &diags)
+	if opSchemesNode != nil && !sameStringSet(opSchemes, schemes) {
+		loc := nodeLoc(opSchemesNode)
+		diags = append(diags, Diagnostic{
+			Severity:       SeverityWarning,
+			Summary:        "Operation-level schemes not honored",
+			Detail:         fmt.Sprintf("Operation %q declares schemes %v, which differ from the document-level schemes %v. The generated client uses the document-level server URL; per-operation scheme overrides are not supported.", op.OperationID, opSchemes, schemes),
+			SourceLocation: &loc,
+		})
+	}
+	op.Schemes = opSchemes
 
 	if paramsNode := findEntryValue(m, "parameters"); paramsNode != nil {
 		params, d := parseParameters(paramsNode)

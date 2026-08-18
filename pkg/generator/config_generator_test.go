@@ -32,6 +32,76 @@ func TestGenerateConfig_Minimal(t *testing.T) {
 	}
 }
 
+// TestGenerateConfig_GenerateDatasourceRoundTrip verifies M-17: a data source
+// emitted by the resource_overrides.generate_datasource opt-in (marked with the
+// resource's SourceOperation) is re-emitted as generate_datasource +
+// datasource_name on the resource override and excluded from datasource_overrides,
+// so a normalized generator.yaml reproduces the data source instead of silently
+// dropping it (G8).
+func TestGenerateConfig_GenerateDatasourceRoundTrip(t *testing.T) {
+	providerIR := ir.ProviderIR{
+		Name: "pet",
+		Resources: []ir.ResourceIR{
+			{
+				Name:            "pet",
+				SourceOperation: "createPet",
+				CRUDMapping: ir.CRUDMappingIR{
+					Create: ir.OperationMappingIR{Method: "POST", PathTemplate: "/pets", OperationID: "createPet"},
+					Read:   ir.OperationMappingIR{Method: "GET", PathTemplate: "/pets/{id}", OperationID: "getPet"},
+					Delete: ir.OperationMappingIR{Method: "DELETE", PathTemplate: "/pets/{id}", OperationID: "deletePet"},
+				},
+			},
+		},
+		// The data source emitted by generate_datasource carries the resource's
+		// SourceOperation (createPet) as its marker, distinct from the read op id.
+		DataSources: []ir.DataSourceIR{
+			{Name: "pet", SourceOperation: "createPet", ReadMapping: ir.OperationMappingIR{Method: "GET", PathTemplate: "/pets/{id}", OperationID: "getPet"}},
+			{Name: "pet_list", SourceOperation: "listPets", ReadMapping: ir.OperationMappingIR{Method: "GET", PathTemplate: "/pets", OperationID: "listPets"}},
+		},
+	}
+
+	cfg, err := GenerateConfig(providerIR)
+	if err != nil {
+		t.Fatalf("GenerateConfig failed: %v", err)
+	}
+
+	// The resource override carries generate_datasource + datasource_name.
+	found := false
+	for _, ro := range cfg.ResourceOverrides {
+		if ro.Operation != "createPet" {
+			continue
+		}
+		found = true
+		if ro.GenerateDatasource == nil || !*ro.GenerateDatasource {
+			t.Errorf("resource override createPet must re-emit generate_datasource: true")
+		}
+		if ro.DatasourceName != "pet" {
+			t.Errorf("resource override createPet datasource_name = %q, want pet", ro.DatasourceName)
+		}
+	}
+	if !found {
+		t.Fatalf("no resource override for createPet in %+v", cfg.ResourceOverrides)
+	}
+
+	// The resource-derived data source must NOT appear in datasource_overrides
+	// (it is represented by the resource's generate_datasource), while the
+	// unrelated inferred data source still does.
+	for _, do := range cfg.DatasourceOverrides {
+		if do.Operation == "createPet" {
+			t.Errorf("resource-derived data source leaked into datasource_overrides: %+v", do)
+		}
+	}
+	keptList := false
+	for _, do := range cfg.DatasourceOverrides {
+		if do.Operation == "listPets" {
+			keptList = true
+		}
+	}
+	if !keptList {
+		t.Errorf("inferred data source pet_list must remain in datasource_overrides; got %+v", cfg.DatasourceOverrides)
+	}
+}
+
 func TestGenerateConfig_Full(t *testing.T) {
 	providerIR := ir.ProviderIR{
 		Name:        "mycloud",
@@ -75,11 +145,13 @@ func TestGenerateConfig_Full(t *testing.T) {
 					Read:   irDurationPtr(10 * time.Second),
 				},
 				Schema: ir.ObjectSchemaIR{
+					// N-49: the AttributeIR carries the framework flags; the embedded
+					// SchemaIR carries only the shape.
 					Attributes: []ir.AttributeIR{
-						{Name: "id", Schema: ir.SchemaIR{Type: ir.TypeString, Computed: true}},
-						{Name: "name", Schema: ir.SchemaIR{Type: ir.TypeString, Required: true}},
-						{Name: "secret", Schema: ir.SchemaIR{Type: ir.TypeString, Sensitive: true, Computed: true}},
-						{Name: "password", Schema: ir.SchemaIR{Type: ir.TypeString, WriteOnly: true, Sensitive: true}},
+						{Name: "id", Computed: true, Schema: ir.SchemaIR{Type: ir.TypeString}},
+						{Name: "name", Required: true, Schema: ir.SchemaIR{Type: ir.TypeString}},
+						{Name: "secret", Sensitive: true, Computed: true, Schema: ir.SchemaIR{Type: ir.TypeString}},
+						{Name: "password", WriteOnly: true, Sensitive: true, Schema: ir.SchemaIR{Type: ir.TypeString}},
 						{Name: "immutable_tag", Schema: ir.SchemaIR{Type: ir.TypeString}, PlanModifiers: []ir.PlanModifierIR{{Type: ir.PlanModifierTypeRequiresReplace}}},
 					},
 				},
@@ -110,7 +182,8 @@ func TestGenerateConfig_Full(t *testing.T) {
 				RenewMapping:    &ir.OperationMappingIR{Method: "PATCH", PathTemplate: "/credentials/temporary/{id}"},
 				ResultSchema: ir.ObjectSchemaIR{
 					Attributes: []ir.AttributeIR{
-						{Name: "access_key_id", Schema: ir.SchemaIR{Type: ir.TypeString, Sensitive: true}},
+						// N-49: AttributeIR carries Sensitive; SchemaIR carries only the shape.
+						{Name: "access_key_id", Sensitive: true, Schema: ir.SchemaIR{Type: ir.TypeString}},
 					},
 				},
 			},
@@ -144,6 +217,15 @@ func TestGenerateConfig_Full(t *testing.T) {
 				Style:        "offset",
 				PageParam:    "page",
 				PerPageParam: "per_page",
+			},
+			// N-68: GenerateConfig emits a logging: section only when the IR
+			// carries LoggingIR (exact inverse of the transformer's
+			// buildLoggingIR). Setting it here preserves the assertion below
+			// that the canonical config documents the redaction defaults.
+			Logging: &ir.LoggingIR{
+				LogFile:       "trace.log",
+				MaxBodyBytes:  8192,
+				RedactHeaders: []string{"Authorization", "X-API-Key", "Cookie"},
 			},
 		},
 	}
@@ -353,7 +435,8 @@ func TestMarshalConfig(t *testing.T) {
 		"auth:",
 		"resource_overrides:",
 		"global_timeouts:",
-		"logging:",
+		// No logging section: the IR carries no LoggingIR, so the canonical
+		// config must not declare one (N-68 — it would not round-trip).
 		"generate_terraform_tests:",
 		"name: mycloud",
 		"version: 1.0.0",
@@ -462,22 +545,80 @@ func TestConvertSecurityScheme_UnknownFallback(t *testing.T) {
 	}
 }
 
-func TestDefaultLogging(t *testing.T) {
-	cfg := defaultLogging()
+// TestConvertLogging covers the N-68 reverse mapping: nil IR -> nil config (a
+// run without logging declares no logging section), and a LoggingIR with a log
+// file inverts back to Enabled+FilePath so the emitted section round-trips.
+func TestConvertLogging(t *testing.T) {
+	if got := convertLogging(nil); got != nil {
+		t.Fatalf("convertLogging(nil) = %+v, want nil", got)
+	}
+
+	l := &ir.LoggingIR{
+		LogFile:               "trace.log",
+		CaptureRequestHeaders: true,
+		CaptureResponseBody:   true,
+		MaxBodyBytes:          8192,
+		RedactHeaders:         []string{"Authorization", "X-Api-Key"},
+	}
+	cfg := convertLogging(l)
 	if cfg == nil {
-		t.Fatal("expected non-nil logging config")
+		t.Fatal("convertLogging(non-nil) returned nil")
 	}
-	if cfg.MaxBodyBytes != 4096 {
-		t.Errorf("max_body_bytes = %d, want 4096", cfg.MaxBodyBytes)
+	if !cfg.Enabled {
+		t.Error("Enabled = false, want true (derived from non-empty LogFile)")
 	}
-	wantRedact := []string{"Authorization", "X-API-Key", "Cookie"}
-	if len(cfg.RedactHeaders) != len(wantRedact) {
-		t.Errorf("redact_headers = %v, want %v", cfg.RedactHeaders, wantRedact)
+	if cfg.FilePath != "trace.log" {
+		t.Errorf("FilePath = %q, want trace.log", cfg.FilePath)
 	}
-	for i, h := range wantRedact {
-		if cfg.RedactHeaders[i] != h {
-			t.Errorf("redact_headers[%d] = %q, want %q", i, cfg.RedactHeaders[i], h)
-		}
+	if !cfg.CaptureRequestHeaders || !cfg.CaptureResponseBody {
+		t.Errorf("capture flags not copied: %+v", cfg)
+	}
+	if cfg.MaxBodyBytes != 8192 {
+		t.Errorf("MaxBodyBytes = %d, want 8192", cfg.MaxBodyBytes)
+	}
+	if len(cfg.RedactHeaders) != 2 || cfg.RedactHeaders[0] != "Authorization" {
+		t.Errorf("RedactHeaders = %v", cfg.RedactHeaders)
+	}
+}
+
+// TestGenerateConfig_RoundTripLogging asserts the canonical config and the IR
+// agree on logging: an IR without logging emits no logging section, and one
+// with logging emits a section that round-trips back to the same LoggingIR.
+func TestGenerateConfig_RoundTripLogging(t *testing.T) {
+	// No logging configured -> no logging section.
+	noLog := ir.ProviderIR{
+		Name: "mycloud",
+		ClientIR: ir.ClientIR{
+			BaseURLTemplate: "https://api.mycloud.io/v1",
+		},
+	}
+	cfg, err := GenerateConfig(noLog)
+	if err != nil {
+		t.Fatalf("GenerateConfig: %v", err)
+	}
+	if cfg.Logging != nil {
+		t.Errorf("Logging = %+v, want nil for an IR without logging", cfg.Logging)
+	}
+
+	// Logging configured -> section emits and round-trips.
+	withLog := noLog
+	withLog.ClientIR.Logging = &ir.LoggingIR{
+		LogFile:       "trace.log",
+		MaxBodyBytes:  8192,
+		RedactHeaders: []string{"Cookie"},
+	}
+	cfg, err = GenerateConfig(withLog)
+	if err != nil {
+		t.Fatalf("GenerateConfig: %v", err)
+	}
+	if cfg.Logging == nil {
+		t.Fatal("Logging = nil, want the IR's logging section")
+	}
+	if cfg.Logging.FilePath != "trace.log" || !cfg.Logging.Enabled {
+		t.Errorf("round-tripped logging = %+v, want FilePath trace.log + Enabled", cfg.Logging)
+	}
+	if cfg.Logging.MaxBodyBytes != 8192 {
+		t.Errorf("MaxBodyBytes = %d, want 8192", cfg.Logging.MaxBodyBytes)
 	}
 }
 
@@ -798,7 +939,7 @@ func TestHasRequiresReplace_ExactMatch(t *testing.T) {
 }
 
 func TestConvertDatasources_Empty(t *testing.T) {
-	got := convertDatasources(nil)
+	got := convertDatasources(ir.ProviderIR{})
 	if got == nil {
 		t.Fatal("expected non-nil empty slice")
 	}
@@ -820,7 +961,7 @@ func TestConvertDatasources_UsesSourceOperation(t *testing.T) {
 		{Name: "pet", SourceOperation: "listPets"},
 		{Name: "order", SourceOperation: ""},
 	}
-	got := convertDatasources(ds)
+	got := convertDatasources(ir.ProviderIR{DataSources: ds})
 	if len(got) != 2 {
 		t.Fatalf("len = %d, want 2", len(got))
 	}

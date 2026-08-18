@@ -174,7 +174,7 @@ func HandleGenerateConfig(ctx context.Context, _ *mcp.CallToolRequest, args Gene
 		}
 	}()
 
-	specBytes, err := normalizeSpec(args.Spec)
+	specBytes, err := normalizeSpec(ctx, args.Spec)
 	if err != nil {
 		res, out = resultFromError(err)
 		return res, out, nil
@@ -269,7 +269,7 @@ func setValidateContextForTest(fn func(context.Context, []byte) api.ValidateResp
 	validateContextMu.Unlock()
 }
 
-func normalizeSpec(spec any) ([]byte, error) {
+func normalizeSpec(ctx context.Context, spec any) ([]byte, error) {
 	if spec == nil {
 		return nil, fmt.Errorf("spec is required")
 	}
@@ -280,7 +280,7 @@ func normalizeSpec(spec any) ([]byte, error) {
 		// accepts: a local file path, a file:// URL, or an http(s):// URL. Try
 		// to load it as a reference first; if it is not one, treat it as inline
 		// content so callers that pass the spec body still work.
-		if b, err := loadSpecRef(v); err == nil {
+		if b, err := loadSpecRef(ctx, v); err == nil {
 			specBytes = b
 		} else if errors.Is(err, errNotASourceRef) {
 			specBytes = []byte(v)
@@ -315,11 +315,11 @@ func normalizeSpec(spec any) ([]byte, error) {
 // body inline keep working. An empty config is returned empty (a no-op for
 // mergeConfigIntoSpec). This lets an LLM pass `config` by path or file:// URL
 // instead of only inline contents (M-76).
-func normalizeConfig(configYAML string) (string, error) {
+func normalizeConfig(ctx context.Context, configYAML string) (string, error) {
 	if strings.TrimSpace(configYAML) == "" {
 		return "", nil
 	}
-	if b, err := loadConfigRef(configYAML); err == nil {
+	if b, err := loadConfigRef(ctx, configYAML); err == nil {
 		return string(b), nil
 	} else if !errors.Is(err, errNotASourceRef) {
 		return "", err

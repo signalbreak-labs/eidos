@@ -26,7 +26,7 @@ import (
 func MapSecuritySchemeToProviderConfig(scheme ir.SecuritySchemeIR, allSchemes []ir.SecuritySchemeIR) ([]ir.AttributeIR, error) {
 	switch scheme.Type {
 	case ir.SecuritySchemeAPIKey:
-		return mapAPIKey(scheme), nil
+		return mapAPIKey(scheme, allSchemes), nil
 	case ir.SecuritySchemeHTTP:
 		return mapHTTP(scheme, allSchemes)
 	case ir.SecuritySchemeOAuth2:
@@ -38,7 +38,7 @@ func MapSecuritySchemeToProviderConfig(scheme ir.SecuritySchemeIR, allSchemes []
 	}
 }
 
-func mapAPIKey(scheme ir.SecuritySchemeIR) []ir.AttributeIR {
+func mapAPIKey(scheme ir.SecuritySchemeIR, allSchemes []ir.SecuritySchemeIR) []ir.AttributeIR {
 	loc := scheme.In
 	if loc == "" {
 		loc = "header"
@@ -55,13 +55,44 @@ func mapAPIKey(scheme ir.SecuritySchemeIR) []ir.AttributeIR {
 
 	return []ir.AttributeIR{
 		{
-			Name:        "api_key",
+			Name:        APIKeyAttributeName(scheme, allSchemes),
 			Description: desc,
-			Schema:      ir.SchemaIR{Type: ir.TypeString, Sensitive: true, Optional: true},
-			Optional:    true,
-			Sensitive:   true,
+			// N-49: AttributeIR is the single source of truth for the Optional/
+			// Sensitive flags; the embedded SchemaIR carries only the type.
+			Schema:    ir.SchemaIR{Type: ir.TypeString},
+			Optional:  true,
+			Sensitive: true,
 		},
 	}
+}
+
+// APIKeyAttributeName returns the provider-config attribute name for an API key
+// security scheme. A spec that declares a single apiKey scheme maps to the
+// canonical "api_key"; a spec that declares several apiKey schemes (e.g. one in
+// a header and one in a query) qualifies each attribute with the scheme name so
+// practitioners can set distinct keys and per-operation client.WithSchemes
+// selection stays meaningful instead of collapsing every apiKey scheme onto one
+// attribute (N-13).
+func APIKeyAttributeName(scheme ir.SecuritySchemeIR, allSchemes []ir.SecuritySchemeIR) string {
+	if apiKeySchemeCount(allSchemes) <= 1 {
+		return "api_key"
+	}
+	name := strings.TrimSpace(scheme.Name)
+	if name == "" {
+		return "api_key"
+	}
+	return SanitizeAttributeName(name)
+}
+
+// apiKeySchemeCount counts the API key schemes among allSchemes.
+func apiKeySchemeCount(schemes []ir.SecuritySchemeIR) int {
+	n := 0
+	for _, s := range schemes {
+		if s.Type == ir.SecuritySchemeAPIKey {
+			n++
+		}
+	}
+	return n
 }
 
 func mapHTTP(scheme ir.SecuritySchemeIR, allSchemes []ir.SecuritySchemeIR) ([]ir.AttributeIR, error) {
@@ -195,8 +226,10 @@ func stringAttr(name, description string) ir.AttributeIR {
 	return ir.AttributeIR{
 		Name:        name,
 		Description: description,
-		Schema:      ir.SchemaIR{Type: ir.TypeString, Optional: true},
-		Optional:    true,
+		// N-49: AttributeIR carries the Optional flag; the embedded SchemaIR
+		// carries only the type.
+		Schema:   ir.SchemaIR{Type: ir.TypeString},
+		Optional: true,
 	}
 }
 
@@ -204,9 +237,11 @@ func sensitiveStringAttr(name, description string) ir.AttributeIR {
 	return ir.AttributeIR{
 		Name:        name,
 		Description: description,
-		Schema:      ir.SchemaIR{Type: ir.TypeString, Sensitive: true, Optional: true},
-		Optional:    true,
-		Sensitive:   true,
+		// N-49: AttributeIR carries the Optional/Sensitive flags; the embedded
+		// SchemaIR carries only the type.
+		Schema:    ir.SchemaIR{Type: ir.TypeString},
+		Optional:  true,
+		Sensitive: true,
 	}
 }
 

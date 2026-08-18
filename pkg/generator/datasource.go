@@ -28,19 +28,9 @@ var ErrUnknownDatasourceBlockNesting = errors.New("unknown data source block nes
 // package, used when the data source Read is wired to the API client.
 func DataSourceFile(ds ir.DataSourceIR, clientImport string) File {
 	path := filepath.Join("internal", "provider", fmt.Sprintf("data_source_%s.go", naming.SnakeCase(ds.Name)))
-	file, err := func() (f *ast.File, err error) {
-		defer func() {
-			if rec := recover(); rec != nil {
-				if recErr, ok := rec.(error); ok {
-					err = fmt.Errorf("renderer panic: %w", recErr)
-				} else {
-					err = fmt.Errorf("renderer panic: %v", rec)
-				}
-			}
-		}()
-		f = generateDataSourceFile(ds, clientImport)
-		return
-	}()
+	file, err := renderEntitySafely(func() (*ast.File, error) {
+		return generateDataSourceFile(ds, clientImport), nil
+	})
 	if err != nil {
 		return ErrorFile(path, err)
 	}
@@ -604,6 +594,10 @@ func datasourceBlockExpr(block ir.BlockIR, parentPath string) ast.Expr {
 // schema attribute. Data source attributes default to Computed when no
 // Required/Optional/Computed flag is set.
 func datasourceAttributeValues(attr ir.AttributeIR, extra []ast.Expr) []ast.Expr {
+	// Resolve a Required+Computed conflict before emitting flags so the render
+	// never produces a framework-invalid schema (N-25).
+	attr = normalizeAttributeFlags(attr)
+
 	elems := []ast.Expr{}
 
 	if attr.MarkdownDescription != "" {

@@ -31,19 +31,9 @@ const listResourceSetBlockFallbackComment = "Set-nested blocks are not supported
 // from the API instead of the honest scaffold diagnostic.
 func ListResourceFile(lr ir.ListResourceIR, clientImport string) File {
 	path := filepath.Join("internal", "provider", fmt.Sprintf("list_%s.go", naming.SnakeCase(lr.Name)))
-	file, err := func() (f *ast.File, err error) {
-		defer func() {
-			if rec := recover(); rec != nil {
-				if recErr, ok := rec.(error); ok {
-					err = fmt.Errorf("renderer panic: %w", recErr)
-				} else {
-					err = fmt.Errorf("renderer panic: %v", rec)
-				}
-			}
-		}()
-		f = generateListResourceFile(lr, clientImport)
-		return
-	}()
+	file, err := renderEntitySafely(func() (*ast.File, error) {
+		return generateListResourceFile(lr, clientImport), nil
+	})
 	if err != nil {
 		return ErrorFile(path, err)
 	}
@@ -348,11 +338,24 @@ func generateListResourceFile(lr ir.ListResourceIR, clientImport string) *ast.Fi
 }
 
 // isSetFallbackAttribute reports whether the attribute's schema is a Set
-// collection that must be emitted as a List attribute. The warning comment is
-// added by the caller (generateListResourceFile) so it appears near the config
-// schema method rather than inside the map literal.
+// collection that actually renders as a List attribute, so the fallback warning
+// comment is only emitted when it is true. It mirrors the render decision in
+// listResourceCollectionAttributeExpr: a Set whose element is dynamic/null or
+// contains a nested dynamic renders as a DynamicAttribute instead of a List, and
+// labeling that Dynamic as a "Set falls back to List" would make the generated
+// docs untrustworthy for exactly the edge cases a reader would consult the
+// comment about (N-28). The warning comment is added by the caller
+// (generateListResourceFile) so it appears near the config schema method rather
+// than inside the map literal.
 func isSetFallbackAttribute(attr ir.AttributeIR) bool {
-	return attr.Schema.Collection != nil && attr.Schema.Collection.Kind == ir.Set
+	if attr.Schema.Collection == nil || attr.Schema.Collection.Kind != ir.Set {
+		return false
+	}
+	elem := schema.DynamicUnionElement(attr.Schema.Collection.ElementType)
+	if elem.Type == ir.TypeDynamic || elem.Type == ir.TypeNull || schema.ContainsNestedDynamic(elem) {
+		return false
+	}
+	return schema.IsPrimitiveSchema(elem) || schema.IsObjectLike(elem)
 }
 
 // listMethodDecl returns the List method declaration for a list resource: the

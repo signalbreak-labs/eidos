@@ -127,6 +127,136 @@ func TestObjectSchemaFromOperationDedupCollisions(t *testing.T) {
 	}
 }
 
+// TestObjectSchemaFromOperationArrayQueryParamIsList locks in N-14: an array
+// query parameter on an action maps to a List of its element type (so the
+// generated provider serializes one repeated query value per element), matching
+// how data sources model the same parameter, instead of being silently
+// stringified by mapParamType's array default.
+func TestObjectSchemaFromOperationArrayQueryParamIsList(t *testing.T) {
+	op := Operation{
+		OperationID: "list-ships",
+		Parameters: []Parameter{
+			{Name: "tags", In: "query", Type: "array", ItemsType: "string"},
+			{Name: "count", In: "query", Type: "integer"},
+		},
+	}
+	schema := ObjectSchemaFromOperation(op)
+	var tags *ir.AttributeIR
+	for i := range schema.Attributes {
+		if schema.Attributes[i].Name == "tags" {
+			tags = &schema.Attributes[i]
+		}
+	}
+	if tags == nil {
+		t.Fatalf("expected a tags attribute, got %+v", schema.Attributes)
+	}
+	if tags.Schema.Collection == nil || tags.Schema.Collection.Kind != ir.List {
+		t.Fatalf("expected tags List collection, got %+v", tags.Schema)
+	}
+	if got := tags.Schema.Collection.ElementType.Type; got != ir.TypeString {
+		t.Errorf("element type = %q, want string", got)
+	}
+}
+
+// TestObjectSchemaFromOperationArrayQueryParamWarnsNonScalar locks in the
+// fail-loud half of N-14: an array query parameter with non-scalar items is
+// still modeled as a List of strings, but surfaces a Warning (mirroring
+// paramSchemaIR) rather than being dropped or downgraded silently.
+func TestObjectSchemaFromOperationArrayQueryParamWarnsNonScalar(t *testing.T) {
+	op := Operation{
+		OperationID: "list-ships",
+		Parameters: []Parameter{
+			{Name: "filters", In: "query", Type: "array", ItemsType: "object"},
+		},
+	}
+	var diags diagnostics.Diagnostics
+	ObjectSchemaFromOperationWithDiagnostics(op, &diags)
+	if !hasWarning(diags, "non-scalar items") {
+		t.Errorf("expected a non-scalar-items warning, got diags=%v", diags)
+	}
+}
+
+// TestActionRequestBody_UnionDegradesToDynamicBody locks in the N-15 union
+// branch: a request body that declares a oneOf/anyOf union (whether or not it
+// also declares type: object) yields a single Dynamic `body` attribute plus a
+// fail-loud Warning, never zero body attributes.
+func TestActionRequestBody_UnionDegradesToDynamicBody(t *testing.T) {
+	op := Operation{
+		OperationID: "create-thing",
+		RequestSchema: &SchemaSpec{
+			Type: "object", // union of objects declared alongside type: object
+			OneOf: []SchemaSpec{
+				{Type: "object", RefName: "Cat", Properties: map[string]SchemaSpec{"meow": {Type: "string"}}},
+				{Type: "object", RefName: "Dog", Properties: map[string]SchemaSpec{"bark": {Type: "string"}}},
+			},
+		},
+	}
+	var diags diagnostics.Diagnostics
+	schema := ObjectSchemaFromOperationWithDiagnostics(op, &diags)
+	if len(schema.Attributes) != 1 || schema.Attributes[0].Name != "body" {
+		t.Fatalf("expected a single body attribute, got %+v", schema.Attributes)
+	}
+	if got := schema.Attributes[0].Schema.Type; got != ir.TypeDynamic {
+		t.Errorf("body schema type = %q, want dynamic", got)
+	}
+	if !hasWarning(diags, "union request body") {
+		t.Errorf("expected a union-degraded warning, got diags=%v", diags)
+	}
+}
+
+// TestActionRequestBody_EmptyObjectDegradesToDynamicBody locks in the N-15
+// empty-object branch: `type: object` with no declared properties yields a
+// single Dynamic `body` attribute plus a fail-loud Warning instead of silently
+// producing zero body attributes.
+func TestActionRequestBody_EmptyObjectDegradesToDynamicBody(t *testing.T) {
+	op := Operation{
+		OperationID: "create-thing",
+		RequestSchema: &SchemaSpec{
+			Type: "object",
+		},
+	}
+	var diags diagnostics.Diagnostics
+	schema := ObjectSchemaFromOperationWithDiagnostics(op, &diags)
+	if len(schema.Attributes) != 1 || schema.Attributes[0].Name != "body" {
+		t.Fatalf("expected a single body attribute, got %+v", schema.Attributes)
+	}
+	if !hasWarning(diags, "empty object request body") {
+		t.Errorf("expected an empty-object warning, got diags=%v", diags)
+	}
+}
+
+// TestActionRequestBody_BodyBodyCollisionWarns locks in the N-15 collision
+// branch: two request-body properties whose sanitized names collide (fooBar and
+// foo_bar) keep exactly one configurable attribute but surface a Warning
+// instead of being dropped silently.
+func TestActionRequestBody_BodyBodyCollisionWarns(t *testing.T) {
+	op := Operation{
+		OperationID: "create-thing",
+		RequestSchema: &SchemaSpec{
+			Type:     "object",
+			Required: []string{"fooBar"},
+			Properties: map[string]SchemaSpec{
+				"fooBar":  {Type: "string"},
+				"foo_bar": {Type: "integer"},
+			},
+		},
+	}
+	var diags diagnostics.Diagnostics
+	schema := ObjectSchemaFromOperationWithDiagnostics(op, &diags)
+	count := 0
+	for _, a := range schema.Attributes {
+		if a.Name == "foo_bar" {
+			count++
+		}
+	}
+	if count != 1 {
+		t.Errorf("expected exactly one foo_bar attribute after body-body dedup, got %d: %+v", count, schema.Attributes)
+	}
+	if !hasWarning(diags, "dropped on name collision") {
+		t.Errorf("expected a body-collision warning, got diags=%v", diags)
+	}
+}
+
 // TestActionRequestBody_UniqueItemsIsSet locks in A1: an action request body
 // whose property is an array with uniqueItems: true maps to a Set collection
 // attribute (not Dynamic, and not a List) via the shallow schemaIRFromSpec

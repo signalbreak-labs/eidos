@@ -126,10 +126,11 @@ func TestInferSensitiveAttributes_MarksAndPreserves(t *testing.T) {
 			t.Errorf("attr %q Sensitive = %v, want %v", a.Name, a.Sensitive, got)
 		}
 	}
-	// The schema flag must mirror the attribute flag for the password attr.
+	// N-49: the AttributeIR is the single source of truth for Sensitive; the
+	// embedded SchemaIR no longer mirrors it.
 	pw := obj.Attributes[0]
-	if !pw.Sensitive || !pw.Schema.Sensitive {
-		t.Errorf("password attr and schema must both be Sensitive, got attr=%v schema=%v", pw.Sensitive, pw.Schema.Sensitive)
+	if !pw.Sensitive {
+		t.Errorf("password attr Sensitive = false, want true")
 	}
 }
 

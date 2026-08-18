@@ -530,6 +530,88 @@ func TestListResourceFile_SetFallback(t *testing.T) {
 	}
 }
 
+// TestListResourceFile_SetFallbackOnlyWhenRendersAsList locks in the N-28 gate:
+// the "Set collections are not supported by list/schema" warning is emitted only
+// for Set attributes that actually render as a List. A Set whose element is
+// dynamic, null, or contains a nested dynamic renders as a DynamicAttribute
+// instead (mirrored by isSetFallbackAttribute), and labeling that Dynamic as a
+// "Set falls back to List" would make the generated docs untrustworthy for
+// exactly the edge cases a reader would consult the comment about.
+func TestListResourceFile_SetFallbackOnlyWhenRendersAsList(t *testing.T) {
+	collection := func(elem ir.SchemaIR) *ir.CollectionType {
+		return &ir.CollectionType{Kind: ir.Set, ElementType: elem}
+	}
+	attr := func(name string, schema ir.SchemaIR) ir.AttributeIR {
+		return ir.AttributeIR{Name: name, Optional: true, Schema: schema}
+	}
+
+	cases := []struct {
+		name string
+		elem ir.SchemaIR
+		want bool
+	}{
+		{
+			name: "primitive element renders as List",
+			elem: ir.SchemaIR{Type: ir.TypeString},
+			want: true,
+		},
+		{
+			name: "object element renders as List",
+			elem: ir.SchemaIR{
+				Attributes: []ir.AttributeIR{
+					{Name: "name", Optional: true, Schema: ir.SchemaIR{Type: ir.TypeString}},
+				},
+			},
+			want: true,
+		},
+		{
+			name: "dynamic element renders as DynamicAttribute",
+			elem: ir.SchemaIR{Type: ir.TypeDynamic},
+			want: false,
+		},
+		{
+			name: "null element renders as DynamicAttribute",
+			elem: ir.SchemaIR{Type: ir.TypeNull},
+			want: false,
+		},
+		{
+			name: "element containing nested dynamic renders as DynamicAttribute",
+			elem: ir.SchemaIR{
+				Attributes: []ir.AttributeIR{
+					{Name: "payload", Optional: true, Schema: ir.SchemaIR{Type: ir.TypeDynamic}},
+				},
+			},
+			want: false,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			lr := ir.ListResourceIR{
+				Name: "sets",
+				ConfigSchema: ir.ObjectSchemaIR{
+					Attributes: []ir.AttributeIR{attr("tags", ir.SchemaIR{Collection: collection(tc.elem)})},
+				},
+			}
+
+			file := ListResourceFile(lr, "")
+			var buf bytes.Buffer
+			if err := file.Render(&buf); err != nil {
+				t.Fatalf("Render() error = %v", err)
+			}
+			got := buf.String()
+
+			commentCount := len(regexp.MustCompile(`// Set collections are not supported by list/schema; emitted as a List attribute\.`).FindAllString(got, -1))
+			if tc.want && commentCount != 1 {
+				t.Errorf("Set fallback comment count = %d, want 1 (attribute renders as List)\ncontent:\n%s", commentCount, got)
+			}
+			if !tc.want && commentCount != 0 {
+				t.Errorf("Set fallback comment count = %d, want 0 (attribute renders as DynamicAttribute)\ncontent:\n%s", commentCount, got)
+			}
+		})
+	}
+}
+
 // TestListResourceFile_Deprecation verifies that DeprecationMessage and the
 // Deprecated shorthand are emitted in list resource schema attributes.
 func TestListResourceFile_Deprecation(t *testing.T) {

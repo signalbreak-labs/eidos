@@ -8,7 +8,9 @@
 package generator
 
 import (
+	"encoding/json"
 	"fmt"
+	"os"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -52,7 +54,18 @@ type Options struct {
 // Run executes the generator for the supplied ProviderIR. In ModeRecord it
 // returns the deterministic list of {path, reason} entries that would be
 // written without creating any files. In ModeWrite it emits the files to disk
-// and returns the same planned file list on success.
+// and returns the list of entries actually written, built from the files
+// passed to Harness.Generate rather than re-running the record-mode collector
+// (N-30): the returned plan matches disk by construction, so a future optional
+// file added to FilesForProviderIR but not the collector is surfaced as a
+// written file (with an empty reason) instead of being silently missing.
+//
+// In ModeWrite Run also maintains an internal bookkeeping manifest
+// (.eidos-generated.json) at the output root and, when opts.Force is set,
+// deletes the files a previous write-mode run recorded that the current run no
+// longer produces (N-70). The manifest is deliberately excluded from the
+// returned plan and from record-mode collection: it is generator state, not a
+// provider deliverable.
 func Run(provider *ir.ProviderIR, opts Options) ([]FileEntry, error) {
 	switch opts.Mode {
 	case ModeRecord:
@@ -73,10 +86,68 @@ func Run(provider *ir.ProviderIR, opts Options) ([]FileEntry, error) {
 		if err := h.Generate(files); err != nil {
 			return nil, fmt.Errorf("write generated files: %w", err)
 		}
-		return CollectFromProviderIR(provider, opts.CollectOptions), nil
+		// N-70: with --force, delete the files a previous write-mode run generated
+		// that this run no longer produces, then refresh the internal bookkeeping
+		// manifest. The manifest records only paths eidos itself wrote, so stale
+		// cleanup can never remove a hand-written file, and it is scoped per run
+		// kind (full vs --only-build) so an --only-build refresh cannot delete the
+		// provider code a full run produced (and vice versa). The manifest is
+		// write-mode bookkeeping, not a provider deliverable, so it is deliberately
+		// absent from both the returned plan and record-mode collection.
+		currentMode := generationModeFull
+		if opts.OnlyBuild {
+			currentMode = generationModeOnlyBuild
+		}
+		planned := make([]string, 0, len(files))
+		for _, f := range files {
+			clean, err := safeRelPath(f.Path)
+			if err != nil {
+				return nil, err
+			}
+			planned = append(planned, clean)
+		}
+		sort.Strings(planned)
+		prev, err := readGenerationManifest(opts.OutputDir)
+		if err != nil {
+			return nil, err
+		}
+		if _, err := removeStaleGeneratedFiles(opts.OutputDir, prev, planned, currentMode, opts.Force); err != nil {
+			return nil, err
+		}
+		if err := writeGenerationManifest(opts.OutputDir, &generationManifest{Mode: currentMode, Generated: planned}); err != nil {
+			return nil, fmt.Errorf("write %s: %w", manifestName, err)
+		}
+		// Build the returned plan from the files actually written. Reasons come
+		// from the record-mode plan so they stay identical to dry-run output
+		// when record and write modes are in lockstep; a file that FilesForProviderIR
+		// emits but the collector does not name is still returned (with an empty
+		// reason), making any future drift visible instead of silently dropping
+		// the file from the write-mode plan (N-30).
+		return entriesFromFiles(files, CollectFromProviderIR(provider, opts.CollectOptions)), nil
 	default:
 		return nil, fmt.Errorf("unknown generator mode %d", opts.Mode)
 	}
+}
+
+// entriesFromFiles builds the sorted FileEntry plan for the files actually
+// written, looking up each file's reason from the record-mode plan. A written
+// file with no matching plan entry keeps its path with an empty reason rather
+// than being dropped, so a drift between FilesForProviderIR and the collector
+// is visible in the returned plan instead of silently producing a plan that
+// does not match disk (N-30).
+func entriesFromFiles(files []File, plan []FileEntry) []FileEntry {
+	reasonByPath := make(map[string]string, len(plan))
+	for _, e := range plan {
+		reasonByPath[e.Path] = e.Reason
+	}
+	entries := make([]FileEntry, 0, len(files))
+	for _, f := range files {
+		entries = append(entries, FileEntry{Path: f.Path, Reason: reasonByPath[f.Path]})
+	}
+	sort.SliceStable(entries, func(i, j int) bool {
+		return entries[i].Path < entries[j].Path
+	})
+	return entries
 }
 
 // Recorder collects planned file entries without writing them to disk. It is
@@ -105,13 +176,6 @@ func (r *Recorder) Record(path, reason string) {
 	}
 	r.seen[path] = struct{}{}
 	r.entries = append(r.entries, FileEntry{Path: path, Reason: reason})
-}
-
-// Recordf is a convenience method that formats a reason string and records the
-// entry. It is provided for future generation passes that build reasons
-// dynamically and currently has no non-test callers.
-func (r *Recorder) Recordf(filePath, reasonFormat string, args ...any) {
-	r.Record(filePath, fmt.Sprintf(reasonFormat, args...))
 }
 
 // Entries returns the collected file entries in the order they were recorded.
@@ -548,4 +612,119 @@ func displayName(name, fullName string) string {
 		return name
 	}
 	return "unnamed"
+}
+
+// manifestName is the write-mode bookkeeping file at the output root. It lists
+// which relative paths the most recent write-mode run generated so a subsequent
+// forced run can delete the files that generation no longer produces (N-70)
+// without ever touching a file eidos did not write.
+const manifestName = ".eidos-generated.json"
+
+// generation mode labels stored in the manifest. Stale-file cleanup is scoped
+// per mode so a full run never deletes --only-build scaffolding and an
+// --only-build run never deletes provider code: the two workflows write
+// disjoint file sets on purpose (M-78).
+const (
+	generationModeFull      = "full"
+	generationModeOnlyBuild = "only-build"
+)
+
+// generationManifest is the on-disk shape of .eidos-generated.json.
+type generationManifest struct {
+	Mode      string   `json:"mode"`
+	Generated []string `json:"generated"`
+}
+
+// readGenerationManifest loads the write-mode bookkeeping file from dir. A
+// missing file yields a nil manifest (nothing to clean up); a present but
+// corrupt file fails loud rather than silently skipping the cleanup the caller
+// asked for with --force.
+func readGenerationManifest(dir string) (*generationManifest, error) {
+	// gosec: reading the bookkeeping manifest eidos itself wrote under the
+	// caller-supplied output dir is the intended contract of --force cleanup.
+	data, err := os.ReadFile(filepath.Join(dir, manifestName)) //nolint:gosec // manifest path is the output dir eidos manages
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	var m generationManifest
+	if err := json.Unmarshal(data, &m); err != nil {
+		return nil, fmt.Errorf("parse %s: %w", manifestName, err)
+	}
+	return &m, nil
+}
+
+// writeGenerationManifest persists the manifest atomically (write to a temp
+// file, then rename) so an interrupted write cannot leave a truncated manifest
+// that later fails readGenerationManifest.
+func writeGenerationManifest(dir string, m *generationManifest) error {
+	data, err := json.MarshalIndent(m, "", "  ")
+	if err != nil {
+		return err
+	}
+	data = append(data, '\n')
+	tmp := filepath.Join(dir, manifestName+".tmp")
+	if err := os.WriteFile(tmp, data, 0o640); err != nil { //nolint:gosec // generated bookkeeping file permissions are intentional.
+		return err
+	}
+	return os.Rename(tmp, filepath.Join(dir, manifestName))
+}
+
+// removeStaleGeneratedFiles deletes the paths the previous write-mode run
+// recorded in prev that are not in planned, gated on force and on the previous
+// run's mode matching currentMode. It only ever removes files eidos itself
+// wrote (per the manifest), so hand-written files are untouched even when they
+// sit at a path the generator would own. Empty parent directories are pruned up
+// to (but never including) the output root. It returns the removed paths.
+func removeStaleGeneratedFiles(dir string, prev *generationManifest, planned []string, currentMode string, force bool) ([]string, error) {
+	if !force || prev == nil || prev.Mode != currentMode {
+		return nil, nil
+	}
+	plannedSet := make(map[string]struct{}, len(planned))
+	for _, p := range planned {
+		plannedSet[p] = struct{}{}
+	}
+	var removed []string
+	for _, p := range prev.Generated {
+		if _, ok := plannedSet[p]; ok {
+			continue
+		}
+		if err := os.Remove(filepath.Join(dir, filepath.FromSlash(p))); err != nil {
+			if os.IsNotExist(err) {
+				// The file is already gone (user cleanup, a partial earlier run);
+				// there is nothing to remove.
+				continue
+			}
+			return removed, fmt.Errorf("remove stale generated file %q: %w", p, err)
+		}
+		removed = append(removed, p)
+	}
+	if len(removed) > 0 {
+		pruneEmptyDirs(dir, removed)
+	}
+	return removed, nil
+}
+
+// pruneEmptyDirs removes directories that became empty as a result of removing
+// stale generated files, walking up from each removed path and stopping at the
+// output root (".", which is never removed). A directory that is non-empty (a
+// hand-written file, a third-party artifact, another stale file's sibling) is
+// left alone, and because a non-empty directory's ancestors cannot be empty
+// either, the walk-up stops at the first failure. The cleanup is best-effort:
+// nothing is returned or logged on a non-empty directory, because that is the
+// normal outcome (a hand-written file or third-party artifact coexisting with
+// generated output).
+func pruneEmptyDirs(root string, removed []string) {
+	for _, p := range removed {
+		d := filepath.Dir(filepath.FromSlash(p))
+		for d != "." && d != string(filepath.Separator) {
+			if err := os.Remove(filepath.Join(root, d)); err != nil {
+				// Non-empty or otherwise not removable; stop walking up this chain.
+				break
+			}
+			d = filepath.Dir(d)
+		}
+	}
 }

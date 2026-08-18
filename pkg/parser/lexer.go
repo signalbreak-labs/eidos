@@ -1059,6 +1059,15 @@ func isExplicitKeyIndicator(text string) bool {
 // continue on following lines at exactly baseIndent (the inner sequence's
 // indentation). firstDashCol is the 1-based column of the second '-'.
 func (p *yamlParser) parseNestedSequence(i, baseIndent int, firstText string, firstLoc SourceLocation, firstDashCol int) (*SequenceNode, int, error) {
+	// Compact nested sequences recurse one level per "- " marker on the same
+	// line ("- - - a"). Guard the recursion with enterBlock/leaveBlock so a
+	// pathological one-line sequence hits ErrMaxNestingDepth instead of
+	// exhausting the goroutine stack (C-1).
+	if err := p.enterBlock(); err != nil {
+		return nil, i, err
+	}
+	defer p.leaveBlock()
+
 	node := &SequenceNode{SourceLocation: firstLoc}
 
 	// The first inner item begins on the current line, after the second '-'.
@@ -1267,8 +1276,21 @@ func shiftSingleNodeLoc(n Node, baseLoc SourceLocation) error {
 }
 
 // isMappingLine reports whether text is a YAML mapping entry (contains an
-// unquoted colon followed by a space or end-of-string).
+// unquoted colon followed by a space or end-of-string). A text that begins with
+// a flow collection indicator ("{", "[") is a flow value, not a block mapping
+// entry: splitMapping would otherwise treat the first colon inside the flow
+// collection as the mapping separator and produce a junk key like "{name"
+// (C-2). Quoted keys ("$ref": ...) are still mapping lines and are handled by
+// splitMapping's quote tracking.
 func isMappingLine(text string) bool {
+	trimmed := strings.TrimSpace(stripYAMLComment(text))
+	if trimmed == "" {
+		return false
+	}
+	switch trimmed[0] {
+	case '[', '{':
+		return false
+	}
 	_, _, _, ok := splitMapping(text)
 	return ok
 }
@@ -1409,10 +1431,14 @@ func (p *yamlParser) parseInlineValue(valueText string, loc SourceLocation) (Nod
 		}
 		// JSON rejected the flow value (e.g. unquoted keys like { type: string });
 		// fall back to the YAML flow parser before treating it as a plain scalar.
-		if node, ok, ferr := parseYAMLFlow(p.file, trimmed, p.depth); ok {
-			if ferr != nil {
-				return nil, ferr
-			}
+		// Check the error before ok: parseYAMLFlow only sets ok when err is nil,
+		// so a depth-limit error would otherwise be swallowed and the value
+		// silently degraded to a plain scalar (N-6).
+		node, ok, ferr := parseYAMLFlow(p.file, trimmed, loc.Line, p.depth)
+		if ferr != nil {
+			return nil, ferr
+		}
+		if ok {
 			if err := shiftNodeLineAndColumn(node, loc); err != nil {
 				return nil, err
 			}

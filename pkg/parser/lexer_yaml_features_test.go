@@ -1,6 +1,7 @@
 package parser
 
 import (
+	"errors"
 	"strings"
 	"testing"
 )
@@ -537,6 +538,45 @@ func TestCompactNestedSequenceDeep(t *testing.T) {
 	l2 := l1.Items[0].(*SequenceNode)
 	if got := l2.Items[0].(*ScalarNode).Value; got != "a" {
 		t.Errorf("deepest item = %v, want a", got)
+	}
+}
+
+// TestCompactNestedSequenceDepthGuard ensures a pathological one-line compact
+// sequence ("- - - ... a") hits ErrMaxNestingDepth instead of exhausting the
+// goroutine stack (C-1).
+func TestCompactNestedSequenceDepthGuard(t *testing.T) {
+	data := []byte(strings.Repeat("- ", 20000) + "a")
+	_, err := LoadFile("deep.yaml", data)
+	if !errors.Is(err, ErrMaxNestingDepth) {
+		t.Fatalf("LoadFile err = %v, want ErrMaxNestingDepth", err)
+	}
+}
+
+// TestFlowMappingAsSequenceItem ensures a flow map used as a block sequence
+// item ("- {name: limit, ...}") is parsed as a flow mapping, not mangled into
+// a junk "{name" key (C-2).
+func TestFlowMappingAsSequenceItem(t *testing.T) {
+	data := []byte("parameters:\n- {name: limit, in: query, schema: {type: integer}}\n")
+	root, err := LoadFile("flowseq.yaml", data)
+	if err != nil {
+		t.Fatalf("LoadFile: %v", err)
+	}
+	params := seqOf(t, root, "parameters")
+	if len(params.Items) != 1 {
+		t.Fatalf("parameters has %d items, want 1", len(params.Items))
+	}
+	item, ok := params.Items[0].(*MapNode)
+	if !ok {
+		t.Fatalf("item is %T, want *MapNode", params.Items[0])
+	}
+	if len(item.Entries) != 3 {
+		t.Fatalf("item has %d entries, want 3", len(item.Entries))
+	}
+	if got := item.Entries[0].Key.Value; got != "name" {
+		t.Errorf("first key = %q, want name", got)
+	}
+	if got := item.Entries[0].Value.(*ScalarNode).Value; got != "limit" {
+		t.Errorf("first value = %q, want limit", got)
 	}
 }
 

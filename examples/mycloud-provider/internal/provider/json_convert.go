@@ -1,13 +1,10 @@
 package provider
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
-	"encoding/xml"
 	"fmt"
 	"reflect"
-	"sort"
 
 	"github.com/hashicorp/terraform-plugin-framework/attr"
 	"github.com/hashicorp/terraform-plugin-framework/types"
@@ -617,66 +614,6 @@ func nullAttrValueOfType(attrType attr.Type) (attr.Value, error) {
 		return types.DynamicNull(), nil
 	}
 	return nil, fmt.Errorf("unsupported attribute type %T", attrType)
-}
-
-// mapToXML encodes a JSON-ready map as an XML document wrapped in a root
-// element. Map keys are emitted as child elements in sorted order so the output
-// is deterministic for the same input. Nested maps nest as child elements,
-// arrays repeat the parent element name (the conventional XML array shape), and
-// scalars become element character data. Custom XML element/attribute names and
-// the OpenAPI xml keyword are out of scope (A2); the encoding is a best-effort
-// body for APIs that accept application/xml.
-func mapToXML(m map[string]any, root string) ([]byte, error) {
-	var buf bytes.Buffer
-	enc := xml.NewEncoder(&buf)
-	if err := writeXMLElement(enc, root, m); err != nil {
-		return nil, err
-	}
-	if err := enc.Flush(); err != nil {
-		return nil, err
-	}
-	return buf.Bytes(), nil
-}
-
-func writeXMLElement(enc *xml.Encoder, name string, v any) error {
-	start := xml.StartElement{Name: xml.Name{Local: name}}
-	if err := enc.EncodeToken(start); err != nil {
-		return err
-	}
-	if err := writeXMLValue(enc, name, v); err != nil {
-		return err
-	}
-	return enc.EncodeToken(start.End())
-}
-
-func writeXMLValue(enc *xml.Encoder, name string, v any) error {
-	switch x := v.(type) {
-	case nil:
-		return nil
-	case map[string]any:
-		keys := make([]string, 0, len(x))
-		for k := range x {
-			keys = append(keys, k)
-		}
-		sort.Strings(keys)
-		for _, k := range keys {
-			if err := writeXMLElement(enc, k, x[k]); err != nil {
-				return err
-			}
-		}
-		return nil
-	case []any:
-		// Repeat the parent element name for each item — the conventional XML
-		// array shape, e.g. {"pets":[{"id":1}]} -> <name><name>...</name></name>.
-		for _, item := range x {
-			if err := writeXMLElement(enc, name, item); err != nil {
-				return err
-			}
-		}
-		return nil
-	default:
-		return enc.EncodeToken(xml.CharData(fmt.Sprintf("%v", x)))
-	}
 }
 
 // preserveStateIntoPlan copies attributes known in state into plan when the

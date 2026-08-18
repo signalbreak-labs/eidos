@@ -46,6 +46,53 @@ func TestFile_Render(t *testing.T) {
 	}
 }
 
+// TestAST_DanglingPendingCommentPanics locks in the N-33 contract: a comment
+// queued with AddComment but never attached to a declaration (the file ends, or
+// only non-commentable decls follow) must panic at AST() instead of being
+// silently dropped from the emitted file. The panic surfaces as a render error
+// through the render-recovery wrappers, giving the generator author a signal
+// the comment was omitted.
+func TestAST_DanglingPendingCommentPanics(t *testing.T) {
+	f := NewFile("x")
+	f.AddComment("this comment is never attached")
+	// No AddDecl follows: the pending comment would be dropped.
+
+	defer func() {
+		rec := recover()
+		if rec == nil {
+			t.Fatal("expected AST() to panic on a dangling pending comment, got nil")
+		}
+		msg, ok := rec.(string)
+		if !ok || !strings.Contains(msg, "never attached to a declaration") {
+			t.Fatalf("expected panic to name the dangling comment, got: %v", rec)
+		}
+		if !strings.Contains(msg, "this comment is never attached") {
+			t.Fatalf("expected panic to quote the dangling comment, got: %v", rec)
+		}
+	}()
+	_ = f.AST()
+}
+
+// TestAST_CommentAttachesToNextDecl confirms the normal path still works: a
+// comment queued before a declaration attaches as its doc comment and leaves
+// nothing pending, so AST() does not panic.
+func TestAST_CommentAttachesToNextDecl(t *testing.T) {
+	f := NewFile("x")
+	f.AddComment("doc for the var")
+	decl := VarGroup([2]string{"v", "1"})
+	f.AddDecl(decl)
+	if len(f.pending) != 0 {
+		t.Fatalf("expected the comment to attach to the decl, got %d pending", len(f.pending))
+	}
+	if decl.Doc == nil {
+		t.Fatal("expected the var decl to carry the queued comment as its doc comment")
+	}
+	// Rendering must not panic on a properly-attached comment.
+	if _, err := f.Render(); err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+}
+
 func TestVarDecl(t *testing.T) {
 	f := NewFile("main")
 	f.AddDecl(FuncDecl("main", Block(
@@ -83,6 +130,35 @@ func TestFile_Render_Alias(t *testing.T) {
 	got := string(b)
 	if !strings.Contains(got, "foo \"github.com/example/foo\"") {
 		t.Errorf("rendered source missing aliased import, got:\n%s", got)
+	}
+}
+
+// TestIsStdlibImport locks in the N-36 classification: a path is stdlib only
+// when its first segment is a known standard-library root. A dot-less internal
+// module path such as "providers/foo" must be classified as third-party, not
+// stdlib — the old "no dot anywhere ⇒ stdlib" rule misfiled it (L-59).
+func TestIsStdlibImport(t *testing.T) {
+	stdlib := []string{
+		"fmt", "net/http", "encoding/json", "os", "context", "strings",
+		"go/token", "runtime", "text/template",
+	}
+	for _, p := range stdlib {
+		if !isStdlibImport(p) {
+			t.Errorf("isStdlibImport(%q) = false, want true", p)
+		}
+	}
+
+	thirdParty := []string{
+		"github.com/example/foo",
+		"providers/foo", // dot-less internal module path: third-party (N-36)
+		"k8s.io/api/core/v1",
+		"gopkg.in/yaml.v3",
+		"example.com",
+	}
+	for _, p := range thirdParty {
+		if isStdlibImport(p) {
+			t.Errorf("isStdlibImport(%q) = true, want false", p)
+		}
 	}
 }
 

@@ -83,8 +83,10 @@ type crudOperationPlan struct {
 	// hasBody is true when the operation declares a request body that the wired
 	// body encodes. It is distinct from bodyEncoding because bodyJSON is the zero
 	// value of bodyKind, so a bodiless operation would otherwise be
-	// indistinguishable from a JSON-body operation (the action wiring relies on
-	// this distinction; resources always build a body on body-bearing methods).
+	// indistinguishable from a JSON-body operation. A body-bearing method
+	// (POST/PUT/PATCH) with no BodySchema and no formData parameters is bodiless:
+	// the wired create/update sends no body instead of serializing the entire
+	// plan model as JSON to an endpoint that expects none (M-11).
 	hasBody bool
 	// bodyEncoding is the request body encoding derived from
 	// OperationMappingIR.MediaType via transformer.RequestBodyKind. JSON is the
@@ -205,6 +207,20 @@ func AnyResourceWired(resources []ir.ResourceIR) bool {
 	return false
 }
 
+// AnyResourceXMLBody reports whether any resource's wired CRUD bodies serialize
+// a request body as XML. It gates the XML helper section (mapToXML and friends)
+// and their supporting imports in json_convert.go so JSON-only providers carry
+// no dead XML serialization code (N-37).
+func AnyResourceXMLBody(resources []ir.ResourceIR) bool {
+	for _, r := range resources {
+		plan := planResourceWiring(r)
+		if plan.wired && plan.needsXMLBody {
+			return true
+		}
+	}
+	return false
+}
+
 // planResourceWiring resolves the generation plan for a resource's wired CRUD
 // bodies. Create, read, and delete mappings must all be present and resolvable
 // for the resource to be wired at all; an update mapping is optional. Any
@@ -277,7 +293,7 @@ func planResourceWiring(r ir.ResourceIR) resourceWiringPlan {
 // the zero value); without it a form/multipart create with no update would
 // import bytes unused.
 func opHasJSONBody(op crudOperationPlan) bool {
-	return methodHasBody(op.method) && op.bodyEncoding == bodyJSON
+	return op.hasBody && methodHasBody(op.method) && op.bodyEncoding == bodyJSON
 }
 
 // opHasFormBody reports whether a wired operation sends a form-encoded request
@@ -296,7 +312,7 @@ func opHasMultipartBody(op crudOperationPlan) bool {
 // opHasXMLBody reports whether a wired operation sends an XML request body
 // (mapToXML). Read/Delete never send a body.
 func opHasXMLBody(op crudOperationPlan) bool {
-	return methodHasBody(op.method) && op.bodyEncoding == bodyXML
+	return op.hasBody && methodHasBody(op.method) && op.bodyEncoding == bodyXML
 }
 
 // methodHasBody reports whether the HTTP method carries a request body. Only
@@ -327,7 +343,11 @@ func (plan *resourceWiringPlan) noteOpImportNeeds(op crudOperationPlan) {
 	}
 	for _, params := range [][]paramSubstitution{op.queryParams, op.headerParams, op.cookieParams, op.formDataParams} {
 		for _, p := range params {
-			plan.needsStrings = true
+			// Query/header/cookie/formData parameters render through url.Values /
+			// http.Header / strconv — never strings.ReplaceAll — so they require
+			// strconv (when non-string) but never strings (M-13). Setting
+			// needsStrings here would import strings unused for a resource with
+			// parameters but no path placeholders.
 			if p.primitive != ir.TypeString {
 				plan.needsStrconv = true
 			}
@@ -398,6 +418,7 @@ func planOperation(r ir.ResourceIR, op ir.OperationMappingIR) (crudOperationPlan
 			return crudOperationPlan{}, false
 		}
 		planned.formDataParams = formData
+		planned.hasBody = true
 		// A formData request body's media type selects the encoding:
 		// multipart/form-data (a binary param triggers this in v2) writes file
 		// and text parts via mime/multipart; otherwise the body is
@@ -411,11 +432,14 @@ func planOperation(r ir.ResourceIR, op ir.OperationMappingIR) (crudOperationPlan
 			planned.bodyEncoding = bodyForm
 			planned.contentType = "application/x-www-form-urlencoded"
 		}
-	} else if methodHasBody(planned.method) {
-		// A non-formData body-bearing method encodes its body per the request
-		// media type: JSON (the default, including JSON dialects and empty),
-		// XML, or unsupported (fail-loud — the transformer warned; keep the
-		// operation an honest scaffold rather than silently emitting JSON).
+	} else if methodHasBody(planned.method) && op.BodySchema != nil {
+		// A non-formData body-bearing method with a declared request body encodes
+		// it per the media type: JSON (the default, including JSON dialects and
+		// empty), XML, or unsupported (fail-loud — the transformer warned; keep
+		// the operation an honest scaffold rather than silently emitting JSON).
+		// A body-bearing method with NO BodySchema is bodiless: the create/update
+		// sends no request body (M-11).
+		planned.hasBody = true
 		switch transformer.RequestBodyKind(op.MediaType) {
 		case "xml":
 			planned.bodyEncoding = bodyXML
@@ -1657,7 +1681,11 @@ func wiredCreateBody(r ir.ResourceIR, modelName string) []ast.Stmt {
 // framework Create method can call it and then set state/identity on success.
 func wiredCreateHelperBody(r ir.ResourceIR, plan resourceWiringPlan) []ast.Stmt {
 	summary := fmt.Sprintf("Error creating %s", resourceTypeName(r))
-	bodyStmts, bodyExpr := requestBodyStmts(plan.create, summary, "plan")
+	var bodyStmts []ast.Stmt
+	var bodyExpr ast.Expr
+	if plan.create.hasBody {
+		bodyStmts, bodyExpr = requestBodyStmts(plan.create, summary, "plan")
+	}
 	stmts := make([]ast.Stmt, 0, 16)
 	stmts = append(stmts, clientGuardStmt("r"))
 	stmts = append(stmts, bodyStmts...)
@@ -1880,7 +1908,11 @@ func wiredUpdateBody(r ir.ResourceIR, modelName string) []ast.Stmt {
 // method can call it and then set state/identity on success.
 func wiredUpdateHelperBody(r ir.ResourceIR, plan resourceWiringPlan) []ast.Stmt {
 	summary := fmt.Sprintf("Error updating %s", resourceTypeName(r))
-	bodyStmts, bodyExpr := requestBodyStmts(plan.updateOp, summary, "plan")
+	var bodyStmts []ast.Stmt
+	var bodyExpr ast.Expr
+	if plan.updateOp.hasBody {
+		bodyStmts, bodyExpr = requestBodyStmts(plan.updateOp, summary, "plan")
+	}
 	stmts := make([]ast.Stmt, 0, 16)
 	stmts = append(stmts, clientGuardStmt("r"))
 	stmts = append(stmts, bodyStmts...)
