@@ -1432,6 +1432,18 @@ func TestMergeAllOfSpecProperties_Descriptions(t *testing.T) {
 		}
 	})
 
+	t.Run("a member with no properties contributes nothing", func(t *testing.T) {
+		dst := &SchemaSpec{Type: "object", Properties: map[string]SchemaSpec{
+			"label": {Type: "string", Description: "Kept."},
+		}}
+		if conflicts := mergeAllOfSpecProperties(dst, SchemaSpec{Type: "object"}); conflicts != nil {
+			t.Errorf("conflicts = %v, want nil", conflicts)
+		}
+		if got := dst.Properties["label"].Description; got != "Kept." {
+			t.Errorf("description = %q, want it untouched", got)
+		}
+	})
+
 	t.Run("undocumented property with a conflicting shape stays undocumented", func(t *testing.T) {
 		dst := &SchemaSpec{Type: "object", Properties: map[string]SchemaSpec{
 			"count": {Type: "string"},
@@ -1441,6 +1453,67 @@ func TestMergeAllOfSpecProperties_Descriptions(t *testing.T) {
 		}})
 		if got := dst.Properties["count"].Description; got != "" {
 			t.Errorf("description = %q, want empty (the prose describes the dropped shape)", got)
+		}
+	})
+}
+
+// TestSameSchemaShape_IgnoresDescriptionAtEveryDepth covers the recursive
+// description stripping. A SchemaSpec nests through Properties, Items,
+// AdditionalProperties, OneOf and AnyOf; wording that differs in any of those
+// positions is prose, not a structural conflict.
+func TestSameSchemaShape_IgnoresDescriptionAtEveryDepth(t *testing.T) {
+	cases := map[string]func(desc string) SchemaSpec{
+		"top level": func(d string) SchemaSpec {
+			return SchemaSpec{Type: "string", Description: d}
+		},
+		"object property": func(d string) SchemaSpec {
+			return SchemaSpec{Type: "object", Properties: map[string]SchemaSpec{"x": {Type: "string", Description: d}}}
+		},
+		"array items": func(d string) SchemaSpec {
+			return SchemaSpec{Type: "array", Items: &SchemaSpec{Type: "string", Description: d}}
+		},
+		"additionalProperties": func(d string) SchemaSpec {
+			return SchemaSpec{Type: "object", AdditionalProperties: &SchemaSpec{Type: "string", Description: d}}
+		},
+		"oneOf variant": func(d string) SchemaSpec {
+			return SchemaSpec{OneOf: []SchemaSpec{{Type: "string", Description: d}}}
+		},
+		"anyOf variant": func(d string) SchemaSpec {
+			return SchemaSpec{AnyOf: []SchemaSpec{{Type: "string", Description: d}}}
+		},
+	}
+	for name, build := range cases {
+		t.Run(name, func(t *testing.T) {
+			if !sameSchemaShape(build("First wording."), build("Second wording.")) {
+				t.Error("descriptions differ but shapes match; want same shape")
+			}
+		})
+	}
+
+	t.Run("a real shape difference is still detected", func(t *testing.T) {
+		if sameSchemaShape(SchemaSpec{Type: "array", Items: &SchemaSpec{Type: "string"}},
+			SchemaSpec{Type: "array", Items: &SchemaSpec{Type: "integer"}}) {
+			t.Error("array element types differ; want different shape")
+		}
+	})
+
+	t.Run("an empty variant slice compares equal to none at all", func(t *testing.T) {
+		if !sameSchemaShape(SchemaSpec{Type: "string", OneOf: []SchemaSpec{}}, SchemaSpec{Type: "string"}) {
+			t.Error("an empty OneOf should normalize to nil")
+		}
+	})
+
+	t.Run("pathological nesting hits the depth backstop without recursing forever", func(t *testing.T) {
+		build := func() SchemaSpec {
+			s := SchemaSpec{Type: "string"}
+			for i := 0; i < maxSchemaDepth+5; i++ {
+				inner := s
+				s = SchemaSpec{Type: "array", Items: &inner}
+			}
+			return s
+		}
+		if !sameSchemaShape(build(), build()) {
+			t.Error("identical deep schemas should compare equal")
 		}
 	})
 }
