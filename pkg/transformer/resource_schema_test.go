@@ -629,3 +629,107 @@ func TestManagedResourceSchema_NestedArrayOfObject_RequestOnly_Reconciles(t *tes
 		}
 	}
 }
+
+// TestDescriptionsReachAttributes pins the plumbing that carries an OpenAPI
+// `description` onto ir.AttributeIR, which the generators render as the
+// framework MarkdownDescription and as the docs attribute blurb. Every
+// reference spec predates this and the corpus is thin on property
+// descriptions, so the golden files alone do not guard it.
+func TestDescriptionsReachAttributes(t *testing.T) {
+	stateSpec := &SchemaSpec{
+		Type:     "object",
+		Required: []string{"id", "name"},
+		Properties: map[string]SchemaSpec{
+			"id":   {Type: "integer", Format: "int64", Description: "Server-assigned identifier."},
+			"name": {Type: "string", Description: "Display name of the pet."},
+			"settings": {
+				Type: "object",
+				Properties: map[string]SchemaSpec{
+					"nickname": {Type: "string", Description: "Nested property description."},
+				},
+			},
+		},
+	}
+
+	t.Run("managed resource properties", func(t *testing.T) {
+		obj, _ := ManagedResourceSchema(ResourceCRUD{
+			Name:           "pet",
+			CollectionPath: "/pets",
+			InstancePath:   "/pets/{petId}",
+			Read:           &Operation{Method: MethodGet, Path: "/pets/{petId}", ResponseSchema: stateSpec},
+			Delete:         &Operation{Method: MethodDelete, Path: "/pets/{petId}"},
+		})
+		for name, want := range map[string]string{
+			"id":   "Server-assigned identifier.",
+			"name": "Display name of the pet.",
+		} {
+			attr, ok := findAttr(obj.Attributes, name)
+			if !ok {
+				t.Fatalf("attribute %q not found", name)
+			}
+			if attr.Description != want {
+				t.Errorf("attribute %q description = %q, want %q", name, attr.Description, want)
+			}
+		}
+	})
+
+	t.Run("nested properties", func(t *testing.T) {
+		obj, _ := ManagedResourceSchema(ResourceCRUD{
+			Name:           "pet",
+			CollectionPath: "/pets",
+			InstancePath:   "/pets/{petId}",
+			Read:           &Operation{Method: MethodGet, Path: "/pets/{petId}", ResponseSchema: stateSpec},
+			Delete:         &Operation{Method: MethodDelete, Path: "/pets/{petId}"},
+		})
+		parent, ok := findAttr(obj.Attributes, "settings")
+		if !ok {
+			t.Fatal("settings attribute not found")
+		}
+		nested, ok := findAttr(parent.Schema.Attributes, "nickname")
+		if !ok {
+			t.Fatal("nested nickname attribute not found")
+		}
+		if nested.Description != "Nested property description." {
+			t.Errorf("nested description = %q, want %q", nested.Description, "Nested property description.")
+		}
+	})
+
+	t.Run("parameters", func(t *testing.T) {
+		obj := DataSourceSchema(Operation{
+			Method: MethodGet,
+			Path:   "/pets",
+			Parameters: []Parameter{
+				{Name: "limit", In: "query", Type: "integer", Description: "How many items to return at one time."},
+			},
+			ResponseSchema: stateSpec,
+		}, nil)
+		attr, ok := findAttr(obj.Attributes, "limit")
+		if !ok {
+			t.Fatal("limit attribute not found")
+		}
+		if attr.Description != "How many items to return at one time." {
+			t.Errorf("parameter description = %q, want the OpenAPI text", attr.Description)
+		}
+	})
+
+	t.Run("dropped colliding parameter does not relabel the kept one", func(t *testing.T) {
+		// A path param and an optional query param whose names both sanitize to
+		// "id" (L-102): the optional one is dropped with a warning, so its prose
+		// must not end up describing the surviving required attribute.
+		obj := DataSourceSchema(Operation{
+			Method: MethodGet,
+			Path:   "/projects/{id}/state",
+			Parameters: []Parameter{
+				{Name: "id", In: "path", Required: true, Type: "string", Description: "The project identifier."},
+				{Name: "ID", In: "query", Type: "string", Description: "Deprecated uppercase alias."},
+			},
+		}, nil)
+		attr, ok := findAttr(obj.Attributes, "id")
+		if !ok {
+			t.Fatal("id attribute not found")
+		}
+		if attr.Description != "The project identifier." {
+			t.Errorf("description = %q, want the kept path parameter's text", attr.Description)
+		}
+	})
+}

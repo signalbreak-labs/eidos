@@ -105,10 +105,13 @@ components:
         id:
           type: integer
           format: int64
+          description: Server-assigned identifier for the pet.
         name:
           type: string
+          description: Display name of the pet.
         tag:
           type: string
+          description: Free-form tag used to group pets.
     NewPet:
       type: object
       required:
@@ -116,8 +119,10 @@ components:
       properties:
         name:
           type: string
+          description: Display name of the pet.
         tag:
           type: string
+          description: Free-form tag used to group pets.
     Pets:
       type: array
       maxItems: 100

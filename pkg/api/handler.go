@@ -3629,7 +3629,7 @@ func functionReturnSchema(spec *transformer.SchemaSpec) ir.SchemaIR {
 					flat = false
 					break
 				}
-				attrs = append(attrs, ir.AttributeIR{Name: name, Schema: ir.SchemaIR{Type: t}})
+				attrs = append(attrs, ir.AttributeIR{Name: name, Schema: ir.SchemaIR{Type: t}, Description: prop.Description})
 			}
 			if flat {
 				return ir.SchemaIR{Attributes: attrs}

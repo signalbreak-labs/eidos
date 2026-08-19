@@ -219,10 +219,11 @@ func ObjectSchemaFromOperationWithDiagnostics(op Operation, diags *diagnostics.D
 		// (N-14), keeping actions consistent with data sources.
 		schema := paramSchemaIR(p.In, p.Type, p.ItemsType, p.Style, diags, p.Name)
 		add(ir.AttributeIR{
-			Name:     name,
-			Schema:   schema,
-			Required: p.Required,
-			Optional: !p.Required,
+			Name:        name,
+			Schema:      schema,
+			Description: p.Description,
+			Required:    p.Required,
+			Optional:    !p.Required,
 		})
 	}
 
@@ -321,10 +322,11 @@ func requestBodyAttributes(spec SchemaSpec, diags *diagnostics.Diagnostics) []ir
 				})
 			}
 			return []ir.AttributeIR{{
-				Name:     "body",
-				Schema:   schemaIRFromSpec(spec),
-				Required: true,
-				Optional: false,
+				Name:        "body",
+				Schema:      schemaIRFromSpec(spec),
+				Description: spec.Description,
+				Required:    true,
+				Optional:    false,
 			}}
 		}
 		if len(spec.Properties) == 0 {
@@ -337,10 +339,11 @@ func requestBodyAttributes(spec SchemaSpec, diags *diagnostics.Diagnostics) []ir
 				})
 			}
 			return []ir.AttributeIR{{
-				Name:     "body",
-				Schema:   schemaIRFromSpec(spec),
-				Required: true,
-				Optional: false,
+				Name:        "body",
+				Schema:      schemaIRFromSpec(spec),
+				Description: spec.Description,
+				Required:    true,
+				Optional:    false,
 			}}
 		}
 		required := make(map[string]bool, len(spec.Required))
@@ -358,11 +361,12 @@ func requestBodyAttributes(spec SchemaSpec, diags *diagnostics.Diagnostics) []ir
 			// (422). Single-word names where snake_case == wire name are
 			// unaffected, which is why symbol/units/produce happened to work.
 			attrs = append(attrs, ir.AttributeIR{
-				Name:     SanitizeAttributeName(name),
-				WireName: name,
-				Schema:   schemaIRFromSpec(prop),
-				Required: required[name],
-				Optional: !required[name],
+				Name:        SanitizeAttributeName(name),
+				WireName:    name,
+				Schema:      schemaIRFromSpec(prop),
+				Description: prop.Description,
+				Required:    required[name],
+				Optional:    !required[name],
 			})
 		}
 		sort.Slice(attrs, func(i, j int) bool {
@@ -375,10 +379,11 @@ func requestBodyAttributes(spec SchemaSpec, diags *diagnostics.Diagnostics) []ir
 		// Required (a declared request body is expected to be sent) — otherwise the
 		// generated schema is rejected at runtime (M-37).
 		return []ir.AttributeIR{{
-			Name:     "body",
-			Schema:   schemaIRFromSpec(spec),
-			Required: true,
-			Optional: false,
+			Name:        "body",
+			Schema:      schemaIRFromSpec(spec),
+			Description: spec.Description,
+			Required:    true,
+			Optional:    false,
 		}}
 	}
 }

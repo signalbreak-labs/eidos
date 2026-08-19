@@ -95,10 +95,11 @@ func nestedAttributesFromSpec(spec SchemaSpec) []ir.AttributeIR {
 	for _, name := range names {
 		prop := spec.Properties[name]
 		attrs = append(attrs, ir.AttributeIR{
-			Name:     SanitizeAttributeName(name),
-			WireName: name,
-			Schema:   schemaIRFromSpecRecursive(prop),
-			Computed: true,
+			Name:        SanitizeAttributeName(name),
+			WireName:    name,
+			Schema:      schemaIRFromSpecRecursive(prop),
+			Description: prop.Description,
+			Computed:    true,
 		})
 	}
 	return attrs
@@ -306,9 +307,10 @@ func ManagedResourceSchema(c ResourceCRUD) (ir.ObjectSchemaIR, string) {
 		prop := stateSpec.Properties[name]
 		snake := SanitizeAttributeName(name)
 		attr := ir.AttributeIR{
-			Name:     snake,
-			WireName: name,
-			Schema:   schemaIRFromSpecRecursive(prop),
+			Name:        snake,
+			WireName:    name,
+			Schema:      schemaIRFromSpecRecursive(prop),
+			Description: prop.Description,
 		}
 		_, inRequest := requestProps[name]
 		if applyManagedAttributeFlags(&attr, name, snake, inRequest, requestRequired, requestSpec) {
@@ -467,10 +469,11 @@ func formDataParamsFromRequestSchema(spec *SchemaSpec) []Parameter {
 	out := make([]Parameter, 0, len(names))
 	for _, name := range names {
 		out = append(out, Parameter{
-			Name:     name,
-			In:       "formData",
-			Required: required[name],
-			Type:     spec.Properties[name].Type,
+			Name:        name,
+			In:          "formData",
+			Description: spec.Properties[name].Description,
+			Required:    required[name],
+			Type:        spec.Properties[name].Type,
 		})
 	}
 	return out
@@ -492,8 +495,9 @@ func appendFormDataOnlyAttributes(attrs []ir.AttributeIR, formData []Parameter, 
 			continue
 		}
 		attr := ir.AttributeIR{
-			Name:   snake,
-			Schema: schemaIRFromSpecRecursive(SchemaSpec{Type: p.Type}),
+			Name:        snake,
+			Schema:      schemaIRFromSpecRecursive(SchemaSpec{Type: p.Type}),
+			Description: p.Description,
 		}
 		if requestRequired[p.Name] {
 			attr.Required = true
@@ -532,9 +536,10 @@ func appendRequestOnlyAttributes(attrs []ir.AttributeIR, requestSpec *SchemaSpec
 			continue
 		}
 		attr := ir.AttributeIR{
-			Name:     snake,
-			WireName: name,
-			Schema:   schemaIRFromSpecRecursive(requestSpec.Properties[name]),
+			Name:        snake,
+			WireName:    name,
+			Schema:      schemaIRFromSpecRecursive(requestSpec.Properties[name]),
+			Description: requestSpec.Properties[name].Description,
 		}
 		if requestRequired[name] {
 			attr.Required = true
@@ -581,6 +586,17 @@ func requestPropertySets(requestSpec *SchemaSpec, formData []Parameter) (map[str
 	return requestProps, requestRequired
 }
 
+// preferDescription returns next when it says something, else keeps cur. It is
+// how an attribute merged from two sources (a parameter and a same-named
+// response property) keeps whichever description is non-empty instead of the
+// later source blanking the earlier one.
+func preferDescription(cur, next string) string {
+	if next != "" {
+		return next
+	}
+	return cur
+}
+
 // topLevelUnionSpec returns spec when it is a non-nil top-level union schema
 // (carries oneOf or anyOf variants), or nil otherwise.
 func topLevelUnionSpec(spec *SchemaSpec) *SchemaSpec {
@@ -608,9 +624,10 @@ func unionWrapperAttribute(spec SchemaSpec) ir.AttributeIR {
 	schema.Name = spec.RefName
 	schema.Computed = true
 	return ir.AttributeIR{
-		Name:     name,
-		Computed: true,
-		Schema:   schema,
+		Name:        name,
+		Computed:    true,
+		Schema:      schema,
+		Description: spec.Description,
 	}
 }
 
@@ -633,9 +650,10 @@ func ObjectSchemaFromSpec(spec *SchemaSpec) ir.ObjectSchemaIR {
 	attrs := make([]ir.AttributeIR, 0, len(names))
 	for _, name := range names {
 		attrs = append(attrs, ir.AttributeIR{
-			Name:     SanitizeAttributeName(name),
-			Computed: true,
-			Schema:   schemaIRFromSpecRecursive(spec.Properties[name]),
+			Name:        SanitizeAttributeName(name),
+			Computed:    true,
+			Schema:      schemaIRFromSpecRecursive(spec.Properties[name]),
+			Description: spec.Properties[name].Description,
 		})
 	}
 	return ir.ObjectSchemaIR{Attributes: attrs}
@@ -688,8 +706,10 @@ func DataSourceSchema(op Operation, diags *diagnostics.Diagnostics) ir.ObjectSch
 		// instead of one (L-102).
 		snake := SanitizeAttributeName(p.Name)
 		upsert(snake, func(a *ir.AttributeIR) {
+			priorDescription := a.Description
 			a.Schema = paramSchemaIR(p.In, p.Type, p.ItemsType, p.Style, diags, p.Name)
 			a.WireName = p.Name
+			a.Description = preferDescription(a.Description, p.Description)
 			switch {
 			case p.Required || strings.EqualFold(p.In, "path"):
 				a.Required = true
@@ -711,6 +731,10 @@ func DataSourceSchema(op Operation, diags *diagnostics.Diagnostics) ir.ObjectSch
 				// essential instance identifier) and surface the dropped optional
 				// param as a fail-loud warning so it is not lost silently.
 				a.Optional = false
+				// The dropped parameter contributes nothing to the surviving
+				// attribute, including its prose: labeling the kept parameter
+				// with the discarded one's description would misdocument it.
+				a.Description = priorDescription
 				if diags != nil {
 					*diags = append(*diags, diagnostics.Diagnostic{
 						Severity: diagnostics.Warning,
@@ -740,6 +764,9 @@ func DataSourceSchema(op Operation, diags *diagnostics.Diagnostics) ir.ObjectSch
 			upsert(snake, func(a *ir.AttributeIR) {
 				a.Schema = schemaIRFromSpecRecursive(prop)
 				a.WireName = propName
+				// A response property that merges with a same-named parameter
+				// keeps the parameter's description when it has none of its own.
+				a.Description = preferDescription(a.Description, prop.Description)
 				if !a.Required {
 					a.Computed = true
 				}
@@ -755,6 +782,7 @@ func DataSourceSchema(op Operation, diags *diagnostics.Diagnostics) ir.ObjectSch
 		wrapper := unionWrapperAttribute(*op.ResponseSchema)
 		upsert(wrapper.Name, func(a *ir.AttributeIR) {
 			a.Schema = wrapper.Schema
+			a.Description = preferDescription(a.Description, wrapper.Description)
 			a.Computed = true
 		})
 	}
@@ -783,6 +811,9 @@ func DataSourceSchema(op Operation, diags *diagnostics.Diagnostics) ir.ObjectSch
 					ElementType: elem,
 				},
 			}
+			// The array response's own description documents the collection the
+			// `items` attribute stands for.
+			a.Description = preferDescription(a.Description, op.ResponseSchema.Description)
 			a.Computed = true
 		})
 	}
@@ -813,8 +844,9 @@ func ListResourceConfigSchema(op Operation, diags *diagnostics.Diagnostics) ir.O
 			continue
 		}
 		attr := ir.AttributeIR{
-			Name:   SanitizeAttributeName(p.Name),
-			Schema: paramSchemaIR(p.In, p.Type, p.ItemsType, p.Style, diags, p.Name),
+			Name:        SanitizeAttributeName(p.Name),
+			Schema:      paramSchemaIR(p.In, p.Type, p.ItemsType, p.Style, diags, p.Name),
+			Description: p.Description,
 		}
 		if p.Required || strings.EqualFold(p.In, "path") {
 			attr.Required = true
