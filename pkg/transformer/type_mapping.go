@@ -13,7 +13,13 @@ package transformer
 // nullable, and uniqueItems→Set, so the parallel surface was removed as dead
 // code (A1) rather than maintained as a correct-if-wired guarantee.
 type SchemaSpec struct {
-	Type                 string
+	Type string
+	// Description is the OpenAPI `description` of the schema (or of the property
+	// this schema is the value of). It is carried through conversion so
+	// attribute construction can set ir.AttributeIR.Description, which the
+	// generators already render as the framework MarkdownDescription and as the
+	// docs attribute blurb.
+	Description          string
 	Format               string
 	Nullable             bool
 	UniqueItems          bool

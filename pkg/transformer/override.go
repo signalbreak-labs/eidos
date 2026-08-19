@@ -503,7 +503,12 @@ func addWriteOnlyAttributes(obj *ir.ObjectSchemaIR, additions []config.WriteOnly
 
 		existing := findAttributeIndex(obj.Attributes, name)
 		if existing >= 0 {
-			obj.Attributes[existing].Description = add.Description
+			// `description` is omitempty in generator.yaml: an override that only
+			// sets e.g. `sensitive: true` must not erase the description the spec
+			// supplied. Matches applyActionOverrides/applyEphemeralOverrides.
+			if strings.TrimSpace(add.Description) != "" {
+				obj.Attributes[existing].Description = add.Description
+			}
 			obj.Attributes[existing].WriteOnly = true
 			obj.Attributes[existing].Sensitive = add.Sensitive
 			// The framework forbids WriteOnly together with Computed. An attribute
@@ -684,7 +689,11 @@ func applyListResourceConfigSchema(lr *ir.ListResourceIR, overrides []config.Lis
 		existing := findAttributeIndex(lr.ConfigSchema.Attributes, name)
 		if existing >= 0 {
 			lr.ConfigSchema.Attributes[existing].Schema = schema
-			lr.ConfigSchema.Attributes[existing].Description = override.Description
+			// See addWriteOnlyAttributes: an omitted `description` must not erase
+			// the one the spec's parameter supplied.
+			if strings.TrimSpace(override.Description) != "" {
+				lr.ConfigSchema.Attributes[existing].Description = override.Description
+			}
 			lr.ConfigSchema.Attributes[existing].Required = required
 			lr.ConfigSchema.Attributes[existing].Optional = optional
 			continue

@@ -308,10 +308,11 @@ func ResultSchemaFromResponse(spec *SchemaSpec) ir.ObjectSchemaIR {
 				schema.Sensitive = true
 			}
 			attrs = append(attrs, ir.AttributeIR{
-				Name:      SanitizeAttributeName(name),
-				Schema:    schema,
-				Computed:  true,
-				Sensitive: schema.Sensitive,
+				Name:        SanitizeAttributeName(name),
+				Schema:      schema,
+				Description: prop.Description,
+				Computed:    true,
+				Sensitive:   schema.Sensitive,
 			})
 		}
 		sort.Slice(attrs, func(i, j int) bool {
@@ -321,9 +322,10 @@ func ResultSchemaFromResponse(spec *SchemaSpec) ir.ObjectSchemaIR {
 	default:
 		return ir.ObjectSchemaIR{
 			Attributes: []ir.AttributeIR{{
-				Name:     "result",
-				Schema:   schemaIRFromSpec(*spec),
-				Computed: true,
+				Name:        "result",
+				Schema:      schemaIRFromSpec(*spec),
+				Description: spec.Description,
+				Computed:    true,
 			}},
 		}
 	}

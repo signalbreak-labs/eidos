@@ -1368,3 +1368,79 @@ func TestUnwrapResponseEnvelope(t *testing.T) {
 		})
 	}
 }
+
+// TestMergeAllOfSpecProperties_Descriptions covers the interaction between the
+// allOf first-wins property merge and property descriptions: prose alone must
+// not read as a structural conflict (at any depth), a documented member must
+// be able to document an undocumented one, and a genuinely conflicting member's
+// prose must not be pasted onto the differently-shaped survivor.
+func TestMergeAllOfSpecProperties_Descriptions(t *testing.T) {
+	t.Run("same shape, different wording is not a conflict", func(t *testing.T) {
+		dst := &SchemaSpec{Type: "object", Properties: map[string]SchemaSpec{
+			"label": {Type: "string", Description: "First wording."},
+		}}
+		conflicts := mergeAllOfSpecProperties(dst, SchemaSpec{Properties: map[string]SchemaSpec{
+			"label": {Type: "string", Description: "Second wording."},
+		}})
+		if len(conflicts) != 0 {
+			t.Errorf("conflicts = %v, want none", conflicts)
+		}
+		if got := dst.Properties["label"].Description; got != "First wording." {
+			t.Errorf("description = %q, want the first member's", got)
+		}
+	})
+
+	t.Run("nested wording difference is not a conflict", func(t *testing.T) {
+		nested := func(desc string) SchemaSpec {
+			return SchemaSpec{Type: "object", Properties: map[string]SchemaSpec{
+				"owner": {Type: "string", Description: desc},
+			}}
+		}
+		dst := &SchemaSpec{Type: "object", Properties: map[string]SchemaSpec{"meta": nested("First wording.")}}
+		conflicts := mergeAllOfSpecProperties(dst, SchemaSpec{Properties: map[string]SchemaSpec{"meta": nested("Second wording.")}})
+		if len(conflicts) != 0 {
+			t.Errorf("conflicts = %v, want none (only nested prose differs)", conflicts)
+		}
+	})
+
+	t.Run("undocumented property adopts a later member's description", func(t *testing.T) {
+		dst := &SchemaSpec{Type: "object", Properties: map[string]SchemaSpec{
+			"label": {Type: "string"},
+		}}
+		if conflicts := mergeAllOfSpecProperties(dst, SchemaSpec{Properties: map[string]SchemaSpec{
+			"label": {Type: "string", Description: "Adopted."},
+		}}); len(conflicts) != 0 {
+			t.Errorf("conflicts = %v, want none", conflicts)
+		}
+		if got := dst.Properties["label"].Description; got != "Adopted." {
+			t.Errorf("description = %q, want %q", got, "Adopted.")
+		}
+	})
+
+	t.Run("shape conflict still warns and does not adopt the dropped prose", func(t *testing.T) {
+		dst := &SchemaSpec{Type: "object", Properties: map[string]SchemaSpec{
+			"count": {Type: "string", Description: "As string."},
+		}}
+		conflicts := mergeAllOfSpecProperties(dst, SchemaSpec{Properties: map[string]SchemaSpec{
+			"count": {Type: "integer", Description: "As integer."},
+		}})
+		if len(conflicts) != 1 || conflicts[0] != "count" {
+			t.Errorf("conflicts = %v, want [count]", conflicts)
+		}
+		if got := dst.Properties["count"].Description; got != "As string." {
+			t.Errorf("description = %q, want the surviving member's prose", got)
+		}
+	})
+
+	t.Run("undocumented property with a conflicting shape stays undocumented", func(t *testing.T) {
+		dst := &SchemaSpec{Type: "object", Properties: map[string]SchemaSpec{
+			"count": {Type: "string"},
+		}}
+		mergeAllOfSpecProperties(dst, SchemaSpec{Properties: map[string]SchemaSpec{
+			"count": {Type: "integer", Description: "Describes the integer shape."},
+		}})
+		if got := dst.Properties["count"].Description; got != "" {
+			t.Errorf("description = %q, want empty (the prose describes the dropped shape)", got)
+		}
+	})
+}

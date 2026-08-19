@@ -65,10 +65,15 @@ type Operation struct {
 
 // Parameter is a normalized OpenAPI operation parameter.
 type Parameter struct {
-	Name     string
-	In       string // path, query, header, cookie
-	Required bool
-	Type     string
+	Name string
+	In   string // path, query, header, cookie
+	// Description is the OpenAPI `description` of the parameter, carried through
+	// so the attributes derived from it (data source and list-resource config
+	// inputs, action/ephemeral config params) can set
+	// ir.AttributeIR.Description.
+	Description string
+	Required    bool
+	Type        string
 	// ItemsType is the scalar element type when Type is "array" (the `items`
 	// type of an array parameter); empty for non-array parameters. Used to model
 	// an array query parameter as a List of the element primitive so the

@@ -2153,3 +2153,65 @@ func TestApplyPolymorphismOverrides_SplitResources_Synthesizes(t *testing.T) {
 		}
 	})
 }
+
+// TestOverrideDescriptionDoesNotEraseSpecText pins the guard that keeps a
+// generator.yaml entry from blanking the description the OpenAPI spec supplied.
+// `description` is omitempty in both override shapes, so an entry that sets only
+// e.g. `sensitive: true` decodes with Description == "" and an unconditional
+// assignment would silently drop the spec's text.
+func TestOverrideDescriptionDoesNotEraseSpecText(t *testing.T) {
+	const specText = "Display name of the pet."
+
+	t.Run("write-only attribute keeps spec description", func(t *testing.T) {
+		obj := &ir.ObjectSchemaIR{Attributes: []ir.AttributeIR{
+			{Name: "name", Description: specText, Schema: ir.SchemaIR{Type: ir.TypeString}},
+		}}
+		addWriteOnlyAttributes(obj, []config.WriteOnlyAttribute{{Name: "name", Sensitive: true}})
+		attr, ok := findAttr(obj.Attributes, "name")
+		if !ok {
+			t.Fatal("name attribute not found")
+		}
+		if attr.Description != specText {
+			t.Errorf("description = %q, want the spec text %q", attr.Description, specText)
+		}
+		if !attr.Sensitive {
+			t.Error("override should still have applied Sensitive")
+		}
+	})
+
+	t.Run("write-only attribute honors an explicit description", func(t *testing.T) {
+		obj := &ir.ObjectSchemaIR{Attributes: []ir.AttributeIR{
+			{Name: "name", Description: specText, Schema: ir.SchemaIR{Type: ir.TypeString}},
+		}}
+		addWriteOnlyAttributes(obj, []config.WriteOnlyAttribute{{Name: "name", Description: "Override wins."}})
+		attr, _ := findAttr(obj.Attributes, "name")
+		if attr.Description != "Override wins." {
+			t.Errorf("description = %q, want the override text", attr.Description)
+		}
+	})
+
+	t.Run("list config schema keeps spec description", func(t *testing.T) {
+		lr := &ir.ListResourceIR{ConfigSchema: ir.ObjectSchemaIR{Attributes: []ir.AttributeIR{
+			{Name: "limit", Description: specText, Schema: ir.SchemaIR{Type: ir.TypeInt}},
+		}}}
+		applyListResourceConfigSchema(lr, []config.ListConfigSchema{{Name: "limit", Type: "int64", Optional: true}})
+		attr, ok := findAttr(lr.ConfigSchema.Attributes, "limit")
+		if !ok {
+			t.Fatal("limit attribute not found")
+		}
+		if attr.Description != specText {
+			t.Errorf("description = %q, want the spec text %q", attr.Description, specText)
+		}
+	})
+
+	t.Run("list config schema honors an explicit description", func(t *testing.T) {
+		lr := &ir.ListResourceIR{ConfigSchema: ir.ObjectSchemaIR{Attributes: []ir.AttributeIR{
+			{Name: "limit", Description: specText, Schema: ir.SchemaIR{Type: ir.TypeInt}},
+		}}}
+		applyListResourceConfigSchema(lr, []config.ListConfigSchema{{Name: "limit", Type: "int64", Optional: true, Description: "Override wins."}})
+		attr, _ := findAttr(lr.ConfigSchema.Attributes, "limit")
+		if attr.Description != "Override wins." {
+			t.Errorf("description = %q, want the override text", attr.Description)
+		}
+	})
+}

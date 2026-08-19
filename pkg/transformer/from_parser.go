@@ -154,12 +154,13 @@ func parametersFromParser(spec *parser.Spec, pi *parser.PathItem, op *parser.Ope
 			}
 		}
 		params = append(params, Parameter{
-			Name:      resolved.Name,
-			In:        resolved.In,
-			Required:  resolved.Required,
-			Type:      paramType,
-			ItemsType: itemsType,
-			Style:     resolved.Style,
+			Name:        resolved.Name,
+			In:          resolved.In,
+			Description: resolved.Description,
+			Required:    resolved.Required,
+			Type:        paramType,
+			ItemsType:   itemsType,
+			Style:       resolved.Style,
 		})
 	}
 	// Operation-level parameters take precedence over path-item parameters per
@@ -600,10 +601,11 @@ func schemaSpecFromParserDepth(spec *parser.Spec, s *parser.Schema, depth, cycle
 			// dimension, which keeps the (schema, cycleDepth) memo sound.
 			if cycleDepth >= maxCyclicDepth {
 				return &SchemaSpec{
-					Type:     schemaTypeString(s.Type),
-					Format:   s.Format,
-					Nullable: s.Nullable,
-					RefName:  refName,
+					Type:        schemaTypeString(s.Type),
+					Description: s.Description,
+					Format:      s.Format,
+					Nullable:    s.Nullable,
+					RefName:     refName,
 				}
 			}
 			resolved := resolveSchemaRef(spec, s)
@@ -621,10 +623,11 @@ func schemaSpecFromParserDepth(spec *parser.Spec, s *parser.Schema, depth, cycle
 		// matching the Opaque handling below.
 		if visited[s.Ref] {
 			return &SchemaSpec{
-				Type:     schemaTypeString(s.Type),
-				Format:   s.Format,
-				Nullable: s.Nullable,
-				RefName:  refName,
+				Type:        schemaTypeString(s.Type),
+				Description: s.Description,
+				Format:      s.Format,
+				Nullable:    s.Nullable,
+				RefName:     refName,
 			}
 		}
 		// Copy the path-local visited set and add this ref so descendants see it,
@@ -647,9 +650,10 @@ func schemaSpecFromParserDepth(spec *parser.Spec, s *parser.Schema, depth, cycle
 	// fields but do not descend, which would recurse forever (M-41).
 	if s.Opaque {
 		return &SchemaSpec{
-			Type:     schemaTypeString(s.Type),
-			Format:   s.Format,
-			Nullable: s.Nullable,
+			Type:        schemaTypeString(s.Type),
+			Description: s.Description,
+			Format:      s.Format,
+			Nullable:    s.Nullable,
 		}
 	}
 	// A non-ref schema is converted once per (schema, cycleDepth) and memoized:
@@ -683,6 +687,7 @@ func schemaSpecFromParserDepth(spec *parser.Spec, s *parser.Schema, depth, cycle
 func schemaSpecFromParserDepthInner(spec *parser.Spec, s *parser.Schema, depth, cycleDepth int, visited map[string]bool, memo schemaMemo, diags *diagnostics.Diagnostics) *SchemaSpec {
 	out := &SchemaSpec{
 		Type:        schemaTypeString(s.Type),
+		Description: s.Description,
 		Format:      s.Format,
 		Nullable:    s.Nullable,
 		UniqueItems: s.UniqueItems,
@@ -862,7 +867,6 @@ func refBaseName(ref string) string {
 // from the one already in dst (first-wins dropped the later definition). Callers
 // surface these as warnings so the silent data loss is fail-loud (M-5).
 func mergeAllOfSchemaSpec(dst *SchemaSpec, src SchemaSpec) []string {
-	var conflicts []string
 	if dst.Type == "" && src.Type != "" {
 		dst.Type = src.Type
 		dst.Format = src.Format
@@ -873,20 +877,7 @@ func mergeAllOfSchemaSpec(dst *SchemaSpec, src SchemaSpec) []string {
 	if dst.AdditionalProperties == nil && src.AdditionalProperties != nil {
 		dst.AdditionalProperties = src.AdditionalProperties
 	}
-	if len(src.Properties) > 0 {
-		if dst.Properties == nil {
-			dst.Properties = make(map[string]SchemaSpec, len(src.Properties))
-		}
-		for name, prop := range src.Properties {
-			if existing, exists := dst.Properties[name]; exists {
-				if !reflect.DeepEqual(existing, prop) {
-					conflicts = append(conflicts, name)
-				}
-				continue
-			}
-			dst.Properties[name] = prop
-		}
-	}
+	conflicts := mergeAllOfSpecProperties(dst, src)
 	if len(src.Required) > 0 {
 		seen := make(map[string]bool, len(dst.Required)+len(src.Required))
 		for _, r := range dst.Required {
@@ -900,6 +891,97 @@ func mergeAllOfSchemaSpec(dst *SchemaSpec, src SchemaSpec) []string {
 		}
 	}
 	return conflicts
+}
+
+// mergeAllOfSpecProperties merges src's properties into dst first-wins, returning
+// the names whose shapes disagree so the caller can surface the dropped
+// definition. A property the winner left undocumented adopts the loser's
+// description: first-wins is about shape, and discarding the only prose an
+// allOf member supplied would be a silent drop.
+func mergeAllOfSpecProperties(dst *SchemaSpec, src SchemaSpec) []string {
+	if len(src.Properties) == 0 {
+		return nil
+	}
+	if dst.Properties == nil {
+		dst.Properties = make(map[string]SchemaSpec, len(src.Properties))
+	}
+	conflicts := make([]string, 0, len(src.Properties))
+	for name, prop := range src.Properties {
+		existing, exists := dst.Properties[name]
+		if !exists {
+			dst.Properties[name] = prop
+			continue
+		}
+		if !sameSchemaShape(existing, prop) {
+			// Shapes disagree, so first-wins really did drop src's definition.
+			// Its prose describes that dropped shape, so adopting it here would
+			// mislabel the surviving one.
+			conflicts = append(conflicts, name)
+			continue
+		}
+		if existing.Description == "" && prop.Description != "" {
+			existing.Description = prop.Description
+			dst.Properties[name] = existing
+		}
+	}
+	return conflicts
+}
+
+// sameSchemaShape reports whether two allOf members describe the same property
+// shape. Description is excluded: it is prose, not structure, so two members
+// that agree on the shape and differ only in wording are not the first-wins
+// data loss the conflict warning exists to surface (the merge keeps whichever
+// description is non-empty). Every other SchemaSpec field is structural.
+//
+// Descriptions are cleared at every depth, not just the top: a SchemaSpec nests
+// through Properties/Items/AdditionalProperties/OneOf/AnyOf, so comparing only
+// the outer level would report a conflict for two members whose nested wording
+// differs.
+func sameSchemaShape(a, b SchemaSpec) bool {
+	return reflect.DeepEqual(withoutDescriptions(a, 0), withoutDescriptions(b, 0))
+}
+
+// withoutDescriptions returns a copy of s with Description cleared at every
+// depth. Nested schemas are shared pointers, so the copy is deep for exactly
+// the fields that can carry a description. depth backstops the same
+// pathological nesting maxSchemaDepth guards during conversion.
+func withoutDescriptions(s SchemaSpec, depth int) SchemaSpec {
+	s.Description = ""
+	if depth >= maxSchemaDepth {
+		return s
+	}
+	if s.Items != nil {
+		items := withoutDescriptions(*s.Items, depth+1)
+		s.Items = &items
+	}
+	if s.AdditionalProperties != nil {
+		ap := withoutDescriptions(*s.AdditionalProperties, depth+1)
+		s.AdditionalProperties = &ap
+	}
+	if len(s.Properties) > 0 {
+		props := make(map[string]SchemaSpec, len(s.Properties))
+		for name, prop := range s.Properties {
+			props[name] = withoutDescriptions(prop, depth+1)
+		}
+		s.Properties = props
+	}
+	s.OneOf = withoutDescriptionsSlice(s.OneOf, depth)
+	s.AnyOf = withoutDescriptionsSlice(s.AnyOf, depth)
+	return s
+}
+
+// withoutDescriptionsSlice applies withoutDescriptions to each union variant,
+// returning nil for an empty input so the copy stays DeepEqual-comparable with
+// a schema that declared no variants at all.
+func withoutDescriptionsSlice(in []SchemaSpec, depth int) []SchemaSpec {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]SchemaSpec, len(in))
+	for i, v := range in {
+		out[i] = withoutDescriptions(v, depth+1)
+	}
+	return out
 }
 
 // warnCompositionNotModeled records a warning that a oneOf/anyOf composition in a
