@@ -312,6 +312,12 @@ func ManagedResourceSchema(c ResourceCRUD) (ir.ObjectSchemaIR, string) {
 			Schema:      schemaIRFromSpecRecursive(prop),
 			Description: prop.Description,
 		}
+		if attr.Description == "" && requestSpec != nil {
+			// A common split: the create request body carries the prose and the
+			// response schema is a bare echo. resourceStateSpec prefers the
+			// response, so without this the documented half is lost.
+			attr.Description = requestSpec.Properties[name].Description
+		}
 		_, inRequest := requestProps[name]
 		if applyManagedAttributeFlags(&attr, name, snake, inRequest, requestRequired, requestSpec) {
 			hasID = true

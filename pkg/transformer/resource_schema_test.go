@@ -733,3 +733,46 @@ func TestDescriptionsReachAttributes(t *testing.T) {
 		}
 	})
 }
+
+// TestManagedResourceDescriptionFallsBackToRequestBody covers the common spec
+// split where the create request body documents a field and the response
+// schema echoes it bare. resourceStateSpec prefers the response, so without a
+// fallback the only prose the spec supplied is dropped.
+func TestManagedResourceDescriptionFallsBackToRequestBody(t *testing.T) {
+	obj, _ := ManagedResourceSchema(ResourceCRUD{
+		Name:           "pet",
+		CollectionPath: "/pets",
+		InstancePath:   "/pets/{petId}",
+		Create: &Operation{
+			Method: MethodPost,
+			Path:   "/pets",
+			RequestSchema: &SchemaSpec{
+				Type:     "object",
+				Required: []string{"name"},
+				Properties: map[string]SchemaSpec{
+					"name": {Type: "string", Description: "Display name of the pet."},
+				},
+			},
+		},
+		Read: &Operation{
+			Method: MethodGet,
+			Path:   "/pets/{petId}",
+			ResponseSchema: &SchemaSpec{
+				Type:     "object",
+				Required: []string{"id", "name"},
+				Properties: map[string]SchemaSpec{
+					"id":   {Type: "integer", Format: "int64"},
+					"name": {Type: "string"}, // bare echo, no description
+				},
+			},
+		},
+		Delete: &Operation{Method: MethodDelete, Path: "/pets/{petId}"},
+	})
+	attr, ok := findAttr(obj.Attributes, "name")
+	if !ok {
+		t.Fatal("name attribute not found")
+	}
+	if attr.Description != "Display name of the pet." {
+		t.Errorf("description = %q, want the request body's text", attr.Description)
+	}
+}
