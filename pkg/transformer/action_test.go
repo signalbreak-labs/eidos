@@ -511,3 +511,22 @@ func hasWarning(diags diagnostics.Diagnostics, s string) bool {
 	}
 	return false
 }
+
+// TestRequestBodyAttributes_BodyFallbackDescription covers the scalar request
+// body path, where the whole body collapses to a single `body` attribute and
+// the schema's own description is the only prose available to document it.
+func TestRequestBodyAttributes_BodyFallbackDescription(t *testing.T) {
+	attrs := requestBodyAttributes(SchemaSpec{
+		Type:        "string",
+		Description: "Raw payload posted to the endpoint.",
+	}, nil)
+	if len(attrs) != 1 || attrs[0].Name != "body" {
+		t.Fatalf("attrs = %+v, want a single \"body\" attribute", attrs)
+	}
+	if attrs[0].Description != "Raw payload posted to the endpoint." {
+		t.Errorf("description = %q, want the schema's own text", attrs[0].Description)
+	}
+	if !attrs[0].Required {
+		t.Error("a declared request body should be Required")
+	}
+}
