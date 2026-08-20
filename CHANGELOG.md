@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.0](https://github.com/signalbreak-labs/eidos/compare/v0.4.4...v0.5.0) (2026-08-20)
+
+
+### Features
+
+* **transformer:** carry OpenAPI descriptions onto generated attributes ([0c15d09](https://github.com/signalbreak-labs/eidos/commit/0c15d0953617fcb6aaf0e8442db052fa13f6de89)), closes [#28](https://github.com/signalbreak-labs/eidos/issues/28)
+* **transformer:** fall back to the request body for attribute descriptions ([0fc5668](https://github.com/signalbreak-labs/eidos/commit/0fc5668abb1791877a5092cdb36a7085b6cc48ae)), closes [#28](https://github.com/signalbreak-labs/eidos/issues/28)
+
 ## [0.4.4](https://github.com/signalbreak-labs/eidos/compare/v0.4.3...v0.4.4) (2026-08-18)
 
 
