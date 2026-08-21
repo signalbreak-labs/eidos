@@ -90,7 +90,7 @@ jobs:
       # for github-actions) will bump them. SHA-pin to match the rest of the
       # file once a preferred digest is chosen.
       - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
+        uses: docker/setup-qemu-action@v4
       - name: Set up Buildx
         uses: docker/setup-buildx-action@v3
 
