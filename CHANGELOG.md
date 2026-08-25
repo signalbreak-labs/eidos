@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.1](https://github.com/signalbreak-labs/eidos/compare/v0.5.0...v0.5.1) (2026-08-25)
+
+
+### Bug Fixes
+
+* **generator:** fmt-clean HCL examples, docs nested-schema sections, wire-name ID lookup in acceptance test mocks, zip archives + buildvcs/GPG release fixes, config-driven dynamic-release workflow ([b03063a](https://github.com/signalbreak-labs/eidos/commit/b03063a70e5c5a88db7ed6140103b1f5b9508311))
+
+
+### Miscellaneous Chores
+
+* update sample provider ([db7350e](https://github.com/signalbreak-labs/eidos/commit/db7350ee471aea4de1c7a048d74ad3d0a3bf145d))
+
 ## [0.5.0](https://github.com/signalbreak-labs/eidos/compare/v0.4.4...v0.5.0) (2026-08-20)
 
 
