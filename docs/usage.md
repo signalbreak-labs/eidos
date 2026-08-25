@@ -407,7 +407,7 @@ self-documenting and round-trips through `eidos generate --config`.
 | `name` | string | **Required.** Short provider name, e.g. `mycloud`. |
 | `display_name` | string | Human-readable provider name. |
 | `version` | string | **Required.** Provider version, e.g. `0.1.0`. |
-| `description` | string | Provider description. |
+| `description` | string | Provider description. Overrides the spec's `info.description` when set. |
 | `author` | string | Author or organization name. |
 | `contact_email` | string | Contact email. |
 | `license` | string | License identifier. |
@@ -489,6 +489,7 @@ resource_overrides:
 | `delete_operation` | string | OpenAPI operationId for Delete. |
 | `schema_version` | int | Schema version for state upgrades. |
 | `state_upgrades` | []StateUpgradeConfig | State migrations. |
+| `description` | string | Override the resource's description (replaces the spec-derived description). |
 
 Either `schema` or `operation` is required. The per-CRUD operation fields
 (`create_operation`/`read_operation`/`update_operation`/`delete_operation`) let

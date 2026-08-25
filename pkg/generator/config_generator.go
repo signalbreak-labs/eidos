@@ -180,6 +180,7 @@ func convertResources(provider ir.ProviderIR) []config.ResourceOverride {
 			ComputedAttributes:  computed,
 			SensitiveAttributes: sensitive,
 			WriteOnlyAttributes: writeOnly,
+			Description:         r.Description,
 		}
 		// Override-created resources (promoted from a resource_override with
 		// generate_resource/create_operation/...) are not reproducible from CRUD
