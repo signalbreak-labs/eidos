@@ -38,7 +38,7 @@ func TestActionDocsFile_Render(t *testing.T) {
 		"## Schema",
 		"### Arguments",
 		"* `server_id` (String, required)",
-		"* `force` (Bool, optional)",
+		"* `force` (Boolean, optional)",
 	}
 	for _, want := range wantSubstrings {
 		if !strings.Contains(got, want) {
@@ -116,15 +116,15 @@ func TestListResourceDocsFile_Render(t *testing.T) {
 		"## Example Usage",
 		`list "mycloud_pets" "example" {`,
 		"provider = mycloud",
-		"limit = 100",
+		"limit    = 100",
 		"config {",
-		"id = \"example\"",
+		"id   = \"example\"",
 		"## Schema",
 		"### Arguments",
 		"* `id` (String, required)",
-		"* `tags` (List(String), optional)",
-		"* `labels` (Map(String), optional)",
-		"* `owner` (Object({name, age}), optional)",
+		"* `tags` (List of String, optional)",
+		"* `labels` (Map of String, optional)",
+		"* `owner` (Attributes, optional) (see [below for nested schema](#nestedatt--owner))",
 	}
 	for _, want := range wantSubstrings {
 		if !strings.Contains(got, want) {
@@ -159,10 +159,10 @@ func TestFunctionDocsFile_Render(t *testing.T) {
 		"## Example Usage",
 		`provider::mycloud::concat_tags("<separator>", [ "<tags>" ])`,
 		"## Signature",
-		"concat_tags(separator: String, tags: List(String)) -> String",
+		"concat_tags(separator: String, tags: List of String) -> String",
 		"## Arguments",
 		"* `separator` (String) - Delimiter placed between tags.",
-		"* `tags` (List(String)) - Tags to join.",
+		"* `tags` (List of String) - Tags to join.",
 		"## Return",
 		"`String`",
 	}

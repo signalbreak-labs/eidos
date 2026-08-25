@@ -512,8 +512,8 @@ func TestOnlyBuildWithDynamicRelease(t *testing.T) {
 	}
 	writePaths := pathsFromFile(wf)
 
-	// The four static scaffolding files are present.
-	for _, p := range []string{"GNUmakefile", ".goreleaser.yml", ".github/workflows/release.yml", "terraform-registry-manifest.json"} {
+	// The five static scaffolding files are present.
+	for _, p := range []string{"GNUmakefile", ".goreleaser.yml", ".github/workflows/release.yml", "terraform-registry-manifest.json", ".gitignore"} {
 		if !contains(recordPaths, p) {
 			t.Errorf("record path missing scaffolding %q: %v", p, recordPaths)
 		}
@@ -529,8 +529,8 @@ func TestOnlyBuildWithDynamicRelease(t *testing.T) {
 		t.Errorf("write path missing dynamic release workflow under --only-build: %v", writePaths)
 	}
 	// Nothing else leaks through: only the scaffolding + the dynamic workflow.
-	if len(recordPaths) != 5 {
-		t.Errorf("record path should emit exactly 5 files, got %d: %v", len(recordPaths), recordPaths)
+	if len(recordPaths) != 6 {
+		t.Errorf("record path should emit exactly 6 files, got %d: %v", len(recordPaths), recordPaths)
 	}
 	// record/write parity.
 	recordSet, writeSet := setOf(recordPaths), setOf(writePaths)

@@ -65,18 +65,20 @@ func TestResourceDocsFile_Render(t *testing.T) {
 		"# mycloud_pet Resource",
 		"## Example Usage",
 		`resource "mycloud_pet" "example" {`,
-		"  tags = []",
+		"  name  = null",
+		"  tags  = []",
 		"  owner = {}",
 		"## Schema",
 		"### Arguments",
 		"* `name` (String, required)",
 		"* `tag` (String, optional)",
 		"* `age` (Number, optional)",
-		"* `tags` (List(String), optional)",
-		"* `owner` (Object({email}), optional)",
-		"  * `email` (String, required)",
+		"* `tags` (List of String, optional)",
+		"* `owner` (Attributes, optional) (see [below for nested schema](#nestedatt--owner))",
 		"### Attributes",
 		"* `id` (String, computed)",
+		"### Nested Schema for `owner`",
+		"* `email` (String)",
 		"## Import",
 		"terraform import mycloud_pet.example <id>",
 	}
@@ -117,7 +119,7 @@ func TestDataSourceDocsFile_Render(t *testing.T) {
 		"* `id` (String, required)",
 		"### Attributes",
 		"* `name` (String, computed)",
-		"* `tags` (List(String), computed)",
+		"* `tags` (List of String, computed)",
 	}
 	for _, want := range wantSubstrings {
 		if !strings.Contains(got, want) {
@@ -239,10 +241,10 @@ func TestDataSourceDocsFile_NestedAttributes(t *testing.T) {
 	}
 	got := buf.String()
 
-	if !strings.Contains(got, "* `owner` (Object({name}), computed)") {
+	if !strings.Contains(got, "* `owner` (Attributes, computed) (see [below for nested schema](#nestedatt--owner))") {
 		t.Errorf("generated data source docs missing nested owner attribute\ncontent:\n%s", got)
 	}
-	if !strings.Contains(got, "  * `name` (String, computed)") {
+	if !strings.Contains(got, "### Nested Schema for `owner`") || !strings.Contains(got, "* `name` (String)") {
 		t.Errorf("generated data source docs missing nested name row\ncontent:\n%s", got)
 	}
 }
@@ -290,10 +292,10 @@ func TestRenderExampleArguments_CollectionsAndObjects(t *testing.T) {
 
 	got := renderExampleArguments(attrs)
 	want := []string{
-		"  name = null",
-		"  tags = []",
+		"  name     = null",
+		"  tags     = []",
 		"  metadata = {}",
-		"  owner = {}",
+		"  owner    = {}",
 	}
 	for _, w := range want {
 		if !strings.Contains(got, w) {

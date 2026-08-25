@@ -7,7 +7,7 @@
   {
     "path": ".goreleaser.yml",
     "reason": "GoReleaser release configuration",
-    "body_hash": "e2476a0c93c5072f"
+    "body_hash": "a09dc3d5d1482de7"
   },
   {
     "path": "GNUmakefile",
@@ -22,12 +22,12 @@
   {
     "path": "docs/actions/create_protected.md",
     "reason": "documentation for action create_protected",
-    "body_hash": "8e84bc564e2e705b"
+    "body_hash": "bf76a60536d2ebcd"
   },
   {
     "path": "docs/data-sources/get_protected.md",
     "reason": "documentation for data source get_protected",
-    "body_hash": "6c63f484dff498a1"
+    "body_hash": "1b920cf90c60ab27"
   },
   {
     "path": "docs/index.md",

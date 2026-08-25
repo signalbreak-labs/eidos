@@ -7,7 +7,7 @@
   {
     "path": ".goreleaser.yml",
     "reason": "GoReleaser release configuration",
-    "body_hash": "720f7a37d9a92018"
+    "body_hash": "bafa50779cdb3e56"
   },
   {
     "path": "GNUmakefile",
@@ -22,12 +22,12 @@
   {
     "path": "docs/actions/create_shipment.md",
     "reason": "documentation for action create_shipment",
-    "body_hash": "18451938428db8ec"
+    "body_hash": "83cb6eff40106d9a"
   },
   {
     "path": "docs/data-sources/get_shipment.md",
     "reason": "documentation for data source get_shipment",
-    "body_hash": "4d85f546a3402f5d"
+    "body_hash": "7a3c79a0907aa7dc"
   },
   {
     "path": "docs/index.md",
@@ -37,7 +37,7 @@
   {
     "path": "examples/actions/create_shipment/action.tf",
     "reason": "example for action create_shipment",
-    "body_hash": "3728eaf0961eed35"
+    "body_hash": "09d433c6b588ad93"
   },
   {
     "path": "examples/data-sources/get_shipment/data-source.tf",

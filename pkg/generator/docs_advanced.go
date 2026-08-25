@@ -13,13 +13,16 @@ import (
 // Terraform action.
 func ActionDocsFile(a ir.ActionIR) File {
 	path := fmt.Sprintf("docs/actions/%s.md", naming.SnakeCase(a.Name))
+	arguments, _, blocks, nested := renderDocsSections(a.ConfigSchema.Attributes, a.ConfigSchema.Attributes, a.ConfigSchema.Blocks)
 	data := map[string]any{
-		"ActionName":   actionDocsTypeName(a),
-		"ProviderName": providerDocsTypeNameFromAction(a),
-		"Description":  escapeDescription(a.Description),
-		"ExampleHCL":   generateActionExampleHCL(a),
-		"Arguments":    renderAttributeSection(a.ConfigSchema.Attributes, true),
-		"Blocks":       renderBlockSection(a.ConfigSchema.Blocks),
+		"ActionName":      actionDocsTypeName(a),
+		"ProviderName":    providerDocsTypeNameFromAction(a),
+		"Description":     escapeDescription(a.Description),
+		"DescriptionBody": bodyDescription(a.Description),
+		"ExampleHCL":      generateActionExampleHCL(a),
+		"Arguments":       arguments,
+		"Blocks":          blocks,
+		"NestedSchemas":   nested,
 	}
 	return Template(path, actionTemplate, data)
 }
@@ -41,14 +44,17 @@ func EphemeralResourceDocsFile(er ir.EphemeralResourceIR) File {
 	path := fmt.Sprintf("docs/ephemeral-resources/%s.md", naming.SnakeCase(er.Name))
 	merged := ephemeralMergedAttributes(er)
 	mergedBlocks := ephemeralMergedBlocks(er)
+	arguments, attributes, blocks, nested := renderDocsSections(merged, merged, mergedBlocks)
 	data := map[string]any{
 		"EphemeralResourceName": ephemeralResourceDocsTypeName(er),
 		"ProviderName":          providerDocsTypeNameFromEphemeralResource(er),
 		"Description":           escapeDescription(er.Description),
+		"DescriptionBody":       bodyDescription(er.Description),
 		"ExampleHCL":            generateEphemeralResourceExampleHCL(er),
-		"Arguments":             renderAttributeSection(merged, true),
-		"Attributes":            renderAttributeSection(merged, false),
-		"Blocks":                renderBlockSection(mergedBlocks),
+		"Arguments":             arguments,
+		"Attributes":            attributes,
+		"Blocks":                blocks,
+		"NestedSchemas":         nested,
 	}
 	return Template(path, ephemeralResourceTemplate, data)
 }
@@ -68,14 +74,17 @@ func EphemeralResourceDocsFiles(ers []ir.EphemeralResourceIR) []File {
 // for a single Terraform list resource.
 func ListResourceDocsFile(lr ir.ListResourceIR) File {
 	path := fmt.Sprintf("docs/list-resources/%s.md", naming.SnakeCase(lr.Name))
+	arguments, attributes, blocks, nested := renderDocsSections(lr.ConfigSchema.Attributes, lr.IdentitySchema.Attributes, lr.ConfigSchema.Blocks)
 	data := map[string]any{
 		"ListResourceName": listResourceDocsTypeName(lr),
 		"ProviderName":     providerDocsTypeNameFromListResource(lr),
 		"Description":      escapeDescription(lr.Description),
+		"DescriptionBody":  bodyDescription(lr.Description),
 		"ExampleHCL":       generateListResourceExampleHCL(lr),
-		"Arguments":        renderAttributeSection(lr.ConfigSchema.Attributes, true),
-		"Attributes":       renderAttributeSection(lr.IdentitySchema.Attributes, false),
-		"Blocks":           renderBlockSection(lr.ConfigSchema.Blocks),
+		"Arguments":        arguments,
+		"Attributes":       attributes,
+		"Blocks":           blocks,
+		"NestedSchemas":    nested,
 	}
 	return Template(path, listResourceTemplate, data)
 }
@@ -100,6 +109,7 @@ func FunctionDocsFile(fn ir.FunctionIR, providerName string) File {
 		"FunctionName":    functionDocsTypeName(fn),
 		"ProviderName":    strings.TrimSpace(providerName),
 		"Description":     escapeDescription(fn.Description),
+		"DescriptionBody": bodyDescription(fn.Description),
 		"ExampleHCL":      generateFunctionExampleHCL(fn, providerName),
 		"SignatureArgs":   renderFunctionSignatureArgs(fn),
 		"ArgumentDetails": renderFunctionParameters(fn),
@@ -194,24 +204,31 @@ description: |-
 
 # {{.ActionName}} Action
 
-{{.Description}}
+{{.DescriptionBody}}
 
 ## Example Usage
 
 ` + "```terraform" + `
 {{.ExampleHCL}}
 ` + "```" + `
-
+{{- if or .Arguments .Blocks}}
 ## Schema
+{{- if .Arguments}}
 
 ### Arguments
 
 The following arguments are supported:
 
-{{.Arguments}}{{- if .Blocks }}
+{{.Arguments}}
+{{- end}}
+{{- if .Blocks}}
+
 ### Nested Blocks
 
-{{.Blocks}}{{end -}}
+{{.Blocks}}
+{{- end}}
+{{.NestedSchemas}}
+{{- end}}
 `
 
 // ephemeralResourceTemplate is the Terraform Registry-compatible frontmatter
@@ -225,7 +242,7 @@ description: |-
 
 # {{.EphemeralResourceName}} Ephemeral Resource
 
-{{.Description}}
+{{.DescriptionBody}}
 
 ~> **Note:** Ephemeral resources are only available within the context of a single Terraform operation and are never persisted to state or plan files.
 
@@ -234,22 +251,32 @@ description: |-
 ` + "```terraform" + `
 {{.ExampleHCL}}
 ` + "```" + `
-
+{{- if or .Arguments .Attributes .Blocks}}
 ## Schema
+{{- if .Arguments}}
 
 ### Arguments
 
 The following arguments are supported:
 
 {{.Arguments}}
+{{- end}}
+{{- if .Attributes}}
+
 ### Attributes
 
 In addition to all arguments above, the following computed attributes are exported:
 
-{{.Attributes}}{{- if .Blocks }}
+{{.Attributes}}
+{{- end}}
+{{- if .Blocks}}
+
 ### Nested Blocks
 
-{{.Blocks}}{{end -}}
+{{.Blocks}}
+{{- end}}
+{{.NestedSchemas}}
+{{- end}}
 `
 
 // listResourceTemplate is the Terraform Registry-compatible frontmatter and
@@ -263,29 +290,39 @@ description: |-
 
 # {{.ListResourceName}} List Resource
 
-{{.Description}}
+{{.DescriptionBody}}
 
 ## Example Usage
 
 ` + "```terraform" + `
 {{.ExampleHCL}}
 ` + "```" + `
-
+{{- if or .Arguments .Attributes .Blocks}}
 ## Schema
+{{- if .Arguments}}
 
 ### Arguments
 
 The following arguments are supported:
 
-{{.Arguments}}{{- if .Attributes }}
+{{.Arguments}}
+{{- end}}
+{{- if .Attributes}}
+
 ### Identity Attributes
 
 The following identity attributes are exported for each matching result:
 
-{{.Attributes}}{{end -}}{{- if .Blocks }}
+{{.Attributes}}
+{{- end}}
+{{- if .Blocks}}
+
 ### Nested Blocks
 
-{{.Blocks}}{{end -}}
+{{.Blocks}}
+{{- end}}
+{{.NestedSchemas}}
+{{- end}}
 `
 
 // functionTemplate is the Terraform Registry-compatible frontmatter and body
@@ -299,7 +336,7 @@ description: |-
 
 # {{.FunctionName}} Function
 
-{{.Description}}
+{{.DescriptionBody}}
 
 ## Example Usage
 
@@ -335,8 +372,12 @@ func generateListResourceExampleHCL(lr ir.ListResourceIR) string {
 	providerName := providerDocsTypeNameFromListResource(lr)
 	h.writeLinef(`list "%s" "example" {`, listResourceDocsTypeName(lr))
 	h.indent++
-	h.writeLinef("provider = %s", providerName)
-	h.writeLinef("limit = 100")
+	// provider and limit are consecutive single-line assignments; emit them with
+	// aligned `=` signs so the example is terraform-fmt-clean.
+	rows := &hclRows{h: &h}
+	rows.add("provider", providerName)
+	rows.add("limit", "100")
+	rows.flush()
 	if len(lr.ConfigSchema.Attributes) > 0 || len(lr.ConfigSchema.Blocks) > 0 {
 		h.writeLinef("config {")
 		h.indent++

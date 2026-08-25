@@ -7,7 +7,7 @@
   {
     "path": ".goreleaser.yml",
     "reason": "GoReleaser release configuration",
-    "body_hash": "1ff662ab629fb20b"
+    "body_hash": "e00e4fbeabaa280b"
   },
   {
     "path": "GNUmakefile",
@@ -22,7 +22,7 @@
   {
     "path": "docs/data-sources/list_pets.md",
     "reason": "documentation for data source list_pets",
-    "body_hash": "8fcadaa9774be413"
+    "body_hash": "8d9db8a6ff819f7c"
   },
   {
     "path": "docs/index.md",
@@ -32,12 +32,12 @@
   {
     "path": "docs/list-resources/list_pets.md",
     "reason": "documentation for list resource list_pets",
-    "body_hash": "aa8b98c53e0793f5"
+    "body_hash": "1eee802d849e763f"
   },
   {
     "path": "docs/resources/pet.md",
     "reason": "documentation for resource pet",
-    "body_hash": "4ffa985ecf98be89"
+    "body_hash": "4170e1f8bbec07d1"
   },
   {
     "path": "examples/data-sources/list_pets/data-source.tf",
@@ -47,7 +47,7 @@
   {
     "path": "examples/resources/pet/resource.tf",
     "reason": "example for resource pet",
-    "body_hash": "78fb8ad565f4ac62"
+    "body_hash": "8cf7ebe3dc662c42"
   },
   {
     "path": "generator.yaml",

@@ -121,9 +121,11 @@ func TestWriteTerraformTestCollectionAttribute(t *testing.T) {
 	}
 }
 
-// TestRenderBlockSectionAndWriteObjectRows asserts the nested-block reference
-// section renders block rows with descriptions and object attribute rows.
-func TestRenderBlockSectionAndWriteObjectRows(t *testing.T) {
+// TestRenderDocsNestedBlocks asserts the tfplugindocs-style nested-block
+// rendering: the block row links to its nested schema, and the nested section
+// groups child attributes and deeper blocks under Required/Optional/Read-Only
+// subtitles with their own anchors.
+func TestRenderDocsNestedBlocks(t *testing.T) {
 	minItems := int64(1)
 	blocks := []ir.BlockIR{{
 		Name:        "endpoint",
@@ -143,22 +145,28 @@ func TestRenderBlockSectionAndWriteObjectRows(t *testing.T) {
 		},
 	}}
 
-	var b strings.Builder
-	writeObjectRows(&b, ir.ObjectSchemaIR{Attributes: []ir.AttributeIR{{Name: "name", Required: true, Schema: schemaType(ir.TypeString)}}}, 0)
-	got := b.String()
-	if !strings.Contains(got, "* `name` (String, required)") {
-		t.Errorf("object row missing\n%s", got)
-	}
-
-	section := renderBlockSection(blocks)
+	_, _, section, nested := renderDocsSections(nil, nil, blocks)
 	for _, want := range []string{
-		"* `endpoint` (List, required) - an endpoint config",
-		"* `url` (String, required) - the url",
-		"* `retries` (Number, optional)",
-		"  * `auth` (Single, optional)",
+		"* `endpoint` (Block List, required) - an endpoint config (see [below for nested schema](#nestedblock--endpoint))",
 	} {
 		if !strings.Contains(section, want) {
-			t.Errorf("block section missing %q\n%s", want, section)
+			t.Errorf("block row missing %q\n%s", want, section)
+		}
+	}
+	for _, want := range []string{
+		"<a id=\"nestedblock--endpoint\"></a>",
+		"### Nested Schema for `endpoint`",
+		"Required:",
+		"* `url` (String) - the url",
+		"Optional:",
+		"* `retries` (Number)",
+		"<a id=\"nestedblock--endpoint--auth\"></a>",
+		"### Nested Schema for `endpoint.auth`",
+		"Read-Only:",
+		"* `token` (String)",
+	} {
+		if !strings.Contains(nested, want) {
+			t.Errorf("nested schema missing %q\n%s", want, nested)
 		}
 	}
 }

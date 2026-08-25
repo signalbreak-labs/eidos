@@ -125,6 +125,56 @@ func TestResourceAcceptanceTestFile_PractitionerSuppliedIdentity(t *testing.T) {
 	}
 }
 
+// TestResourceAcceptanceTestFile_WireNameIDLookup verifies the mock inspects,
+// synthesizes, and keys state by the identity's wire name when it differs from
+// the tfsdk attribute name (camelCase policyName vs snake_case policy_name).
+// Generated request bodies are keyed by the wire name, so a presence check on
+// the tfsdk name always misses, the mock injects a placeholder over a real
+// user-supplied identity, and the test observes the placeholder instead of the
+// configured value.
+func TestResourceAcceptanceTestFile_WireNameIDLookup(t *testing.T) {
+	r := sampleResourceIR()
+	// Model the GigaVUE-FM alert_policy shape: the identity is exposed to
+	// Terraform as policy_name but the API carries it as policyName.
+	r.IDAttribute = "policy_name"
+	r.Schema.Attributes = append(r.Schema.Attributes,
+		ir.AttributeIR{
+			Name:     "policy_name",
+			Required: true,
+			Schema:   ir.SchemaIR{Type: ir.TypeString},
+			WireName: "policyName",
+		},
+	)
+	pir := sampleProviderWithResourceIR()
+	pir.Resources = []ir.ResourceIR{r}
+	cfg := BuildConfig{ProviderName: pir.Name, Namespace: pir.Name}
+
+	file := ResourceAcceptanceTestFile(pir, r, cfg)
+	var buf bytes.Buffer
+	if err := file.Render(&buf); err != nil {
+		t.Fatalf("Render() error = %v", err)
+	}
+	got := buf.String()
+
+	// The create handler must check and synthesize the identity under the wire
+	// name, never the tfsdk name — a request carrying policyName must be
+	// recognized as present so its real value is echoed back.
+	if !strings.Contains(got, `if _, ok := body["policyName"]; !ok`) {
+		t.Errorf("create should key the presence check on the wire name body[%q]; got:\n%s", "policyName", got)
+	}
+	if strings.Contains(got, `body["policy_name"]`) {
+		t.Errorf("mock must not access the body under the tfsdk name policy_name; got:\n%s", got)
+	}
+	// State must be keyed by the identity value read from the wire key.
+	if !strings.Contains(got, `id = fmt.Sprintf("%v", body["policyName"])`) {
+		t.Errorf("create should key state by body[%q]; got:\n%s", "policyName", got)
+	}
+	// Terraform state assertions must stay on the tfsdk attribute name.
+	if !strings.Contains(got, `TestCheckResourceAttrSet("mycloud_pet.example", "policy_name")`) {
+		t.Errorf("state checks should use the tfsdk attribute name policy_name; got:\n%s", got)
+	}
+}
+
 // TestResourceAcceptanceTestFile_CompositeIdentityImport verifies the mock
 // resolves import for a composite-identity resource (e.g. GitLab
 // /groups/{group}/labels/{name}). Such a resource is created on a collection

@@ -144,7 +144,7 @@ func generateResourceAcceptanceTestFile(pir ir.ProviderIR, r ir.ResourceIR, cfg 
 		if route.create || route.update {
 			needsIO = true
 		}
-		// The create handler stringifies the identity value (body[idAttr]) to
+		// The create handler stringifies the identity value (body[idKey]) to
 		// key state, so it emits fmt.Sprintf whenever a create route exists.
 		if route.create {
 			needsFmt = true
@@ -828,12 +828,18 @@ func generateMockServerFunction(f *astgen.File, r ir.ResourceIR, funcName string
 	// decodes into the resource's ID attribute — a resource whose ID is exposed
 	// as e.g. symbol would otherwise never have its ID set and the generated
 	// Create would fail its identifier check (G-21).
-	idAttr := idInfo.attr
-	if idAttr == "" {
-		idAttr = "id"
+	//
+	// The body is keyed by the ID's wire name (idInfo.wire), not the tfsdk
+	// attribute name: generated request bodies use the wire name as the JSON
+	// key, so a presence check on the snake_case tfsdk name always misses, the
+	// mock injects a placeholder over a real user-supplied identity, and the
+	// test observes the placeholder instead of the configured value.
+	idKey := idInfo.wire
+	if idKey == "" {
+		idKey = "id"
 	}
 	for i, route := range routes {
-		body = append(body, statefulMockRouteHandler(route, i, schemes, idPrimitive, idAttr)...)
+		body = append(body, statefulMockRouteHandler(route, i, schemes, idPrimitive, idKey)...)
 	}
 	body = append(body, astgen.Return(astgen.Call(astgen.QualExpr("httptest", "NewServer"), astgen.Ident("mux"))))
 
@@ -1361,7 +1367,7 @@ func mockIDValue(t ir.PrimitiveType) ast.Expr {
 // GET returns the stored body for the requested ID. DELETE removes the entry,
 // causing subsequent GETs for that ID to return 404. Malformed JSON bodies
 // are rejected with 400 BadRequest; an empty body is accepted as an empty map.
-func statefulMockRouteHandler(route mockRoute, index int, schemes []ir.SecuritySchemeIR, idPrimitive ir.PrimitiveType, idAttr string) []ast.Stmt {
+func statefulMockRouteHandler(route mockRoute, index int, schemes []ir.SecuritySchemeIR, idPrimitive ir.PrimitiveType, idKey string) []ast.Stmt {
 	stateVar := fmt.Sprintf("state%d", index)
 	muVar := fmt.Sprintf("mu%d", index)
 	handlerVar := fmt.Sprintf("handler%d", index)
@@ -1436,19 +1442,19 @@ func statefulMockRouteHandler(route mockRoute, index int, schemes []ir.SecurityS
 			&ast.IfStmt{
 				Init: astgen.AssignStmt(
 					[]ast.Expr{astgen.Ident("_"), astgen.Ident("ok")},
-					[]ast.Expr{astgen.IndexExpr(astgen.Ident("body"), astgen.Lit(idAttr))},
+					[]ast.Expr{astgen.IndexExpr(astgen.Ident("body"), astgen.Lit(idKey))},
 					token.DEFINE,
 				),
 				Cond: astgen.Unary(token.NOT, astgen.Ident("ok")),
 				Body: astgen.Block(
 					astgen.AssignStmt(
-						[]ast.Expr{astgen.IndexExpr(astgen.Ident("body"), astgen.Lit(idAttr))},
+						[]ast.Expr{astgen.IndexExpr(astgen.Ident("body"), astgen.Lit(idKey))},
 						[]ast.Expr{mockIDValue(idPrimitive)},
 						token.ASSIGN,
 					),
 				),
 			},
-			// Key state by the identity value (body[idAttr]) rather than the
+			// Key state by the identity value (body[idKey]) rather than the
 			// request path tail: a collection POST carries no id in the path, so
 			// the path tail is the bare placeholder, while a practitioner-supplied
 			// identity has the value the client will send on subsequent
@@ -1458,7 +1464,7 @@ func statefulMockRouteHandler(route mockRoute, index int, schemes []ir.SecurityS
 			// directly (G-22).
 			astgen.AssignStmt(
 				[]ast.Expr{astgen.Ident("id")},
-				[]ast.Expr{astgen.Call(astgen.QualExpr("fmt", "Sprintf"), astgen.Lit("%v"), astgen.IndexExpr(astgen.Ident("body"), astgen.Lit(idAttr)))},
+				[]ast.Expr{astgen.Call(astgen.QualExpr("fmt", "Sprintf"), astgen.Lit("%v"), astgen.IndexExpr(astgen.Ident("body"), astgen.Lit(idKey)))},
 				token.ASSIGN,
 			),
 			astgen.AssignStmt(
@@ -1555,13 +1561,13 @@ func statefulMockRouteHandler(route mockRoute, index int, schemes []ir.SecurityS
 			&ast.IfStmt{
 				Init: astgen.AssignStmt(
 					[]ast.Expr{astgen.Ident("_"), astgen.Ident("ok")},
-					[]ast.Expr{astgen.IndexExpr(astgen.Ident("body"), astgen.Lit(idAttr))},
+					[]ast.Expr{astgen.IndexExpr(astgen.Ident("body"), astgen.Lit(idKey))},
 					token.DEFINE,
 				),
 				Cond: astgen.Unary(token.NOT, astgen.Ident("ok")),
 				Body: astgen.Block(
 					astgen.AssignStmt(
-						[]ast.Expr{astgen.IndexExpr(astgen.Ident("body"), astgen.Lit(idAttr))},
+						[]ast.Expr{astgen.IndexExpr(astgen.Ident("body"), astgen.Lit(idKey))},
 						[]ast.Expr{mockIDValue(idPrimitive)},
 						token.ASSIGN,
 					),

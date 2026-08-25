@@ -7,7 +7,7 @@
   {
     "path": ".goreleaser.yml",
     "reason": "GoReleaser release configuration",
-    "body_hash": "25b27f03f72759d9"
+    "body_hash": "7a4a2a3daf73cbfd"
   },
   {
     "path": "GNUmakefile",
@@ -27,12 +27,12 @@
   {
     "path": "docs/resources/alarm.md",
     "reason": "documentation for resource alarm",
-    "body_hash": "9fc3db8950c27037"
+    "body_hash": "1852cab7d1af19e2"
   },
   {
     "path": "examples/resources/alarm/resource.tf",
     "reason": "example for resource alarm",
-    "body_hash": "b5b284a0a8a140df"
+    "body_hash": "6f7c079f9db7e0b7"
   },
   {
     "path": "generator.yaml",

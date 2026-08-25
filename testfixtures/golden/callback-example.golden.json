@@ -7,7 +7,7 @@
   {
     "path": ".goreleaser.yml",
     "reason": "GoReleaser release configuration",
-    "body_hash": "571414f37a2bfdd0"
+    "body_hash": "7af9380588b509fe"
   },
   {
     "path": "GNUmakefile",
@@ -22,7 +22,7 @@
   {
     "path": "docs/actions/subscribe_to_stream.md",
     "reason": "documentation for action subscribe_to_stream",
-    "body_hash": "88c9faae54f18850"
+    "body_hash": "befa6a877f8e03bc"
   },
   {
     "path": "docs/index.md",

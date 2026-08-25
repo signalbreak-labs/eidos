@@ -120,8 +120,10 @@ generation:
   skip_build: false
   # dynamic_release opts into also generating
   # .github/workflows/regenerate-and-release.yml: a manually-dispatched
-  # workflow that regenerates this provider from its spec and publishes a
-  # release using the eidos CI image. Off by default.
+  # workflow that regenerates this provider from generator.yaml (which carries
+  # the spec reference and all overrides) and publishes a release using the
+  # eidos CI image. Off by default. spec_path is optional: leave it unset to
+  # regenerate the spec referenced by generator.yaml, or set it to override.
   # dynamic_release:
   #   enabled: true
   #   image: ghcr.io/signalbreak-labs/eidos:latest

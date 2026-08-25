@@ -284,6 +284,7 @@ func CollectFromProviderIR(provider *ir.ProviderIR, opts CollectOptions) []FileE
 	if opts.OnlyBuild {
 		collectBuildFiles(rec)
 		if opts.IncludeDynamicRelease {
+			rec.Record(".gitignore", "ignore regenerated provider files on the default branch")
 			rec.Record(".github/workflows/regenerate-and-release.yml", "dynamic regenerate-and-release workflow (opt-in)")
 		}
 		rec.Sort()
@@ -496,6 +497,7 @@ func collectRootFiles(rec *Recorder, provider *ir.ProviderIR, opts CollectOption
 		collectBuildFiles(rec)
 	}
 	if opts.IncludeDynamicRelease {
+		rec.Record(".gitignore", "ignore regenerated provider files on the default branch")
 		rec.Record(".github/workflows/regenerate-and-release.yml", "dynamic regenerate-and-release workflow (opt-in)")
 	}
 	if opts.IncludeDocs {

@@ -7,7 +7,7 @@
   {
     "path": ".goreleaser.yml",
     "reason": "GoReleaser release configuration",
-    "body_hash": "28c48df09f0a13b5"
+    "body_hash": "490ec722416e95f1"
   },
   {
     "path": "GNUmakefile",
@@ -22,27 +22,27 @@
   {
     "path": "docs/index.md",
     "reason": "provider overview and authentication guide",
-    "body_hash": "a1174624dc639be6"
+    "body_hash": "262ff038ec27260a"
   },
   {
     "path": "docs/resources/note.md",
     "reason": "documentation for resource note",
-    "body_hash": "d5c630d7fb700219"
+    "body_hash": "72253e83d76b2e49"
   },
   {
     "path": "docs/resources/upload.md",
     "reason": "documentation for resource upload",
-    "body_hash": "a226eedb77995324"
+    "body_hash": "a39ee7aad13fc610"
   },
   {
     "path": "examples/resources/note/resource.tf",
     "reason": "example for resource note",
-    "body_hash": "1c0b9f44e62ec774"
+    "body_hash": "e8a40a147b9e600a"
   },
   {
     "path": "examples/resources/upload/resource.tf",
     "reason": "example for resource upload",
-    "body_hash": "8d81cb3e90ecb524"
+    "body_hash": "be68c09862d7c8a2"
   },
   {
     "path": "generator.yaml",
@@ -117,7 +117,7 @@
   {
     "path": "internal/provider/resource_note_acceptance_test.go",
     "reason": "acceptance tests for resource note",
-    "body_hash": "d32ce82d0c70b480"
+    "body_hash": "927b66f099883f4f"
   },
   {
     "path": "internal/provider/resource_note_remote_test.go",

@@ -269,9 +269,10 @@ func TestOverridePreview_FileURLConfig(t *testing.T) {
 }
 
 // TestGenerate_DynamicReleaseWorkflow verifies that an MCP generate honors
-// generation.dynamic_release.enabled and threads the configured spec.path into
-// the emitted regenerate-and-release workflow instead of the hardcoded
-// "spec.yaml" default (M-84).
+// generation.dynamic_release.enabled: the emitted regenerate-and-release
+// workflow regenerates from generator.yaml (which carries the spec reference)
+// and appends the configured spec.path as an explicit --spec override instead
+// of the removed hardcoded "spec.yaml" default (M-84).
 func TestGenerate_DynamicReleaseWorkflow(t *testing.T) {
 	client := connectTestClient(t)
 	dir := t.TempDir()
@@ -293,7 +294,7 @@ func TestGenerate_DynamicReleaseWorkflow(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BUG: regenerate-and-release.yml not written: %v; files: %v", err, out.Files)
 	}
-	if !strings.Contains(string(content), "eidos generate --spec "+remoteSpec+" --skip-build --output .") {
-		t.Errorf("BUG: workflow does not use configured remote spec %q:\n%s", remoteSpec, string(content))
+	if !strings.Contains(string(content), "eidos generate --config generator.yaml --skip-build --output . --force --spec "+remoteSpec) {
+		t.Errorf("BUG: workflow does not use --config generator.yaml with configured remote spec %q:\n%s", remoteSpec, string(content))
 	}
 }

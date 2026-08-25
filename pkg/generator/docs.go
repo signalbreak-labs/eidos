@@ -59,6 +59,7 @@ func ProviderDocsIndex(pir ir.ProviderIR) File {
 	return Template("docs/index.md", indexTemplate, map[string]any{
 		"ProviderName":       name,
 		"Description":        escapeDescription(pir.Description),
+		"DescriptionBody":    bodyDescription(pir.Description),
 		"Resources":          resources,
 		"DataSources":        dataSources,
 		"Actions":            actions,
@@ -88,16 +89,19 @@ func ProviderDocsFiles(pir ir.ProviderIR) []File {
 // single managed resource.
 func ResourceDocsFile(r ir.ResourceIR) File {
 	path := fmt.Sprintf("docs/resources/%s.md", naming.SnakeCase(r.Name))
+	arguments, attributes, blocks, nestedSchemas := renderDocsSchema(r.Schema)
 	data := map[string]any{
-		"ResourceName": resourceDocsTypeName(r),
-		"ProviderName": providerDocsTypeNameFromResource(r),
-		"Description":  escapeDescription(r.Description),
-		"ExampleArgs":  renderExampleArguments(r.Schema.Attributes),
-		"Arguments":    renderAttributeSection(r.Schema.Attributes, true),
-		"Attributes":   renderAttributeSection(r.Schema.Attributes, false),
-		"Blocks":       renderBlockSection(r.Schema.Blocks),
-		"Importable":   r.Importable,
-		"ImportFormat": docsImportFormat(r.ImportIDFormat),
+		"ResourceName":    resourceDocsTypeName(r),
+		"ProviderName":    providerDocsTypeNameFromResource(r),
+		"Description":     escapeDescription(r.Description),
+		"DescriptionBody": bodyDescription(r.Description),
+		"ExampleArgs":     renderExampleArguments(r.Schema.Attributes),
+		"Arguments":       arguments,
+		"Attributes":      attributes,
+		"Blocks":          blocks,
+		"NestedSchemas":   nestedSchemas,
+		"Importable":      r.Importable,
+		"ImportFormat":    docsImportFormat(r.ImportIDFormat),
 	}
 	return Template(path, resourceTemplate, data)
 }
@@ -116,14 +120,17 @@ func ResourceDocsFiles(resources []ir.ResourceIR) []File {
 // a single data source.
 func DataSourceDocsFile(ds ir.DataSourceIR) File {
 	path := fmt.Sprintf("docs/data-sources/%s.md", naming.SnakeCase(ds.Name))
+	arguments, attributes, blocks, nestedSchemas := renderDocsSchema(ds.Schema)
 	data := map[string]any{
-		"DataSourceName": dataSourceDocsTypeName(ds),
-		"ProviderName":   providerDocsTypeNameFromDataSource(ds),
-		"Description":    escapeDescription(ds.Description),
-		"ExampleArgs":    renderExampleArguments(ds.Schema.Attributes),
-		"Arguments":      renderAttributeSection(ds.Schema.Attributes, true),
-		"Attributes":     renderAttributeSection(ds.Schema.Attributes, false),
-		"Blocks":         renderBlockSection(ds.Schema.Blocks),
+		"DataSourceName":  dataSourceDocsTypeName(ds),
+		"ProviderName":    providerDocsTypeNameFromDataSource(ds),
+		"Description":     escapeDescription(ds.Description),
+		"DescriptionBody": bodyDescription(ds.Description),
+		"ExampleArgs":     renderExampleArguments(ds.Schema.Attributes),
+		"Arguments":       arguments,
+		"Attributes":      attributes,
+		"Blocks":          blocks,
+		"NestedSchemas":   nestedSchemas,
 	}
 	return Template(path, dataSourceTemplate, data)
 }
@@ -224,7 +231,7 @@ description: |-
 
 # {{.ProviderName}} Provider
 
-{{.Description}}
+{{.DescriptionBody}}
 
 {{if .Resources -}}
 ## Resources
@@ -275,7 +282,7 @@ description: |-
 
 # {{.ResourceName}} Resource
 
-{{.Description}}
+{{.DescriptionBody}}
 
 ## Example Usage
 
@@ -283,23 +290,29 @@ description: |-
 resource "{{.ResourceName}}" "example" {
 {{.ExampleArgs}}}
 ` + "```" + `
-
+{{if or .Arguments .Attributes .Blocks}}
 ## Schema
 
+{{if .Arguments -}}
 ### Arguments
 
 The following arguments are supported:
 
 {{.Arguments}}
+{{end -}}
+{{if .Attributes -}}
 ### Attributes
 
 In addition to all arguments above, the following computed attributes are exported:
 
 {{.Attributes}}
+{{end -}}
 {{if .Blocks -}}
 ### Nested Blocks
 
 {{.Blocks}}
+{{end -}}
+{{.NestedSchemas}}
 {{end -}}
 {{if .Importable -}}
 ## Import
@@ -323,7 +336,7 @@ description: |-
 
 # {{.DataSourceName}} Data Source
 
-{{.Description}}
+{{.DescriptionBody}}
 
 ## Example Usage
 
@@ -331,200 +344,397 @@ description: |-
 data "{{.DataSourceName}}" "example" {
 {{.ExampleArgs}}}
 ` + "```" + `
-
+{{if or .Arguments .Attributes .Blocks}}
 ## Schema
 
+{{if .Arguments -}}
 ### Arguments
 
 The following arguments are supported:
 
 {{.Arguments}}
+{{end -}}
+{{if .Attributes -}}
 ### Attributes
 
 In addition to all arguments above, the following attributes are exported:
 
 {{.Attributes}}
+{{end -}}
 {{if .Blocks -}}
 ### Nested Blocks
 
 {{.Blocks}}
+{{end -}}
+{{.NestedSchemas}}
 {{end -}}
 `
 
 // renderExampleArguments renders required and optional attributes as HCL-style
 // example arguments, indented by two spaces. Object attributes and collections
 // are emitted as empty literals (`{}` or `[]`) so the example remains
-// syntactically valid Terraform.
+// syntactically valid Terraform. Assignment `=` signs are aligned the way
+// `terraform fmt` aligns them, so the emitted example is fmt-clean.
 func renderExampleArguments(attrs []ir.AttributeIR) string {
-	var b strings.Builder
+	type row struct {
+		name  string
+		value string
+	}
+	var rows []row
 	for _, attr := range attrs {
 		if !attr.Required && !attr.Optional {
 			continue
 		}
-		if attr.Schema.Collection != nil {
+		var value string
+		switch {
+		case attr.Schema.Collection != nil:
 			switch attr.Schema.Collection.Kind {
 			case ir.Map:
-				fmt.Fprintf(&b, "  %s = {}\n", attr.Name)
+				value = "{}"
 			default:
-				fmt.Fprintf(&b, "  %s = []\n", attr.Name)
+				value = "[]"
 			}
-			continue
+		case schema.IsObjectLike(attr.Schema):
+			value = "{}"
+		default:
+			// Use null rather than "..." so the emitted example is syntactically
+			// valid, copy-pasteable HCL (L-33: "..." is not a valid HCL expression).
+			value = "null"
 		}
-		if schema.IsObjectLike(attr.Schema) {
-			fmt.Fprintf(&b, "  %s = {}\n", attr.Name)
-			continue
+		rows = append(rows, row{attr.Name, value})
+	}
+	width := 0
+	for _, r := range rows {
+		if len(r.name) > width {
+			width = len(r.name)
 		}
-		// Use null rather than "..." so the emitted example is syntactically
-		// valid, copy-pasteable HCL (L-33: "..." is not a valid HCL expression).
-		fmt.Fprintf(&b, "  %s = null\n", attr.Name)
+	}
+	var b strings.Builder
+	for _, r := range rows {
+		fmt.Fprintf(&b, "  %-*s = %s\n", width, r.name, r.value)
 	}
 	return b.String()
 }
 
-// renderAttributeSection renders the schema reference rows for a set of
-// attributes. When arguments is true, only Required/Optional attributes are
-// rendered; otherwise only Computed attributes are rendered. Each row is
-// indented by two spaces for the example usage block and by none for the
-// reference list.
-func renderAttributeSection(attrs []ir.AttributeIR, arguments bool) string {
-	var b strings.Builder
+// renderDocsSchema renders the schema reference for a resource or data source
+// object as tfplugindocs does: flat Arguments, Attributes, and Nested Blocks
+// bullet lists (with nested-schema links) plus the collected
+// "### Nested Schema for `path`" sections. A nested object attribute or block is
+// listed once with a link to its own section instead of an inline indented
+// expansion, so the registry's nested-schema anchors work and double-nested
+// attributes are reachable by reference rather than indentation.
+func renderDocsSchema(obj ir.ObjectSchemaIR) (arguments, attributes, blocks, nested string) {
+	return renderDocsSections(obj.Attributes, obj.Attributes, obj.Blocks)
+}
+
+// renderDocsSections renders the schema bullet lists for an arbitrary
+// Arguments/Attributes/Blocks combination (list resources draw Arguments and
+// Attributes from different attribute sets) plus the collected nested-schema
+// sections.
+func renderDocsSections(argsAttrs, attrsAttrs []ir.AttributeIR, blocks []ir.BlockIR) (arguments, attributes, blockSection, nested string) {
+	var argsB, attrsB, blocksB, nestedB strings.Builder
+	nestedTypes := make([]docsNestedType, 0, len(argsAttrs)+len(attrsAttrs)+len(blocks))
+	nestedTypes = append(nestedTypes, writeDocsAttributeRows(&argsB, argsAttrs, true, nil)...)
+	nestedTypes = append(nestedTypes, writeDocsAttributeRows(&attrsB, attrsAttrs, false, nil)...)
+	nestedTypes = append(nestedTypes, writeDocsBlockRows(&blocksB, blocks, nil)...)
+	writeDocsNestedSections(&nestedB, nestedTypes)
+	return argsB.String(), attrsB.String(), blocksB.String(), nestedB.String()
+}
+
+// docsNestedType is a nested schema (object attribute or block) collected while
+// rendering a parent schema and emitted later as a tfplugindocs-style
+// "### Nested Schema for `path`" section.
+type docsNestedType struct {
+	anchorID  string // "nestedatt--parent--child" or "nestedblock--name"
+	pathTitle string // dot-joined Terraform attribute path, e.g. "owner.ships"
+	path      []string
+	object    *ir.ObjectSchemaIR
+}
+
+// writeDocsAttributeRows renders the schema bullet rows for a set of attributes
+// filtered by section (arguments=true → Required/Optional; otherwise Computed)
+// and returns the nested types to emit as nested-schema sections.
+func writeDocsAttributeRows(b *strings.Builder, attrs []ir.AttributeIR, arguments bool, path []string) []docsNestedType {
+	var nested []docsNestedType
 	for _, attr := range attrs {
-		include := false
 		qualifier := ""
 		if arguments {
-			if attr.Required {
-				include = true
+			switch {
+			case attr.Required:
 				qualifier = "required"
-			} else if attr.Optional {
-				include = true
+			case attr.Optional:
 				qualifier = "optional"
+			default:
+				continue
 			}
 		} else {
-			if attr.Computed {
-				include = true
-				qualifier = "computed"
+			if !attr.Computed {
+				continue
 			}
+			qualifier = "computed"
 		}
-		if !include {
-			continue
+		if nt, ok := writeDocsAttributeRow(b, attr, qualifier, path); ok {
+			nested = append(nested, nt)
 		}
-		writeAttributeRow(&b, attr, 0, qualifier)
 	}
-	return b.String()
+	return nested
 }
 
-// writeAttributeRow writes a single markdown bullet for an attribute with its
-// type, qualifier, and optional description, then recurses into nested
-// attributes and blocks.
-func writeAttributeRow(b *strings.Builder, attr ir.AttributeIR, depth int, qualifier string) {
-	indent := strings.Repeat("  ", depth)
-	fmt.Fprintf(b, "%s* `%s` (%s, %s)", indent, attr.Name, schemaTypeName(attr.Schema), qualifier)
+// writeDocsAttributeRow writes a single schema bullet for an attribute. The
+// qualifier is always shown because the Arguments/Attributes sections mix
+// required, optional, and computed rows. Nested objects and collections of
+// objects link to a nested-schema section (returned for rendering later) rather
+// than being expanded inline.
+func writeDocsAttributeRow(b *strings.Builder, attr ir.AttributeIR, qualifier string, path []string) (docsNestedType, bool) {
+	fmt.Fprintf(b, "* `%s` (%s, %s)", attr.Name, docsTypeLabel(attr.Schema), qualifier)
 	if attr.Description != "" {
 		fmt.Fprintf(b, " - %s", escapeDescription(attr.Description))
 	}
-	fmt.Fprintln(b)
-	if schema.IsObjectLike(attr.Schema) {
-		writeObjectRows(b, ir.ObjectSchemaIR{Attributes: attr.Schema.Attributes, Blocks: attr.Schema.Blocks}, depth+1)
+	if obj, ok := docsNestedObject(attr.Schema); ok {
+		childPath := appendDocsPath(path, attr.Name)
+		fmt.Fprintf(b, " (see [below for nested schema](#%s))", nestedDocsAnchor("nestedatt", childPath))
+		fmt.Fprintln(b)
+		return docsNestedType{
+			anchorID:  nestedDocsAnchor("nestedatt", childPath),
+			pathTitle: strings.Join(childPath, "."),
+			path:      childPath,
+			object:    &obj,
+		}, true
 	}
+	fmt.Fprintln(b)
+	return docsNestedType{}, false
 }
 
-// writeObjectRows renders markdown rows for all attributes and blocks inside
-// an object schema at the given indentation depth.
-func writeObjectRows(b *strings.Builder, obj ir.ObjectSchemaIR, depth int) {
-	indent := strings.Repeat("  ", depth)
-	for _, attr := range obj.Attributes {
-		qualifier := "computed"
-		if attr.Required {
-			qualifier = "required"
-		} else if attr.Optional {
-			qualifier = "optional"
-		}
-		fmt.Fprintf(b, "%s* `%s` (%s, %s)", indent, attr.Name, schemaTypeName(attr.Schema), qualifier)
-		if attr.Description != "" {
-			fmt.Fprintf(b, " - %s", escapeDescription(attr.Description))
-		}
-		fmt.Fprintln(b)
-		if schema.IsObjectLike(attr.Schema) {
-			writeObjectRows(b, ir.ObjectSchemaIR{Attributes: attr.Schema.Attributes, Blocks: attr.Schema.Blocks}, depth+1)
-		}
-	}
-	for _, block := range obj.Blocks {
-		fmt.Fprintf(b, "%s* `%s` (%s, %s)", indent, block.Name, blockNestingLabel(block), blockQualifier(block))
+// writeDocsBlockRows renders the schema bullets for a set of nested blocks and
+// returns the nested types collected for section rendering.
+func writeDocsBlockRows(b *strings.Builder, blocks []ir.BlockIR, path []string) []docsNestedType {
+	nested := make([]docsNestedType, 0, len(blocks))
+	for _, block := range blocks {
+		fmt.Fprintf(b, "* `%s` (Block %s, %s)", block.Name, blockNestingLabel(block), blockQualifier(block))
 		if block.Description != "" {
 			fmt.Fprintf(b, " - %s", escapeDescription(block.Description))
 		}
+		childPath := appendDocsPath(path, block.Name)
+		fmt.Fprintf(b, " (see [below for nested schema](#%s))", nestedDocsAnchor("nestedblock", childPath))
 		fmt.Fprintln(b)
-		writeObjectRows(b, block.Schema, depth+1)
+		bs := block.Schema
+		nested = append(nested, docsNestedType{
+			anchorID:  nestedDocsAnchor("nestedblock", childPath),
+			pathTitle: strings.Join(childPath, "."),
+			path:      childPath,
+			object:    &bs,
+		})
 	}
+	return nested
 }
 
-// renderBlockSection renders the nested block reference section for a set of
-// blocks, including their attributes.
-func renderBlockSection(blocks []ir.BlockIR) string {
-	var b strings.Builder
-	for _, block := range blocks {
-		fmt.Fprintf(&b, "* `%s` (%s, %s)", block.Name, blockNestingLabel(block), blockQualifier(block))
-		if block.Description != "" {
-			fmt.Fprintf(&b, " - %s", escapeDescription(block.Description))
+// writeDocsNestedSections renders the nested-schema sections for a set of
+// nested types in document order, skipping types already emitted (an attribute
+// that is both optional and computed appears in both the Arguments and
+// Attributes sections but must produce only one section).
+func writeDocsNestedSections(b *strings.Builder, types []docsNestedType) {
+	seen := map[string]bool{}
+	for _, nt := range types {
+		if seen[nt.anchorID] {
+			continue
 		}
-		fmt.Fprintln(&b)
-		writeObjectRows(&b, block.Schema, 1)
+		seen[nt.anchorID] = true
+		writeDocsNestedSection(b, nt)
 	}
-	return b.String()
 }
 
-// schemaTypeName returns a human-readable Terraform type name for an IR schema.
-// Object-like schemas include the names of their top-level attributes and
-// blocks so operators can see the expected structure.
+// writeDocsNestedSection renders one "### Nested Schema for `path`" section:
+// children grouped under Required:/Optional:/Read-Only: subtitles in the
+// tfplugindocs style, with any deeper nested schemas emitted as their own
+// sections after. Deeper sections are deduplicated by writeDocsNestedSections,
+// so this function does not need to track the visited set.
+func writeDocsNestedSection(b *strings.Builder, nt docsNestedType) {
+	fmt.Fprintf(b, "<a id=\"%s\"></a>\n", nt.anchorID)
+	fmt.Fprintf(b, "### Nested Schema for `%s`\n\n", nt.pathTitle)
+
+	var deeper []docsNestedType
+	obj := nt.object
+	for _, group := range []string{"Required", "Optional", "Read-Only"} {
+		var attrs []ir.AttributeIR
+		var blocks []ir.BlockIR
+		for _, attr := range obj.Attributes {
+			if docsChildQualifier(attr) == group {
+				attrs = append(attrs, attr)
+			}
+		}
+		for _, block := range obj.Blocks {
+			if docsBlockGroup(block) == group {
+				blocks = append(blocks, block)
+			}
+		}
+		if len(attrs) == 0 && len(blocks) == 0 {
+			continue
+		}
+		fmt.Fprintf(b, "%s:\n\n", group)
+		for _, attr := range attrs {
+			childPath := appendDocsPath(nt.path, attr.Name)
+			child, ok := writeDocsNestedChildAttr(b, attr, childPath)
+			if ok {
+				deeper = append(deeper, child)
+			}
+		}
+		for _, block := range blocks {
+			childPath := appendDocsPath(nt.path, block.Name)
+			fmt.Fprintf(b, "* `%s` (Block %s)", block.Name, blockNestingLabel(block))
+			if block.Description != "" {
+				fmt.Fprintf(b, " - %s", escapeDescription(block.Description))
+			}
+			fmt.Fprintf(b, " (see [below for nested schema](#%s))", nestedDocsAnchor("nestedblock", childPath))
+			fmt.Fprintln(b)
+			bs := block.Schema
+			deeper = append(deeper, docsNestedType{
+				anchorID:  nestedDocsAnchor("nestedblock", childPath),
+				pathTitle: strings.Join(childPath, "."),
+				path:      childPath,
+				object:    &bs,
+			})
+		}
+	}
+	writeDocsNestedSections(b, deeper)
+}
+
+// writeDocsNestedChildAttr writes a nested-schema child attribute bullet. The
+// qualifier is implied by the Required:/Optional:/Read-Only: group header, so it
+// is not repeated inline; the description and any deeper nested-schema link are.
+func writeDocsNestedChildAttr(b *strings.Builder, attr ir.AttributeIR, childPath []string) (docsNestedType, bool) {
+	fmt.Fprintf(b, "* `%s` (%s)", attr.Name, docsTypeLabel(attr.Schema))
+	if attr.Description != "" {
+		fmt.Fprintf(b, " - %s", escapeDescription(attr.Description))
+	}
+	if obj, ok := docsNestedObject(attr.Schema); ok {
+		fmt.Fprintf(b, " (see [below for nested schema](#%s))", nestedDocsAnchor("nestedatt", childPath))
+		fmt.Fprintln(b)
+		return docsNestedType{
+			anchorID:  nestedDocsAnchor("nestedatt", childPath),
+			pathTitle: strings.Join(childPath, "."),
+			path:      childPath,
+			object:    &obj,
+		}, true
+	}
+	fmt.Fprintln(b)
+	return docsNestedType{}, false
+}
+
+// docsChildQualifier returns the tfplugindocs child-group name for an attribute
+// (Required/Optional/Read-Only), by Required > Optional > Computed priority.
+func docsChildQualifier(attr ir.AttributeIR) string {
+	if attr.Required {
+		return "Required"
+	}
+	if attr.Optional {
+		return "Optional"
+	}
+	return "Read-Only"
+}
+
+// docsBlockGroup returns the tfplugindocs child-group name for a block.
+func docsBlockGroup(block ir.BlockIR) string {
+	if blockQualifier(block) == "required" {
+		return "Required"
+	}
+	return "Optional"
+}
+
+// docsNestedObject returns the object schema a nested object attribute or
+// collection-of-objects attribute describes, or whether the schema nests at
+// all. A discriminated union nests through its merged attribute set.
+func docsNestedObject(s ir.SchemaIR) (ir.ObjectSchemaIR, bool) {
+	if s.Collection != nil {
+		elem := s.Collection.ElementType
+		if schema.IsObjectLike(elem) {
+			return ir.ObjectSchemaIR{Attributes: elem.Attributes, Blocks: elem.Blocks}, true
+		}
+		return ir.ObjectSchemaIR{}, false
+	}
+	if schema.IsObjectLike(s) {
+		return ir.ObjectSchemaIR{Attributes: s.Attributes, Blocks: s.Blocks}, true
+	}
+	if merged := schema.MergedDiscriminatedUnion(s); merged != nil {
+		return ir.ObjectSchemaIR{Attributes: merged.Attributes, Blocks: merged.Blocks}, true
+	}
+	return ir.ObjectSchemaIR{}, false
+}
+
+// docsTypeLabel returns the tfplugindocs-style type label for a schema: a
+// primitive ("String", "Number", "Boolean", "Dynamic"), a collection of
+// primitives ("List of String"), or a nested-object form ("Attributes",
+// "Attributes List", "Attributes Set", "Attributes Map").
+func docsTypeLabel(s ir.SchemaIR) string {
+	if s.Collection != nil {
+		if schema.IsObjectLike(s.Collection.ElementType) {
+			return "Attributes " + collectionKindLabel(s.Collection.Kind)
+		}
+		return schemaTypeName(s)
+	}
+	if schema.IsObjectLike(s) {
+		return "Attributes"
+	}
+	if s.Union != nil {
+		if schema.MergedDiscriminatedUnion(s) != nil {
+			return "Attributes"
+		}
+		return "Dynamic"
+	}
+	return schemaTypeName(s)
+}
+
+// appendDocsPath returns path with name appended, leaving path unchanged.
+func appendDocsPath(path []string, name string) []string {
+	out := make([]string, len(path), len(path)+1)
+	copy(out, path)
+	return append(out, name)
+}
+
+// nestedDocsAnchor builds a tfplugindocs anchor id from a path of attribute
+// names, e.g. nestedDocsAnchor("nestedatt", ["owner","ships"]) →
+// "nestedatt--owner--ships".
+func nestedDocsAnchor(kind string, path []string) string {
+	return kind + "--" + strings.Join(path, "--")
+}
+
+// schemaTypeName returns a human-readable Terraform type name for an IR schema
+// in the tfplugindocs vocabulary: "String", "Number", "Boolean", "Dynamic",
+// "List of String", "Object". Unrepresentable shapes render as "Dynamic",
+// matching the DynamicAttribute the generator degrades to rather than the
+// opaque "Unknown".
 func schemaTypeName(s ir.SchemaIR) string {
 	if s.Collection != nil {
 		kind := collectionKindLabel(s.Collection.Kind)
-		elem := schemaTypeName(s.Collection.ElementType)
-		return fmt.Sprintf("%s(%s)", kind, elem)
+		return fmt.Sprintf("%s of %s", kind, schemaTypeName(s.Collection.ElementType))
 	}
 
 	switch s.Type {
 	case ir.TypeString:
 		return "String"
-	case ir.TypeInt:
-		return "Number"
-	case ir.TypeFloat:
+	case ir.TypeInt, ir.TypeFloat:
 		return "Number"
 	case ir.TypeBool:
-		return "Bool"
+		return "Boolean"
 	case ir.TypeDynamic:
 		return "Dynamic"
 	}
 
 	if schema.IsObjectLike(s) {
-		return objectSchemaTypeName(s)
+		return "Object"
 	}
 
-	// An empty or otherwise unrepresentable primitive type renders as a
-	// DynamicAttribute in the generated schema (resource.go falls back to
-	// DynamicAttribute for shapes with no recognizable primitive/union/object
-	// form), so the docs label matches that rather than the opaque "Unknown".
 	return "Dynamic"
 }
 
-// objectSchemaTypeName returns a concise type label for an object-like schema,
-// listing its attribute and block names. If the schema has no fields, it falls
-// back to the bare "Object" label.
-func objectSchemaTypeName(s ir.SchemaIR) string {
-	if !schema.IsObjectLike(s) {
-		return "Object"
-	}
-	names := make([]string, 0, len(s.Attributes)+len(s.Blocks))
-	for _, attr := range s.Attributes {
-		names = append(names, attr.Name)
-	}
-	for _, block := range s.Blocks {
-		names = append(names, block.Name)
-	}
-	if len(names) == 0 {
-		return "Object"
-	}
-	return fmt.Sprintf("Object({%s})", strings.Join(names, ", "))
+// bodyDescription returns a description rendered as Markdown body text: line
+// breaks and markdown syntax are preserved so multi-paragraph or markdown-rich
+// provider/resource descriptions (headings, links, code fences) render as
+// intended on the Registry. It is used for the docs body, while
+// escapeDescription (single-line, escaped) remains for the YAML frontmatter and
+// inline attribute bullets.
+func bodyDescription(s string) string {
+	s = strings.TrimSpace(s)
+	return strings.ReplaceAll(s, "\r\n", "\n")
 }
 
 // collectionKindLabel returns a capitalized label for a collection kind.
