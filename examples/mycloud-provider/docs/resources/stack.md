@@ -14,11 +14,11 @@ Read a Stack
 ```terraform
 resource "mycloud_stack" "example" {
   api_version = null
-  kind = null
-  name = null
-  spec = {}
-  status = {}
-  workspace = null
+  kind        = null
+  name        = null
+  spec        = {}
+  status      = {}
+  workspace   = null
 }
 ```
 
@@ -31,11 +31,8 @@ The following arguments are supported:
 * `api_version` (String, optional)
 * `kind` (String, optional)
 * `name` (String, required)
-* `spec` (Object({replicas, selector}), optional)
-  * `replicas` (Number, optional)
-  * `selector` (Map(String), optional)
-* `status` (Object({ready_replicas}), optional)
-  * `ready_replicas` (Number, optional)
+* `spec` (Attributes, optional) (see [below for nested schema](#nestedatt--spec))
+* `status` (Attributes, optional) (see [below for nested schema](#nestedatt--status))
 * `workspace` (String, required)
 
 ### Attributes
@@ -45,11 +42,22 @@ In addition to all arguments above, the following computed attributes are export
 * `api_version` (String, computed)
 * `id` (String, computed)
 * `kind` (String, computed)
-* `spec` (Object({replicas, selector}), computed)
-  * `replicas` (Number, optional)
-  * `selector` (Map(String), optional)
-* `status` (Object({ready_replicas}), computed)
-  * `ready_replicas` (Number, optional)
+* `spec` (Attributes, computed) (see [below for nested schema](#nestedatt--spec))
+* `status` (Attributes, computed) (see [below for nested schema](#nestedatt--status))
+
+<a id="nestedatt--spec"></a>
+### Nested Schema for `spec`
+
+Optional:
+
+* `replicas` (Number)
+* `selector` (Map of String)
+<a id="nestedatt--status"></a>
+### Nested Schema for `status`
+
+Optional:
+
+* `ready_replicas` (Number)
 
 ## Import
 

@@ -1,7 +1,7 @@
 resource "mycloud_stack" "example" {
   api_version = "example"
-  kind = "example"
-  name = "example"
+  kind        = "example"
+  name        = "example"
   spec = {
     replicas = 1
     selector = {

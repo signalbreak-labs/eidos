@@ -14,8 +14,8 @@ Get a commit
 ```terraform
 data "mycloud_get_commit" "example" {
   organization = null
-  project = null
-  ref = null
+  project      = null
+  ref          = null
 }
 ```
 
@@ -37,4 +37,5 @@ In addition to all arguments above, the following attributes are exported:
 * `committed_at` (String, computed)
 * `message` (String, computed)
 * `sha` (String, computed)
+
 

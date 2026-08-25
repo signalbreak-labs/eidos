@@ -14,8 +14,8 @@ Get a pull request
 ```terraform
 data "mycloud_get_pull_request" "example" {
   organization = null
-  project = null
-  pull_number = null
+  project      = null
+  pull_number  = null
 }
 ```
 
@@ -36,8 +36,9 @@ In addition to all arguments above, the following attributes are exported:
 * `body` (String, computed)
 * `html_url` (String, computed)
 * `id` (Number, computed)
-* `merged` (Bool, computed)
+* `merged` (Boolean, computed)
 * `number` (Number, computed)
 * `state` (String, computed)
 * `title` (String, computed)
+
 

@@ -14,6 +14,9 @@ builds:
       - CGO_ENABLED=0
     flags:
       - -trimpath
+      # -buildvcs=false so releases build cleanly in CI/containers where git is
+      # absent or the checkout has no VCS metadata to stamp.
+      - -buildvcs=false
     ldflags:
       - -s -w -X main.version={{ .Version }} -X main.commit={{ .Commit }} -X main.date={{ .CommitDate }}
     goos:
@@ -46,14 +49,18 @@ builds:
       - goos: windows
         goarch: arm64
 
+# The Terraform Registry installs providers only from zip archives; a tar.gz
+# package fails terraform init with "zip: not a valid zip file". Embed the
+# generated terraform-registry-manifest.json in every archive so terraform and
+# the registry can learn the provider's supported protocol versions without
+# launching the binary.
 archives:
   - formats:
-      - tar.gz
+      - zip
     name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
-    format_overrides:
-      - goos: windows
-        formats:
-          - zip
+    files:
+      - src: terraform-registry-manifest.json
+        dst: terraform-registry-manifest.json
 
 checksum:
   name_template: "{{ .ProjectName }}_{{ .Version }}_SHA256SUMS"
@@ -63,12 +70,21 @@ signs:
   - artifacts: checksum
     args:
       - --batch
+      # Headless GPG in CI has no agent/pinentry: --pinentry-mode loopback with
+      # the passphrase passed via GPG_PASSPHRASE is what makes --detach-sign
+      # succeed on GitHub Actions runners.
+      - --pinentry-mode
+      - loopback
+      - --passphrase
+      - "{{ .Env.GPG_PASSPHRASE }}"
       - --local-user
       - "{{ .Env.GPG_FINGERPRINT }}"
       - --output
       - "${signature}"
       - --detach-sign
       - "${artifact}"
+    env:
+      - GPG_TTY=/dev/null
 
 release:
   draft: false

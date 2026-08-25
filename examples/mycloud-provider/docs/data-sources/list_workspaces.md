@@ -18,14 +18,26 @@ data "mycloud_list_workspaces" "example" {
 
 ## Schema
 
-### Arguments
-
-The following arguments are supported:
-
-
 ### Attributes
 
 In addition to all arguments above, the following attributes are exported:
 
-* `items` (List(Object({api_version, kind, labels, name, status})), computed)
+* `items` (Attributes List, computed) (see [below for nested schema](#nestedatt--items))
+
+<a id="nestedatt--items"></a>
+### Nested Schema for `items`
+
+Read-Only:
+
+* `api_version` (String)
+* `kind` (String)
+* `labels` (Map of String)
+* `name` (String)
+* `status` (Attributes) (see [below for nested schema](#nestedatt--items--status))
+<a id="nestedatt--items--status"></a>
+### Nested Schema for `items.status`
+
+Read-Only:
+
+* `phase` (String)
 

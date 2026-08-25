@@ -3,7 +3,7 @@ resource "mycloud_config" "example" {
   data = {
     "data" = "example"
   }
-  kind = "example"
-  name = "example"
+  kind      = "example"
+  name      = "example"
   workspace = "example"
 }

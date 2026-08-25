@@ -14,10 +14,10 @@ Read a Config
 ```terraform
 resource "mycloud_config" "example" {
   api_version = null
-  data = {}
-  kind = null
-  name = null
-  workspace = null
+  data        = {}
+  kind        = null
+  name        = null
+  workspace   = null
 }
 ```
 
@@ -28,7 +28,7 @@ resource "mycloud_config" "example" {
 The following arguments are supported:
 
 * `api_version` (String, optional)
-* `data` (Map(String), optional)
+* `data` (Map of String, optional)
 * `kind` (String, optional)
 * `name` (String, required)
 * `workspace` (String, required)
@@ -38,9 +38,10 @@ The following arguments are supported:
 In addition to all arguments above, the following computed attributes are exported:
 
 * `api_version` (String, computed)
-* `data` (Map(String), computed)
+* `data` (Map of String, computed)
 * `id` (String, computed)
 * `kind` (String, computed)
+
 
 ## Import
 

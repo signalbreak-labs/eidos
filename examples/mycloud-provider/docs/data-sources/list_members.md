@@ -18,14 +18,21 @@ data "mycloud_list_members" "example" {
 
 ## Schema
 
-### Arguments
-
-The following arguments are supported:
-
-
 ### Attributes
 
 In addition to all arguments above, the following attributes are exported:
 
-* `items` (List(Object({avatar_url, handle, html_url, id, member, name})), computed)
+* `items` (Attributes List, computed) (see [below for nested schema](#nestedatt--items))
+
+<a id="nestedatt--items"></a>
+### Nested Schema for `items`
+
+Read-Only:
+
+* `avatar_url` (String)
+* `handle` (String)
+* `html_url` (String)
+* `id` (Number)
+* `member` (String)
+* `name` (String)
 

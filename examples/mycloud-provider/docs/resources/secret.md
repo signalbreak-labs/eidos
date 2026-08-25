@@ -14,11 +14,11 @@ Read a Secret
 ```terraform
 resource "mycloud_secret" "example" {
   api_version = null
-  data = {}
-  kind = null
-  name = null
-  type = null
-  workspace = null
+  data        = {}
+  kind        = null
+  name        = null
+  type        = null
+  workspace   = null
 }
 ```
 
@@ -29,7 +29,7 @@ resource "mycloud_secret" "example" {
 The following arguments are supported:
 
 * `api_version` (String, optional)
-* `data` (Map(String), optional)
+* `data` (Map of String, optional)
 * `kind` (String, optional)
 * `name` (String, required)
 * `type` (String, optional)
@@ -40,10 +40,11 @@ The following arguments are supported:
 In addition to all arguments above, the following computed attributes are exported:
 
 * `api_version` (String, computed)
-* `data` (Map(String), computed)
+* `data` (Map of String, computed)
 * `id` (String, computed)
 * `kind` (String, computed)
 * `type` (String, computed)
+
 
 ## Import
 
