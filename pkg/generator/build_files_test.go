@@ -163,6 +163,7 @@ func TestGoreleaser(t *testing.T) {
 		"terraform-provider-mycloud_v{{ .Version }}",
 		"CGO_ENABLED=0",
 		"-trimpath",
+		"-buildvcs=false",
 		"-s -w -X main.version={{ .Version }} -X main.commit={{ .Commit }} -X main.date={{ .CommitDate }}",
 		"darwin",
 		"linux",
@@ -175,9 +176,10 @@ func TestGoreleaser(t *testing.T) {
 		"arm",
 		"\"386\"",
 		"formats:",
-		"- tar.gz",
-		"format_overrides:",
 		"- zip",
+		"files:",
+		"- src: terraform-registry-manifest.json",
+		"  dst: terraform-registry-manifest.json",
 		"name_template: \"{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}\"",
 		"name_template: \"{{ .ProjectName }}_{{ .Version }}_SHA256SUMS\"",
 		"algorithm: sha256",
@@ -210,8 +212,11 @@ func TestGoreleaser(t *testing.T) {
 	if !sliceContains(gr.Builds[0].Env, "CGO_ENABLED=0") {
 		t.Errorf("goreleaser builds[0].env missing CGO_ENABLED=0: %v", gr.Builds[0].Env)
 	}
-	if len(gr.Archives) == 0 || len(gr.Archives[0].Formats) == 0 || gr.Archives[0].Formats[0] != "tar.gz" {
-		t.Errorf("goreleaser archives[0].formats = %v, want [tar.gz]", gr.Archives[0].Formats)
+	if len(gr.Archives) == 0 || len(gr.Archives[0].Formats) == 0 || gr.Archives[0].Formats[0] != "zip" {
+		t.Errorf("goreleaser archives[0].formats = %v, want [zip]", gr.Archives[0].Formats)
+	}
+	if len(gr.Archives[0].Files) == 0 || gr.Archives[0].Files[0].Src != "terraform-registry-manifest.json" {
+		t.Errorf("goreleaser archives[0].files = %+v, want embedded terraform-registry-manifest.json", gr.Archives[0].Files)
 	}
 	if len(gr.Signs) != 0 {
 		t.Errorf("unsigned .goreleaser.yml signs = %+v, want empty", gr.Signs)
@@ -236,6 +241,10 @@ func TestGoreleaser_Signed(t *testing.T) {
 		"artifacts: checksum",
 		"GPG_FINGERPRINT",
 		"--detach-sign",
+		"--pinentry-mode",
+		"loopback",
+		"GPG_PASSPHRASE",
+		"GPG_TTY=/dev/null",
 	} {
 		if !strings.Contains(content, want) {
 			t.Errorf("signed .goreleaser.yml missing %q\ncontent:\n%s", want, content)
@@ -270,6 +279,10 @@ type goreleaserConfig struct {
 	} `yaml:"builds"`
 	Archives []struct {
 		Formats []string `yaml:"formats"`
+		Files   []struct {
+			Src string `yaml:"src"`
+			Dst string `yaml:"dst"`
+		} `yaml:"files"`
 	} `yaml:"archives"`
 	Checksum struct {
 		Algorithm string `yaml:"algorithm"`
@@ -341,7 +354,7 @@ func TestReleaseWorkflow_Signed(t *testing.T) {
 		"Import GPG key",
 		"crazy-max/ghaction-import-gpg@v6",
 		"GPG_PRIVATE_KEY",
-		"GPG_PASSPHRASE",
+		"GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}",
 		"GPG_FINGERPRINT: ${{ steps.import_gpg.outputs.fingerprint }}",
 	} {
 		if !strings.Contains(content, want) {
@@ -682,21 +695,47 @@ func TestDynamicReleaseWorkflow_Defaults(t *testing.T) {
 		"workflow_dispatch:",
 		"inputs:",
 		"version:",
+		"generate-and-tag:",
+		"release:",
+		"needs: generate-and-tag",
 		"container:",
 		"image: " + defaultDynamicReleaseImage,
-		"eidos generate --spec " + defaultDynamicReleaseSpecPath + " --skip-build --output .",
-		"git push origin",
-		"goreleaser release --clean",
+		// Regeneration is config-driven (keeps generator.yaml overrides) and is
+		// not passed a --spec unless the user overrides it.
+		"eidos generate --config generator.yaml --skip-build --output . --force",
+		"Install git",
+		"apt-get install -y git",
+		"safe.directory",
+		"go mod tidy",
+		"go build -buildvcs=false ./...",
+		"go test -buildvcs=false ./...",
+		// Only the tag is pushed; the generated provider code is force-added
+		// because .gitignore marks it as ignored on the default branch.
+		"git add -f go.mod go.sum main.go internal/ docs/ examples/ README.md .eidos-generated.json",
+		"git push origin \"${VERSION}\"",
+		"setup-go@v5",
+		"go-version-file: 'go.mod'",
+		"goreleaser/goreleaser-action@v6",
 		"GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}",
-		// Signed-by-default: the dynamic workflow imports a GPG key and forwards
-		// the fingerprint to GoReleaser, mirroring the static release.yml.
+		// Signed-by-default: the release job imports a GPG key and forwards the
+		// fingerprint and passphrase to GoReleaser.
 		"Import GPG key",
 		"crazy-max/ghaction-import-gpg@v6",
 		"GPG_FINGERPRINT: ${{ steps.import_gpg.outputs.fingerprint }}",
+		"GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}",
 	} {
 		if !strings.Contains(content, want) {
 			t.Errorf("dynamic release workflow missing %q\ncontent:\n%s", want, content)
 		}
+	}
+	// With no spec_path override, the workflow's generate command must not
+	// append a --spec flag (the header comment legitimately mentions --spec).
+	if strings.Contains(content, "--force --spec") {
+		t.Errorf("dynamic release workflow should not emit --spec without an override\ncontent:\n%s", content)
+	}
+	// Generated code is committed to a tag, not a release branch.
+	if strings.Contains(content, "release/${VERSION}") {
+		t.Errorf("dynamic release workflow must not push a release branch\ncontent:\n%s", content)
 	}
 	// Non-overlapping trigger: must not use tag-push (that belongs to release.yml).
 	if strings.Contains(content, "tags:") {
@@ -717,7 +756,8 @@ func TestDynamicReleaseWorkflow_Unsigned(t *testing.T) {
 	for _, unwanted := range []string{
 		"Import GPG key",
 		"crazy-max/ghaction-import-gpg@v6",
-		"GPG_FINGERPRINT",
+		"GPG_FINGERPRINT:",
+		"GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}",
 	} {
 		if strings.Contains(content, unwanted) {
 			t.Errorf("unsigned dynamic workflow unexpectedly contains %q\ncontent:\n%s", unwanted, content)
@@ -734,7 +774,8 @@ func TestDynamicReleaseWorkflow_Overrides(t *testing.T) {
 	if !strings.Contains(content, "image: ghcr.io/example/eidos:v0.4.2") {
 		t.Errorf("expected overridden image, got:\n%s", content)
 	}
-	if !strings.Contains(content, "eidos generate --spec openapi.yaml --skip-build") {
+	// An explicit spec_path is appended as a --spec override on top of --config.
+	if !strings.Contains(content, "eidos generate --config generator.yaml --skip-build --output . --force --spec openapi.yaml") {
 		t.Errorf("expected overridden spec path, got:\n%s", content)
 	}
 }

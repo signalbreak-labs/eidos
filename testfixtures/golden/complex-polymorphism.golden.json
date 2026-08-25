@@ -7,7 +7,7 @@
   {
     "path": ".goreleaser.yml",
     "reason": "GoReleaser release configuration",
-    "body_hash": "7089444b819c1890"
+    "body_hash": "bf8932f04be571be"
   },
   {
     "path": "GNUmakefile",
@@ -22,17 +22,17 @@
   {
     "path": "docs/actions/create_polymorphic_pet.md",
     "reason": "documentation for action create_polymorphic_pet",
-    "body_hash": "bd7c98fdb5cf6adb"
+    "body_hash": "74e2aa243bf6b8d1"
   },
   {
     "path": "docs/data-sources/get_polymorphic_pet.md",
     "reason": "documentation for data source get_polymorphic_pet",
-    "body_hash": "f56acb8c4b7490bc"
+    "body_hash": "de1f4fcf340a6661"
   },
   {
     "path": "docs/data-sources/list_animals.md",
     "reason": "documentation for data source list_animals",
-    "body_hash": "c16f5cbb84cacdf6"
+    "body_hash": "acfe928928ff59f1"
   },
   {
     "path": "docs/index.md",

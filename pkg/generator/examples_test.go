@@ -23,8 +23,8 @@ func TestResourceExampleFile_Render(t *testing.T) {
 	wantSubstrings := []string{
 		`resource "mycloud_pet" "example" {`,
 		"name = \"example\"",
-		"tag = \"example\"",
-		"age = 1",
+		"tag  = \"example\"",
+		"age  = 1",
 		"tags = [ \"example\" ]",
 		"owner = {",
 		"email = \"example\"",
@@ -148,7 +148,7 @@ func TestEphemeralResourceExampleFile_Render(t *testing.T) {
 	wantSubstrings := []string{
 		`ephemeral "mycloud_token" "example" {`,
 		"user_id = \"example\"",
-		"ttl = 1",
+		"ttl     = 1",
 		"}",
 	}
 	for _, want := range wantSubstrings {
@@ -181,7 +181,7 @@ func TestActionExampleFile_Render(t *testing.T) {
 		// "Unsupported argument" at validate/plan time.
 		`config {`,
 		"server_id = \"example\"",
-		"force = true",
+		"force     = true",
 		"}",
 	}
 	for _, want := range wantSubstrings {
@@ -491,5 +491,65 @@ func TestExampleFiles_Harness(t *testing.T) {
 	}
 	if diff := sliceDiff(wantPaths, gotPaths); diff != "" {
 		t.Errorf("emitted paths mismatch:\n%s", diff)
+	}
+}
+
+// TestWriteHCLDiscriminatedUnionAligned verifies that a discriminated union
+// attribute renders as an object literal whose discriminator and merged
+// attribute rows have aligned `=` signs (fmt-clean), with the discriminator set
+// to the first sorted mapping key.
+func TestWriteHCLDiscriminatedUnionAligned(t *testing.T) {
+	r := ir.ResourceIR{
+		Name:     "pet",
+		TypeName: "mycloud_pet",
+		Schema: ir.ObjectSchemaIR{
+			Attributes: []ir.AttributeIR{
+				{
+					Name:     "animal",
+					Required: true,
+					Schema: ir.SchemaIR{
+						Union: &ir.UnionType{
+							Kind: ir.OneOf,
+							Variants: []ir.SchemaIR{
+								{
+									Name: "cat",
+									Attributes: []ir.AttributeIR{
+										{Name: "animal_type", Required: true, Schema: ir.SchemaIR{Type: ir.TypeString}},
+										{Name: "lives", Optional: true, Schema: ir.SchemaIR{Type: ir.TypeInt}},
+									},
+								},
+								{
+									Name: "dog",
+									Attributes: []ir.AttributeIR{
+										{Name: "animal_type", Required: true, Schema: ir.SchemaIR{Type: ir.TypeString}},
+										{Name: "bark_volume", Optional: true, Schema: ir.SchemaIR{Type: ir.TypeInt}},
+									},
+								},
+							},
+							Discriminator: &ir.DiscriminatorIR{
+								PropertyName: "animalType",
+								Mapping:      map[string]string{"cat": "CatVariant", "dog": "DogVariant"},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	got := generateResourceExampleHCL(r)
+	for _, want := range []string{
+		"animal = {",
+		// animal_type and bark_volume are both 11 chars, so they sit at the
+		// run's max width with a single space; the shorter lives row pads to
+		// align the `=` signs at column 12 (fmt-clean).
+		`animal_type = "cat"`,
+		"bark_volume = 1",
+		"lives       = 1",
+		"}",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("union example missing %q\n%s", want, got)
+		}
 	}
 }

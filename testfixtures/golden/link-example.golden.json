@@ -7,7 +7,7 @@
   {
     "path": ".goreleaser.yml",
     "reason": "GoReleaser release configuration",
-    "body_hash": "827798c3e08e3c99"
+    "body_hash": "fc31d450d16ff7bd"
   },
   {
     "path": "GNUmakefile",
@@ -22,12 +22,12 @@
   {
     "path": "docs/data-sources/get_user.md",
     "reason": "documentation for data source get_user",
-    "body_hash": "1bd8768035aeeec1"
+    "body_hash": "f70db3b21e377235"
   },
   {
     "path": "docs/data-sources/list_users.md",
     "reason": "documentation for data source list_users",
-    "body_hash": "927d419633077229"
+    "body_hash": "a4baea35b038d98f"
   },
   {
     "path": "docs/index.md",
@@ -37,7 +37,7 @@
   {
     "path": "docs/list-resources/list_users.md",
     "reason": "documentation for list resource list_users",
-    "body_hash": "8c78c038cb1a66f0"
+    "body_hash": "f98db4d1bf9f6212"
   },
   {
     "path": "examples/data-sources/get_user/data-source.tf",

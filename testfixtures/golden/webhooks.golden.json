@@ -7,7 +7,7 @@
   {
     "path": ".goreleaser.yml",
     "reason": "GoReleaser release configuration",
-    "body_hash": "5b566e8d5a2f899e"
+    "body_hash": "8de0cbf5d01c2a68"
   },
   {
     "path": "GNUmakefile",
@@ -22,12 +22,12 @@
   {
     "path": "docs/actions/receive_new_pet.md",
     "reason": "documentation for action receive_new_pet",
-    "body_hash": "86942695a141049c"
+    "body_hash": "abfc5046e8bafd80"
   },
   {
     "path": "docs/data-sources/list_pets.md",
     "reason": "documentation for data source list_pets",
-    "body_hash": "fe786e2a2bf4f7e3"
+    "body_hash": "bed8c1bece46d609"
   },
   {
     "path": "docs/index.md",

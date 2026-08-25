@@ -64,3 +64,28 @@ const registryManifestTemplate = `{
   }
 }
 `
+
+// ProviderGitignore returns the generated .gitignore file for the provider.
+// It marks the provider files that eidos regenerates from the spec so that a
+// repository using the regenerate-and-release workflow keeps only the
+// source-of-truth files (generator.yaml, .github/workflows, .goreleaser.yml,
+// terraform-registry-manifest.json, GNUmakefile) on the default branch; the
+// regenerated provider code is force-added to the release tag commits instead
+// (see .github/workflows/regenerate-and-release.yml).
+func ProviderGitignore() File {
+	return staticFile(".gitignore", providerGitignoreContent)
+}
+
+const providerGitignoreContent = `# macOS
+.DS_Store
+
+# eidos-generated provider files (regenerated in CI from generator.yaml)
+.eidos-generated.json
+README.md
+docs/
+examples/
+go.mod
+go.sum
+internal/
+main.go
+`

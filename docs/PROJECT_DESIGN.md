@@ -2875,8 +2875,10 @@ matrix below (the `ignore` list removes the unsupported pairs):
 `darwin/386`, `darwin/arm`, `openbsd/arm`, `openbsd/arm64`, `solaris/386`,
 `solaris/arm`, `solaris/arm64`, and `windows/arm64`. The binary is named
 `terraform-provider-<name>_v{{ .Version }}` and archives use the
-`{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}` template (zip on
-Windows, tar.gz elsewhere).
+`{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}` template. Every
+archive is a zip (the Terraform Registry refuses to install anything else), and
+the generated `terraform-registry-manifest.json` is embedded in each archive so
+terraform and the registry learn the provider's protocol versions.
 
 ### 17.8 Provider Source Address
 

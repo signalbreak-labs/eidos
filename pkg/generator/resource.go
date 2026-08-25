@@ -457,6 +457,7 @@ func resourceTypeName(r ir.ResourceIR) string {
 // "id".
 type idFieldInfo struct {
 	attr      string
+	wire      string
 	field     string
 	primitive ir.PrimitiveType
 	found     bool
@@ -471,8 +472,18 @@ func resourceIDFieldInfo(r ir.ResourceIR) idFieldInfo {
 		if a.Name != attr {
 			continue
 		}
+		// wire is the request/response JSON key the API uses for the identity,
+		// which can differ from the tfsdk attribute name (camelCase policyName
+		// vs snake_case policy_name). Generated request bodies are keyed by the
+		// wire name, so mocks must inspect the body under this key; the tfsdk
+		// name only addresses Terraform state attributes.
+		wire := a.WireName
+		if wire == "" {
+			wire = attr
+		}
 		return idFieldInfo{
 			attr:      attr,
+			wire:      wire,
 			field:     naming.GoFieldName(attr),
 			primitive: a.Schema.Type,
 			found:     true,

@@ -7,7 +7,7 @@
   {
     "path": ".goreleaser.yml",
     "reason": "GoReleaser release configuration",
-    "body_hash": "49346473852230da"
+    "body_hash": "af8dd61e9c6f284c"
   },
   {
     "path": "GNUmakefile",
@@ -22,12 +22,12 @@
   {
     "path": "docs/actions/create_department.md",
     "reason": "documentation for action create_department",
-    "body_hash": "46f024d4557010ab"
+    "body_hash": "2469429851b763dd"
   },
   {
     "path": "docs/data-sources/list_departments.md",
     "reason": "documentation for data source list_departments",
-    "body_hash": "30cc35bb27af1cb4"
+    "body_hash": "ab9381c3ce376b40"
   },
   {
     "path": "docs/index.md",

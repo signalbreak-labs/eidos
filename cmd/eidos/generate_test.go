@@ -997,9 +997,9 @@ generation:
 }
 
 // TestGenerateCommand_OnlyBuildWithDynamicReleaseEmitsWorkflow verifies that
-// --only-build --dynamic-release emits the regenerate-and-release workflow
-// alongside the four static scaffolding files, instead of silently dropping
-// --dynamic-release (regression guard for M-78).
+// --only-build --dynamic-release emits the regenerate-and-release workflow and
+// the .gitignore alongside the four static scaffolding files, instead of
+// silently dropping --dynamic-release (regression guard for M-78).
 func TestGenerateCommand_OnlyBuildWithDynamicReleaseEmitsWorkflow(t *testing.T) {
 	chdirWithSpec(t)
 	set := dryRunJSON(t, "--only-build", "--dynamic-release")
@@ -1008,13 +1008,16 @@ func TestGenerateCommand_OnlyBuildWithDynamicReleaseEmitsWorkflow(t *testing.T) 
 			t.Errorf("--only-build --dynamic-release should still emit %q, missing from: %v", p, set)
 		}
 	}
-	if _, ok := set[dynamicReleaseWorkflowPath]; !ok {
-		t.Errorf("--only-build --dynamic-release should emit %q, missing from: %v", dynamicReleaseWorkflowPath, set)
+	for _, p := range []string{dynamicReleaseWorkflowPath, ".gitignore"} {
+		if _, ok := set[p]; !ok {
+			t.Errorf("--only-build --dynamic-release should emit %q, missing from: %v", p, set)
+		}
 	}
-	// Nothing else leaks through: only the scaffolding + the dynamic workflow.
-	if len(set) != len(buildScaffoldingFiles)+1 {
+	// Nothing else leaks through: exactly the scaffolding + the dynamic workflow
+	// and its .gitignore.
+	if len(set) != len(buildScaffoldingFiles)+2 {
 		t.Errorf("--only-build --dynamic-release should emit exactly %d files, got %d: %v",
-			len(buildScaffoldingFiles)+1, len(set), set)
+			len(buildScaffoldingFiles)+2, len(set), set)
 	}
 }
 

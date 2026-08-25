@@ -7,7 +7,7 @@
   {
     "path": ".goreleaser.yml",
     "reason": "GoReleaser release configuration",
-    "body_hash": "34c7bd3d10fb71f9"
+    "body_hash": "fb77755d6185085d"
   },
   {
     "path": "GNUmakefile",
@@ -22,12 +22,12 @@
   {
     "path": "docs/ephemeral-resources/issue_credentials.md",
     "reason": "documentation for ephemeral resource issue_credentials",
-    "body_hash": "bc38a48a086b7780"
+    "body_hash": "0b9169e5026745c5"
   },
   {
     "path": "docs/index.md",
     "reason": "provider overview and authentication guide",
-    "body_hash": "54cdfbfd282a6817"
+    "body_hash": "d6675a21cf911349"
   },
   {
     "path": "examples/ephemeral-resources/issue_credentials/ephemeral-resource.tf",

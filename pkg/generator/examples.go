@@ -183,15 +183,64 @@ func actionExampleTypeName(a ir.ActionIR) string {
 	return typeNameFallback(a.Name)
 }
 
+// hclRow is a single-line attribute assignment collected while rendering an HCL
+// body, so consecutive assignments can be emitted with aligned `=` signs (the
+// run-based alignment terraform fmt applies).
+type hclRow struct {
+	name  string
+	value string
+}
+
+// hclRows collects single-line attribute assignments and emits them aligned
+// when flushed. A multi-line attribute value or a nested block ends a run.
+type hclRows struct {
+	h    *hclBuilder
+	rows []hclRow
+}
+
+// flush emits any pending assignments with aligned `=` signs. The longest name
+// in the run sets the width; shorter names are padded so the `=` lines up, the
+// way terraform fmt aligns a run of single-line `name = value` assignments.
+func (r *hclRows) flush() {
+	if len(r.rows) == 0 {
+		return
+	}
+	width := 0
+	for _, row := range r.rows {
+		if len(row.name) > width {
+			width = len(row.name)
+		}
+	}
+	for _, row := range r.rows {
+		r.h.writeLinef("%-*s = %s", width, row.name, row.value)
+	}
+	r.rows = r.rows[:0]
+}
+
+// add appends a single-line assignment to the pending run.
+func (r *hclRows) add(name, value string) {
+	r.rows = append(r.rows, hclRow{name, value})
+}
+
 // writeHCLBody renders configurable attributes and blocks for an object schema.
 // Computed-only attributes are omitted because they are set by the provider.
+// Consecutive single-line assignments are emitted with aligned `=` signs; a
+// multi-line attribute value or a nested block ends the run, matching
+// terraform fmt so the generated example is fmt-clean.
 func writeHCLBody(h *hclBuilder, obj ir.ObjectSchemaIR) {
+	rows := &hclRows{h: h}
 	for _, attr := range obj.Attributes {
 		if !includeInExample(attr) {
 			continue
 		}
-		writeHCLAttribute(h, attr)
+		if value, single := writeHCLAttributeValue(attr); single {
+			rows.add(attr.Name, value)
+			continue
+		}
+		rows.flush()
+		writeHCLAttributeLiteral(h, attr)
 	}
+	rows.flush()
 	for _, block := range obj.Blocks {
 		writeHCLBlock(h, block)
 	}
@@ -204,13 +253,13 @@ func includeInExample(attr ir.AttributeIR) bool {
 	return attr.Required || attr.Optional
 }
 
-// writeHCLAttribute renders a single configurable attribute in HCL.
-//
-// Object-like attributes map to SingleNestedAttribute in the generated schema,
-// so they must use assignment syntax (`name = { ... }`), not block syntax
-// (`name { ... }`). Block syntax is reserved for real nested blocks (ir.BlockIR),
-// which are rendered by writeHCLBlock.
-func writeHCLAttribute(h *hclBuilder, attr ir.AttributeIR) {
+// writeHCLAttributeValue returns the single-line RHS value for a configurable
+// attribute, or (value="", single=false) when the attribute renders as a
+// multi-line literal handled by writeHCLAttributeLiteral. Object-like attributes
+// map to SingleNestedAttribute in the generated schema, so they must use
+// assignment syntax (`name = { ... }`), never block syntax (`name { ... }`),
+// which is reserved for real nested blocks (ir.BlockIR).
+func writeHCLAttributeValue(attr ir.AttributeIR) (value string, single bool) {
 	s := attr.Schema
 
 	// A DynamicAttribute (primitive dynamic, or a collection degraded to dynamic
@@ -223,16 +272,35 @@ func writeHCLAttribute(h *hclBuilder, attr ir.AttributeIR) {
 	// null, which round-trips as an omitted field.
 	if schema.IsDynamicAttribute(s) {
 		if attr.Required {
-			h.writeLinef("%s = %s", attr.Name, `"example"`)
-		} else {
-			h.writeLinef("%s = %s", attr.Name, "null")
+			return `"example"`, true
 		}
-		return
+		return "null", true
 	}
 
 	if s.Collection != nil {
-		writeHCLCollectionAttribute(h, attr)
-		return
+		elem := s.Collection.ElementType
+		switch s.Collection.Kind {
+		case ir.List, ir.Set:
+			if schema.IsPrimitiveSchema(elem) {
+				// Primitive lists/sets render as compact single-line literals; keeping
+				// primitives on one line makes simple examples easier to scan.
+				return fmt.Sprintf("[ %s ]", primitiveExampleValue(elem.Type)), true
+			}
+			if !schema.IsObjectLike(elem) {
+				// Unsupported element (for example, a oneOf/anyOf union that
+				// degrades to dynamic): emit an empty literal so example generation
+				// degrades gracefully rather than panicking.
+				return "[]", true
+			}
+			return "", false
+		case ir.Map:
+			if schema.IsPrimitiveSchema(elem) || schema.IsObjectLike(elem) {
+				return "", false
+			}
+			return "{}", true
+		default:
+			return "[]", true
+		}
 	}
 
 	// Union types (oneOf/anyOf): a discriminated union renders as a
@@ -242,28 +310,45 @@ func writeHCLAttribute(h *hclBuilder, attr ir.AttributeIR) {
 	// resource schema emission order (resource.go) so the example matches the
 	// generated schema shape.
 	if s.Union != nil {
-		if writeHCLDiscriminatedUnion(h, attr, writeHCLAttribute) {
-			return
+		if schema.MergedDiscriminatedUnion(s) != nil {
+			return "", false
 		}
 		if attr.Required {
-			h.writeLinef("%s = %s", attr.Name, `"example"`)
-		} else {
-			h.writeLinef("%s = %s", attr.Name, "null")
+			return `"example"`, true
 		}
-		return
+		return "null", true
 	}
 
 	if schema.IsObjectLike(s) {
-		// Single nested attribute: assignment syntax (SingleNestedAttribute).
-		h.writeLinef("%s = {", attr.Name)
-		h.indent++
-		writeHCLBody(h, ir.ObjectSchemaIR{Attributes: s.Attributes, Blocks: s.Blocks})
-		h.indent--
-		h.writeLinef("}")
-		return
+		return "", false
 	}
 
-	h.writeLinef("%s = %s", attr.Name, primitiveExampleValue(s.Type))
+	return primitiveExampleValue(s.Type), true
+}
+
+// writeHCLAttributeLiteral renders a configurable attribute as a multi-line
+// literal: a single nested object, a nested collection of objects, or a
+// discriminated union object. The caller must flush any pending run first,
+// because a multi-line value ends the assignment run.
+func writeHCLAttributeLiteral(h *hclBuilder, attr ir.AttributeIR) {
+	s := attr.Schema
+	if s.Collection != nil {
+		writeHCLCollectionLiteral(h, attr)
+		return
+	}
+	if s.Union != nil {
+		// Discriminated union (SingleNestedAttribute with a discriminator). The
+		// non-discriminated case is a scalar placeholder handled by
+		// writeHCLAttributeValue, so the literal path can write it directly.
+		writeHCLDiscriminatedUnionAligned(h, attr)
+		return
+	}
+	// Single nested attribute: assignment syntax (SingleNestedAttribute).
+	h.writeLinef("%s = {", attr.Name)
+	h.indent++
+	writeHCLBody(h, ir.ObjectSchemaIR{Attributes: s.Attributes, Blocks: s.Blocks})
+	h.indent--
+	h.writeLinef("}")
 }
 
 // writeHCLDiscriminatedUnion emits an HCL object literal for a discriminated
@@ -316,34 +401,27 @@ func writeHCLDiscriminatedUnion(h *hclBuilder, attr ir.AttributeIR, attrWriter f
 	return true
 }
 
-// writeHCLCollectionAttribute renders a list, set, or map attribute in HCL.
-//
-// List/Set-of-object and Map-of-object attributes map to ListNestedAttribute,
-// SetNestedAttribute, and MapNestedAttribute respectively in the generated
-// schema, so they must use assignment syntax with object/map literals — not
-// repeated block syntax. Only real nested blocks (ir.BlockIR) use block syntax.
-func writeHCLCollectionAttribute(h *hclBuilder, attr ir.AttributeIR) {
+// writeHCLCollectionLiteral renders a list, set, or map attribute whose value
+// is a multi-line literal. List/Set-of-object and Map-of-object attributes map
+// to ListNestedAttribute, SetNestedAttribute, and MapNestedAttribute
+// respectively in the generated schema, so they must use assignment syntax with
+// object/map literals — not repeated block syntax. Only real nested blocks
+// (ir.BlockIR) use block syntax. Primitive collections and the empty-literal
+// fallback are single-line and handled by writeHCLAttributeValue, so this
+// function only sees object-like elements.
+func writeHCLCollectionLiteral(h *hclBuilder, attr ir.AttributeIR) {
 	s := attr.Schema
 	elem := s.Collection.ElementType
 
 	switch s.Collection.Kind {
 	case ir.List, ir.Set:
-		if schema.IsPrimitiveSchema(elem) {
-			// Primitive lists/sets render as compact single-line literals; keeping
-			// primitives on one line makes simple examples easier to scan.
-			h.writeLinef("%s = [ %s ]", attr.Name, primitiveExampleValue(elem.Type))
-			return
-		}
-		if schema.IsObjectLike(elem) {
-			// Object collections (ListNestedAttribute/SetNestedAttribute) use a
-			// list-of-objects assignment literal.
-			h.writeLinef("%s = [{", attr.Name)
-			h.indent++
-			writeHCLBody(h, ir.ObjectSchemaIR{Attributes: elem.Attributes, Blocks: elem.Blocks})
-			h.indent--
-			h.writeLinef("}]")
-			return
-		}
+		// Object collections (ListNestedAttribute/SetNestedAttribute) use a
+		// list-of-objects assignment literal.
+		h.writeLinef("%s = [{", attr.Name)
+		h.indent++
+		writeHCLBody(h, ir.ObjectSchemaIR{Attributes: elem.Attributes, Blocks: elem.Blocks})
+		h.indent--
+		h.writeLinef("}]")
 	case ir.Map:
 		// Use a domain-relevant placeholder key derived from the attribute name
 		// rather than the generic "key" string.
@@ -356,31 +434,68 @@ func writeHCLCollectionAttribute(h *hclBuilder, attr ir.AttributeIR) {
 			h.writeLinef("}")
 			return
 		}
-		if schema.IsObjectLike(elem) {
-			h.writeLinef("%s = {", attr.Name)
-			h.indent++
-			h.writeLinef("%q = {", key)
-			h.indent++
-			writeHCLBody(h, ir.ObjectSchemaIR{Attributes: elem.Attributes, Blocks: elem.Blocks})
-			h.indent--
-			h.writeLinef("}")
-			h.indent--
-			h.writeLinef("}")
-			return
-		}
+		h.writeLinef("%s = {", attr.Name)
+		h.indent++
+		h.writeLinef("%q = {", key)
+		h.indent++
+		writeHCLBody(h, ir.ObjectSchemaIR{Attributes: elem.Attributes, Blocks: elem.Blocks})
+		h.indent--
+		h.writeLinef("}")
+		h.indent--
+		h.writeLinef("}")
 	}
+}
 
-	// Fallback for unsupported collection element types (for example, an
-	// OpenAPI array whose items are a oneOf/anyOf union, which maps to a
-	// DynamicAttribute element). Rather than panicking and aborting the whole
-	// CLI run, emit an empty literal so example generation degrades gracefully.
-	// This mirrors the acceptance-test HCL writer, which emits `name = []`.
-	switch s.Collection.Kind {
-	case ir.Map:
-		h.writeLinef("%s = {}", attr.Name)
-	default:
-		h.writeLinef("%s = []", attr.Name)
+// writeHCLDiscriminatedUnionAligned emits an HCL object literal for a
+// discriminated union attribute, which the generator renders as a
+// SingleNestedAttribute merging all variant fields plus the discriminator, with
+// a DiscriminatorValidator (D2). The discriminator property is set to the first
+// sorted variant key so the validator accepts the example/config; the remaining
+// configurable merged attributes follow with aligned `=` signs so the literal
+// body is fmt-clean. It returns false when the union cannot be merged, in which
+// case the caller emits a scalar placeholder (writeHCLAttributeValue already
+// rules this out for the literal path).
+func writeHCLDiscriminatedUnionAligned(h *hclBuilder, attr ir.AttributeIR) bool {
+	merged := schema.MergedDiscriminatedUnion(attr.Schema)
+	if merged == nil {
+		return false
 	}
+	disc := attr.Schema.Union.Discriminator
+	discName := transformer.ToSnakeCase(disc.PropertyName)
+	keys := make([]string, 0, len(disc.Mapping))
+	for k := range disc.Mapping {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	// The discriminator is a Required string attribute; it must always be
+	// present. When the spec's discriminator declares a mapping, emit the first
+	// (sorted) key so the DiscriminatorValidator accepts the value. When the
+	// mapping is absent (inline variants, no $ref names to infer from) the
+	// validator's allowed-key set is empty and it skips the membership check, so
+	// any string satisfies it — emit "example" to satisfy the Required field.
+	discValue := `"example"`
+	if len(keys) > 0 {
+		discValue = fmt.Sprintf("%q", keys[0])
+	}
+	h.writeLinef("%s = {", attr.Name)
+	h.indent++
+	rows := &hclRows{h: h}
+	rows.add(discName, discValue)
+	for _, a := range merged.Attributes {
+		if a.Name == discName || !includeInExample(a) {
+			continue
+		}
+		if value, single := writeHCLAttributeValue(a); single {
+			rows.add(a.Name, value)
+			continue
+		}
+		rows.flush()
+		writeHCLAttributeLiteral(h, a)
+	}
+	rows.flush()
+	h.indent--
+	h.writeLinef("}")
+	return true
 }
 
 // writeHCLBlock renders a nested block in HCL.

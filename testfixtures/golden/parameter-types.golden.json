@@ -7,7 +7,7 @@
   {
     "path": ".goreleaser.yml",
     "reason": "GoReleaser release configuration",
-    "body_hash": "0db2bb4801372677"
+    "body_hash": "5bc5aa7694f4e57f"
   },
   {
     "path": "GNUmakefile",
@@ -22,17 +22,17 @@
   {
     "path": "docs/actions/delete_item.md",
     "reason": "documentation for action delete_item",
-    "body_hash": "9cbffaf527889aec"
+    "body_hash": "6350fe30eba4f526"
   },
   {
     "path": "docs/data-sources/get_item.md",
     "reason": "documentation for data source get_item",
-    "body_hash": "be9c7400a8ac7102"
+    "body_hash": "5c44980938778444"
   },
   {
     "path": "docs/data-sources/list_items.md",
     "reason": "documentation for data source list_items",
-    "body_hash": "5bb104602c25ca35"
+    "body_hash": "f08dc70e18e52899"
   },
   {
     "path": "docs/index.md",
@@ -42,22 +42,22 @@
   {
     "path": "docs/list-resources/list_items.md",
     "reason": "documentation for list resource list_items",
-    "body_hash": "3c2cb90da9145c0c"
+    "body_hash": "2df3db5cc77153fe"
   },
   {
     "path": "examples/actions/delete_item/action.tf",
     "reason": "example for action delete_item",
-    "body_hash": "15be255ee8a711a0"
+    "body_hash": "39f9c2faa18187a8"
   },
   {
     "path": "examples/data-sources/get_item/data-source.tf",
     "reason": "example for data source get_item",
-    "body_hash": "917b64f332b304d0"
+    "body_hash": "f86f405cffee1adc"
   },
   {
     "path": "examples/data-sources/list_items/data-source.tf",
     "reason": "example for data source list_items",
-    "body_hash": "0537efb5db1095e3"
+    "body_hash": "7e950b7063457393"
   },
   {
     "path": "generator.yaml",

@@ -7,7 +7,7 @@
   {
     "path": ".goreleaser.yml",
     "reason": "GoReleaser release configuration",
-    "body_hash": "13899252f5cf6950"
+    "body_hash": "a87feee802e5007e"
   },
   {
     "path": "GNUmakefile",
@@ -22,17 +22,17 @@
   {
     "path": "docs/functions/lookup_tags.md",
     "reason": "documentation for function lookup_tags",
-    "body_hash": "164ba22fbf8192cf"
+    "body_hash": "11c1b169d4508bab"
   },
   {
     "path": "docs/functions/search_users.md",
     "reason": "documentation for function search_users",
-    "body_hash": "43049766cdad2093"
+    "body_hash": "e27c22ece7b12f95"
   },
   {
     "path": "docs/index.md",
     "reason": "provider overview and authentication guide",
-    "body_hash": "158b594a560a3548"
+    "body_hash": "1a8511cf73f97750"
   },
   {
     "path": "generator.yaml",
