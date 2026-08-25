@@ -17,6 +17,7 @@ resource_overrides:
         - data
         - id
         - kind
+      description: Read a Config
     - schema: instance
       operation: createInstance
       resource_name: instance
@@ -33,6 +34,7 @@ resource_overrides:
         - image_pull_policy
         - status
         - phase
+      description: Read an Instance
     - schema: network
       operation: createNetwork
       resource_name: network
@@ -50,6 +52,7 @@ resource_overrides:
         - selector
         - status
         - load_balancer
+      description: Read a Network
     - schema: project
       operation: createProjectForOrganization
       resource_name: project
@@ -64,6 +67,7 @@ resource_overrides:
         - organization
         - private
         - project
+      description: Get a project
     - schema: secret
       operation: createSecret
       resource_name: secret
@@ -75,6 +79,7 @@ resource_overrides:
         - id
         - kind
         - type
+      description: Read a Secret
     - schema: stack
       operation: createStack
       resource_name: stack
@@ -89,6 +94,7 @@ resource_overrides:
         - selector
         - status
         - ready_replicas
+      description: Read a Stack
     - schema: workspace
       operation: createWorkspace
       resource_name: workspace
@@ -100,6 +106,7 @@ resource_overrides:
         - labels
         - status
         - phase
+      description: Read a Workspace
 datasource_overrides:
     - operation: listMembers
       datasource_name: list_members
