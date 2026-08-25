@@ -1,6 +1,6 @@
 resource "mycloud_workspace" "example" {
   api_version = "example"
-  kind = "example"
+  kind        = "example"
   labels = {
     "labels" = "example"
   }

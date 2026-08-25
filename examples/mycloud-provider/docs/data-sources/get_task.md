@@ -14,8 +14,8 @@ Get an task
 ```terraform
 data "mycloud_get_task" "example" {
   organization = null
-  project = null
-  task_number = null
+  project      = null
+  task_number  = null
 }
 ```
 
@@ -39,4 +39,5 @@ In addition to all arguments above, the following attributes are exported:
 * `number` (Number, computed)
 * `state` (String, computed)
 * `title` (String, computed)
+
 

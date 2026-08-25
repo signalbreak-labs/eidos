@@ -14,14 +14,14 @@ Get a project
 ```terraform
 resource "mycloud_project" "example" {
   default_branch = null
-  description = null
-  full_name = null
-  html_url = null
-  id = null
-  name = null
-  organization = null
-  private = null
-  project = null
+  description    = null
+  full_name      = null
+  html_url       = null
+  id             = null
+  name           = null
+  organization   = null
+  private        = null
+  project        = null
 }
 ```
 
@@ -38,7 +38,7 @@ The following arguments are supported:
 * `id` (Number, optional)
 * `name` (String, optional)
 * `organization` (String, optional)
-* `private` (Bool, optional)
+* `private` (Boolean, optional)
 * `project` (String, optional)
 
 ### Attributes
@@ -52,8 +52,9 @@ In addition to all arguments above, the following computed attributes are export
 * `id` (Number, computed)
 * `name` (String, computed)
 * `organization` (String, computed)
-* `private` (Bool, computed)
+* `private` (Boolean, computed)
 * `project` (String, computed)
+
 
 ## Import
 

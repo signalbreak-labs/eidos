@@ -14,20 +14,16 @@ List Workspaces
 ```terraform
 list "mycloud_list_workspaces" "example" {
   provider = mycloud
-  limit = 100
+  limit    = 100
 }
 
 ```
-
 ## Schema
-
-### Arguments
-
-The following arguments are supported:
-
 
 ### Identity Attributes
 
 The following identity attributes are exported for each matching result:
 
 * `name` (String, computed)
+
+

@@ -3,8 +3,8 @@ resource "mycloud_secret" "example" {
   data = {
     "data" = "example"
   }
-  kind = "example"
-  name = "example"
-  type = "example"
+  kind      = "example"
+  name      = "example"
+  type      = "example"
   workspace = "example"
 }

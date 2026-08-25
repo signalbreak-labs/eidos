@@ -29,5 +29,20 @@ The following arguments are supported:
 
 In addition to all arguments above, the following attributes are exported:
 
-* `items` (List(Object({default_branch, description, full_name, html_url, id, name, organization, private, project})), computed)
+* `items` (Attributes List, computed) (see [below for nested schema](#nestedatt--items))
+
+<a id="nestedatt--items"></a>
+### Nested Schema for `items`
+
+Read-Only:
+
+* `default_branch` (String)
+* `description` (String)
+* `full_name` (String)
+* `html_url` (String)
+* `id` (Number)
+* `name` (String)
+* `organization` (String)
+* `private` (Boolean)
+* `project` (String)
 

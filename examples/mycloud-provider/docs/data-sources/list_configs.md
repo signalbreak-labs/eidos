@@ -29,5 +29,16 @@ The following arguments are supported:
 
 In addition to all arguments above, the following attributes are exported:
 
-* `items` (List(Object({api_version, data, kind, name, workspace})), computed)
+* `items` (Attributes List, computed) (see [below for nested schema](#nestedatt--items))
+
+<a id="nestedatt--items"></a>
+### Nested Schema for `items`
+
+Read-Only:
+
+* `api_version` (String)
+* `data` (Map of String)
+* `kind` (String)
+* `name` (String)
+* `workspace` (String)
 

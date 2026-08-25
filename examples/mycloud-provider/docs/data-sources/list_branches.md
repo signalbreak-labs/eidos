@@ -14,7 +14,7 @@ List branches
 ```terraform
 data "mycloud_list_branches" "example" {
   organization = null
-  project = null
+  project      = null
 }
 ```
 
@@ -31,5 +31,18 @@ The following arguments are supported:
 
 In addition to all arguments above, the following attributes are exported:
 
-* `items` (List(Object({branch, id, name, organization, project, protected, sha})), computed)
+* `items` (Attributes List, computed) (see [below for nested schema](#nestedatt--items))
+
+<a id="nestedatt--items"></a>
+### Nested Schema for `items`
+
+Read-Only:
+
+* `branch` (String)
+* `id` (Number)
+* `name` (String)
+* `organization` (String)
+* `project` (String)
+* `protected` (Boolean)
+* `sha` (String)
 

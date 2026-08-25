@@ -14,12 +14,12 @@ Read an Instance
 ```terraform
 resource "mycloud_instance" "example" {
   api_version = null
-  kind = null
-  labels = {}
-  name = null
-  spec = {}
-  status = {}
-  workspace = null
+  kind        = null
+  labels      = {}
+  name        = null
+  spec        = {}
+  status      = {}
+  workspace   = null
 }
 ```
 
@@ -31,12 +31,10 @@ The following arguments are supported:
 
 * `api_version` (String, optional)
 * `kind` (String, optional)
-* `labels` (Map(String), optional)
+* `labels` (Map of String, optional)
 * `name` (String, required)
-* `spec` (Object({containers}), optional)
-  * `containers` (List(Object({image, image_pull_policy, name})), optional)
-* `status` (Object({phase}), optional)
-  * `phase` (String, optional)
+* `spec` (Attributes, optional) (see [below for nested schema](#nestedatt--spec))
+* `status` (Attributes, optional) (see [below for nested schema](#nestedatt--status))
 * `workspace` (String, required)
 
 ### Attributes
@@ -46,11 +44,32 @@ In addition to all arguments above, the following computed attributes are export
 * `api_version` (String, computed)
 * `id` (String, computed)
 * `kind` (String, computed)
-* `labels` (Map(String), computed)
-* `spec` (Object({containers}), computed)
-  * `containers` (List(Object({image, image_pull_policy, name})), optional)
-* `status` (Object({phase}), computed)
-  * `phase` (String, optional)
+* `labels` (Map of String, computed)
+* `spec` (Attributes, computed) (see [below for nested schema](#nestedatt--spec))
+* `status` (Attributes, computed) (see [below for nested schema](#nestedatt--status))
+
+<a id="nestedatt--spec"></a>
+### Nested Schema for `spec`
+
+Optional:
+
+* `containers` (Attributes List) (see [below for nested schema](#nestedatt--spec--containers))
+<a id="nestedatt--spec--containers"></a>
+### Nested Schema for `spec.containers`
+
+Required:
+
+* `name` (String)
+Optional:
+
+* `image` (String)
+* `image_pull_policy` (String)
+<a id="nestedatt--status"></a>
+### Nested Schema for `status`
+
+Optional:
+
+* `phase` (String)
 
 ## Import
 

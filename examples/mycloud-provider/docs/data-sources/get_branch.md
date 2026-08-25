@@ -13,9 +13,9 @@ Get a branch
 
 ```terraform
 data "mycloud_get_branch" "example" {
-  branch = null
+  branch       = null
   organization = null
-  project = null
+  project      = null
 }
 ```
 
@@ -35,6 +35,7 @@ In addition to all arguments above, the following attributes are exported:
 
 * `id` (Number, computed)
 * `name` (String, computed)
-* `protected` (Bool, computed)
+* `protected` (Boolean, computed)
 * `sha` (String, computed)
+
 

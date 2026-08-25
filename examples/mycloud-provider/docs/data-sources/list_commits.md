@@ -14,7 +14,7 @@ List commits
 ```terraform
 data "mycloud_list_commits" "example" {
   organization = null
-  project = null
+  project      = null
 }
 ```
 
@@ -31,5 +31,18 @@ The following arguments are supported:
 
 In addition to all arguments above, the following attributes are exported:
 
-* `items` (List(Object({author_name, committed_at, message, organization, project, ref, sha})), computed)
+* `items` (Attributes List, computed) (see [below for nested schema](#nestedatt--items))
+
+<a id="nestedatt--items"></a>
+### Nested Schema for `items`
+
+Read-Only:
+
+* `author_name` (String)
+* `committed_at` (String)
+* `message` (String)
+* `organization` (String)
+* `project` (String)
+* `ref` (String)
+* `sha` (String)
 

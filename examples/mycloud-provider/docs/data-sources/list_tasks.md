@@ -14,7 +14,7 @@ List project tasks
 ```terraform
 data "mycloud_list_tasks" "example" {
   organization = null
-  project = null
+  project      = null
 }
 ```
 
@@ -31,5 +31,20 @@ The following arguments are supported:
 
 In addition to all arguments above, the following attributes are exported:
 
-* `items` (List(Object({body, html_url, id, number, organization, project, state, task_number, title})), computed)
+* `items` (Attributes List, computed) (see [below for nested schema](#nestedatt--items))
+
+<a id="nestedatt--items"></a>
+### Nested Schema for `items`
+
+Read-Only:
+
+* `body` (String)
+* `html_url` (String)
+* `id` (Number)
+* `number` (Number)
+* `organization` (String)
+* `project` (String)
+* `state` (String)
+* `task_number` (Number)
+* `title` (String)
 

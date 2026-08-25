@@ -14,10 +14,10 @@ Read a Workspace
 ```terraform
 resource "mycloud_workspace" "example" {
   api_version = null
-  kind = null
-  labels = {}
-  name = null
-  status = {}
+  kind        = null
+  labels      = {}
+  name        = null
+  status      = {}
 }
 ```
 
@@ -29,10 +29,9 @@ The following arguments are supported:
 
 * `api_version` (String, optional)
 * `kind` (String, optional)
-* `labels` (Map(String), optional)
+* `labels` (Map of String, optional)
 * `name` (String, required)
-* `status` (Object({phase}), optional)
-  * `phase` (String, optional)
+* `status` (Attributes, optional) (see [below for nested schema](#nestedatt--status))
 
 ### Attributes
 
@@ -40,9 +39,15 @@ In addition to all arguments above, the following computed attributes are export
 
 * `api_version` (String, computed)
 * `kind` (String, computed)
-* `labels` (Map(String), computed)
-* `status` (Object({phase}), computed)
-  * `phase` (String, optional)
+* `labels` (Map of String, computed)
+* `status` (Attributes, computed) (see [below for nested schema](#nestedatt--status))
+
+<a id="nestedatt--status"></a>
+### Nested Schema for `status`
+
+Optional:
+
+* `phase` (String)
 
 ## Import
 
