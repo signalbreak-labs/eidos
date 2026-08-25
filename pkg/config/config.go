@@ -182,6 +182,7 @@ type ResourceOverride struct {
 	DeleteOperation string               `yaml:"delete_operation,omitempty" json:"delete_operation,omitempty"`
 	SchemaVersion   int                  `yaml:"schema_version,omitempty" json:"schema_version,omitempty"`
 	StateUpgrades   []StateUpgradeConfig `yaml:"state_upgrades,omitempty" json:"state_upgrades,omitempty"`
+	Description     string               `yaml:"description,omitempty" json:"description,omitempty"`
 }
 
 // StateUpgradeConfig describes a single state migration from a prior schema

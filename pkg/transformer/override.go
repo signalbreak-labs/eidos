@@ -121,6 +121,7 @@ func applyResourceOverrides(provider *ir.ProviderIR, overrides []config.Resource
 			applyResourceImportFormatOverride(r, override)
 			applyResourceTimeoutOverride(r, override)
 			applyResourceStateUpgradeOverride(r, override)
+			applyResourceDescriptionOverride(r, override)
 			if err := applyResourceAttributeOverrides(r, override); err != nil {
 				return err
 			}
@@ -252,6 +253,16 @@ func applyResourceNameOverride(r *ir.ResourceIR, override config.ResourceOverrid
 func applyResourceIDOverride(r *ir.ResourceIR, override config.ResourceOverride) {
 	if strings.TrimSpace(override.IDAttribute) != "" {
 		r.IDAttribute = override.IDAttribute
+	}
+}
+
+// applyResourceDescriptionOverride overwrites the resource's Description with
+// the override's Description whenever it is non-empty. An omitted description
+// does not erase the spec-supplied text, matching the action/ephemeral
+// overrides and the write-only attribute description handling.
+func applyResourceDescriptionOverride(r *ir.ResourceIR, override config.ResourceOverride) {
+	if strings.TrimSpace(override.Description) != "" {
+		r.Description = override.Description
 	}
 }
 

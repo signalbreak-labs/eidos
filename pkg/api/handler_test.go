@@ -2328,6 +2328,44 @@ func TestBuildProviderIR_NonLocalRefFailsLoud(t *testing.T) {
 	t.Errorf("BuildProviderIR() diagnostics = %v, want a Non-local $ref error", diags)
 }
 
+// TestBuildProviderIR_ProviderDescriptionOverride verifies that a
+// generator.yaml provider.description overrides the spec's info.description,
+// mirroring provider.name/version precedence. Without it, a custom provider
+// description supplied in generator.yaml was silently dropped in favor of the
+// spec's info.description.
+func TestBuildProviderIR_ProviderDescriptionOverride(t *testing.T) {
+	spec := []byte(`{
+		"openapi": "3.0.1",
+		"info": {"title": "MyCloud", "version": "1.0.0", "description": "Spec description."},
+		"paths": {"/ping": {"get": {"operationId": "ping", "responses": {"200": {"description": "ok"}}}}}
+	}`)
+
+	cfg := &config.Config{
+		Provider: config.ProviderConfig{
+			Name:        "mycloud",
+			Version:     "0.0.1",
+			Description: "Custom provider description.",
+		},
+	}
+
+	preview, _, _, err := BuildProviderIR(spec, cfg)
+	if err != nil {
+		t.Fatalf("BuildProviderIR() error = %v", err)
+	}
+	if preview.Description != "Custom provider description." {
+		t.Errorf("provider Description = %q, want %q", preview.Description, "Custom provider description.")
+	}
+
+	// Without an override, the spec description is used.
+	preview2, _, _, err := BuildProviderIR(spec, nil)
+	if err != nil {
+		t.Fatalf("BuildProviderIR() error = %v", err)
+	}
+	if preview2.Description != "Spec description." {
+		t.Errorf("provider Description = %q, want %q", preview2.Description, "Spec description.")
+	}
+}
+
 // TestClassifyOperation_ActionFromVerbOperationId locks in the G unification: a
 // POST whose trailing path segment is not a recognized verb but whose
 // operationId leads with one classifies as an action, and a POST that is not a

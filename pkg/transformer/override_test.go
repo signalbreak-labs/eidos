@@ -72,7 +72,58 @@ func TestApplyOverrides_ResourceName(t *testing.T) {
 	}
 }
 
-// TestApplyOverrides_ResourceName_PreservesProviderPrefix verifies that a
+// TestApplyOverrides_ResourceDescription verifies that a resource_override
+// description replaces the auto-inferred description, and that an omitted
+// description does not erase the spec-supplied text. Mirrors the action and
+// ephemeral override description handling.
+func TestApplyOverrides_ResourceDescription(t *testing.T) {
+	provider := &ir.ProviderIR{
+		Resources: []ir.ResourceIR{{
+			Name:            "pet",
+			TypeName:        "pet",
+			SourceOperation: "createPet",
+			Description:     "Auto-inferred pet description.",
+		}},
+	}
+	cfg := &config.Config{
+		Provider: config.ProviderConfig{Name: "test", Version: "0.0.1"},
+		ResourceOverrides: []config.ResourceOverride{{
+			Schema:      "pet",
+			Description: "Custom pet resource description.",
+		}},
+	}
+
+	if err := ApplyOverrides(provider, cfg); err != nil {
+		t.Fatalf("ApplyOverrides() = %v, want nil", err)
+	}
+
+	if got := provider.Resources[0].Description; got != "Custom pet resource description." {
+		t.Errorf("resource Description = %q, want %q", got, "Custom pet resource description.")
+	}
+
+	// An override without a description must not erase the existing one.
+	provider2 := &ir.ProviderIR{
+		Resources: []ir.ResourceIR{{
+			Name:            "pet",
+			TypeName:        "pet",
+			SourceOperation: "createPet",
+			Description:     "Keep me.",
+		}},
+	}
+	cfg2 := &config.Config{
+		Provider: config.ProviderConfig{Name: "test", Version: "0.0.1"},
+		ResourceOverrides: []config.ResourceOverride{{
+			Schema: "pet",
+		}},
+	}
+	if err := ApplyOverrides(provider2, cfg2); err != nil {
+		t.Fatalf("ApplyOverrides() = %v, want nil", err)
+	}
+	if got := provider2.Resources[0].Description; got != "Keep me." {
+		t.Errorf("resource Description = %q, want %q (omitted override must not erase)", got, "Keep me.")
+	}
+}
+
 // resource_name override keeps the provider prefix on the Terraform type name
 // (the shape produced by the real pipeline: TypeName is always
 // "<provider>_<name>"). Terraform resolves a resource type as

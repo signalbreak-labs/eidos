@@ -701,6 +701,11 @@ func buildIRPreview(spec *parser.Spec, version parser.Version, cfg *config.Confi
 	if spec.Info != nil {
 		description = spec.Info.Description
 	}
+	// A generator.yaml provider.description overrides the spec's
+	// info.description, mirroring provider.name/version precedence.
+	if cfg != nil && strings.TrimSpace(cfg.Provider.Description) != "" {
+		description = cfg.Provider.Description
+	}
 
 	preview := &ir.ProviderIR{
 		Name:              name,
