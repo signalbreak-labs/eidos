@@ -360,24 +360,25 @@ func firstContentSchema(content map[string]*parser.MediaType) *parser.Schema {
 //
 // The payload must be an object with properties, an unresolved $ref to one, or
 // an array; a scalar or map (additionalProperties) wrapper value is a legitimate
-// field, not an envelope. Only "meta" and "links" are permitted as companion
-// properties, so a spec that carries a meaningful top-level object alongside
-// other payload fields is not mis-flattened. The generator reads the returned
-// key to unwrap the decoded response body before applying it to the model,
-// keeping the schema and the response consistent (E1).
+// field, not an envelope. Only "meta" and "links" are permitted as always-on
+// companion properties. A collection envelope of the form {<items>: [...],
+// context: {...}} is also unwrapped to the item array: "context" is
+// pagination/request metadata, not a second payload. {object, context} is left
+// wrapped — that is a real two-field resource. The generator reads the
+// returned key to unwrap the decoded response body before applying it to the
+// model, keeping the schema and the response consistent (E1).
 func UnwrapResponseEnvelope(spec, requestSpec *SchemaSpec) (*SchemaSpec, string) {
 	if spec == nil || !strings.EqualFold(spec.Type, "object") || len(spec.Properties) == 0 {
 		return spec, ""
 	}
-	// Scan for exactly one payload property (the envelope wrapper). The
-	// conventional envelope companions "meta" and "links" are allowed regardless
-	// of their shape (pagination metadata is often an object with properties); a
+	// Scan for payload properties (the envelope wrapper). The conventional
+	// envelope companions "meta" and "links" are allowed regardless of their
+	// shape (pagination metadata is often an object with properties); a
 	// non-companion property that is not a payload means this is a normal
 	// multi-field object, not an envelope.
-	var candName string
-	var cand SchemaSpec
+	var payloads []envelopePayload
 	for name, p := range spec.Properties {
-		if strings.EqualFold(name, "meta") || strings.EqualFold(name, "links") {
+		if isEnvelopeCompanion(name) {
 			continue
 		}
 		isPayload := p.RefName != "" ||
@@ -386,16 +387,16 @@ func UnwrapResponseEnvelope(spec, requestSpec *SchemaSpec) (*SchemaSpec, string)
 		if !isPayload {
 			return spec, ""
 		}
-		if candName != "" {
-			// More than one payload property → not a single-wrapper envelope.
-			return spec, ""
-		}
-		candName = name
-		cand = p
+		payloads = append(payloads, envelopePayload{name: name, spec: p})
 	}
-	if candName == "" {
+	if key, cand, ok := collectionArrayEnvelope(payloads); ok {
+		return cand, key
+	}
+	if len(payloads) != 1 {
 		return spec, ""
 	}
+	candName := payloads[0].name
+	cand := payloads[0].spec
 	// A non-"data" wrapper is unwrapped only when the request body is not the
 	// same single-property object. If request and response are both wrapped with
 	// the same key, the wrapper is the resource's real shape (the request body
@@ -409,6 +410,46 @@ func UnwrapResponseEnvelope(spec, requestSpec *SchemaSpec) (*SchemaSpec, string)
 		}
 	}
 	return &cand, candName
+}
+
+type envelopePayload struct {
+	name string
+	spec SchemaSpec
+}
+
+func isEnvelopeCompanion(name string) bool {
+	return strings.EqualFold(name, "meta") || strings.EqualFold(name, "links")
+}
+
+// collectionArrayEnvelope reports a collection envelope: exactly one array
+// payload plus a "context" companion. Two arrays, or an object payload paired
+// with context, are not collection envelopes.
+func collectionArrayEnvelope(payloads []envelopePayload) (string, *SchemaSpec, bool) {
+	if len(payloads) != 2 {
+		return "", nil, false
+	}
+	var arrayName string
+	var arraySpec *SchemaSpec
+	hasContext := false
+	for i := range payloads {
+		p := &payloads[i]
+		if strings.EqualFold(p.name, "context") {
+			hasContext = true
+			continue
+		}
+		if strings.EqualFold(p.spec.Type, "array") {
+			if arraySpec != nil {
+				return "", nil, false
+			}
+			arrayName = p.name
+			cp := p.spec
+			arraySpec = &cp
+		}
+	}
+	if !hasContext || arraySpec == nil || arrayName == "" {
+		return "", nil, false
+	}
+	return arrayName, arraySpec, true
 }
 
 // selectMediaType returns the media-type name whose schema is carried into the
@@ -692,6 +733,7 @@ func schemaSpecFromParserDepthInner(spec *parser.Spec, s *parser.Schema, depth, 
 		Nullable:    s.Nullable,
 		UniqueItems: s.UniqueItems,
 		WriteOnly:   s.WriteOnly,
+		ReadOnly:    s.ReadOnly,
 		Required:    s.Required,
 	}
 	// A depth backstop keeps a pathologically deep (non-cyclic) schema from
@@ -718,14 +760,23 @@ func schemaSpecFromParserDepthInner(spec *parser.Spec, s *parser.Schema, depth, 
 	}
 	if len(s.Properties) > 0 {
 		out.Properties = make(map[string]SchemaSpec, len(s.Properties))
+		requiredSet := make(map[string]bool, len(s.Required))
+		for _, name := range s.Required {
+			requiredSet[name] = true
+		}
+		var requiredReadOnly []string
 		for name, prop := range s.Properties {
 			if prop == nil {
 				continue
 			}
 			if child := schemaSpecFromParserDepth(spec, prop, depth+1, cycleDepth, visited, memo, diags); child != nil {
 				out.Properties[name] = *child
+				if requiredSet[name] && (prop.ReadOnly || child.ReadOnly) {
+					requiredReadOnly = append(requiredReadOnly, name)
+				}
 			}
 		}
+		warnRequiredReadOnlyProperties(diags, requiredReadOnly, s.SourceLocation)
 	}
 	switch v := s.AdditionalProperties.(type) {
 	case *parser.Schema:
@@ -999,6 +1050,27 @@ func warnCompositionNotModeled(diags *diagnostics.Diagnostics, kind string, loc 
 		Detail:         fmt.Sprintf("%s describes alternative schemas that the flat Terraform attribute model cannot represent; the attribute falls back to Dynamic. Split the schema or use a generator.yaml override if a concrete type is required.", kind),
 		SourceLocation: locPtrOrNil(loc),
 	})
+}
+
+// warnRequiredReadOnlyProperties records a fail-loud warning for each property
+// that is both required and readOnly — a spec contradiction (issue #40). Names
+// must already be collected; they are sorted here so identical specs produce
+// identical diagnostic order.
+func warnRequiredReadOnlyProperties(diags *diagnostics.Diagnostics, names []string, loc parser.SourceLocation) {
+	if diags == nil || len(names) == 0 {
+		return
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		*diags = diags.Append(diagnostics.Diagnostic{
+			Severity: diagnostics.Warning,
+			Summary:  "required readOnly property cannot be both input and output-only",
+			Detail: fmt.Sprintf(
+				"Property %q is listed in required and declared readOnly. A readOnly property is not a practitioner input, so the required constraint cannot be honored on the request body; the generated schema treats it as Computed unless a required query or header parameter of the same name forces it Required.",
+				name),
+			SourceLocation: locPtrOrNil(loc),
+		})
+	}
 }
 
 // warnBooleanSchemaDropped records a warning that a JSON Schema 2020-12 boolean
