@@ -3431,7 +3431,10 @@ func ephemeralFromOperation(spec *parser.Spec, op *parser.Operation, providerNam
 // property when present. The resource schema is the item object's property
 // set. Both come from the resolved response schema carried on pathOps: an
 // array-of-objects response populates them, anything else leaves them empty
-// (the generator keeps the list resource honestly scaffolded — F1).
+// (the generator keeps the list resource honestly scaffolded — F1). The config
+// (filter) schema is always built from the collection path's parameters, even
+// when the response is not a bare array, so a required query or header
+// parameter is not dropped from an enveloped collection.
 func listResourceFromOperation(op *parser.Operation, providerName, path, method string, pathOps map[string]map[transformer.HTTPMethod]transformer.Operation, identityParams []string, diags *diagnostics.Diagnostics) ir.ListResourceIR {
 	name := resourceName(op, method, path)
 	lr := ir.ListResourceIR{
@@ -3444,14 +3447,16 @@ func listResourceFromOperation(op *parser.Operation, providerName, path, method 
 	}
 
 	top := lookupTransformerOp(pathOps, path, method)
+	if top != nil {
+		// ConfigSchema is the collection's input filters. It does not depend
+		// on the response being a bare array; building it first keeps required
+		// query/header/path parameters from vanishing when the response is an
+		// enveloped collection such as {items: [...], context: {...}}.
+		lr.ConfigSchema = transformer.ListResourceConfigSchema(*top, diags)
+	}
 	if top == nil || top.ResponseSchema == nil || !strings.EqualFold(top.ResponseSchema.Type, "array") {
 		return lr
 	}
-	// The collection path's path/query/header parameters become the config
-	// (filter) schema, so a list resource whose collection path carries
-	// parameters can resolve its path substitutions and wire its List body
-	// (PROJECT_DESIGN §23).
-	lr.ConfigSchema = transformer.ListResourceConfigSchema(*top, diags)
 	item := top.ResponseSchema.Items
 	if item == nil || len(item.Properties) == 0 {
 		return lr

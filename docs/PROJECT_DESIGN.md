@@ -1373,6 +1373,13 @@ All three build the config from the IR via `generator.GenerateConfig` in `pkg/ge
    - Response-only attributes → `Computed: true`
    - Attributes present in both request and response → `Optional: true` + `Computed: true`
    - `required: true` request attributes → `Required: true`
+   - `readOnly: true` request-body properties are not practitioner inputs →
+     `Computed: true` (not `Optional+Computed`); a property that is both
+     `required` and `readOnly` emits a `diagnostics.Warning`
+   - Required query/header parameters on create/read/update/delete fold into
+     the schema as `Required` (they win over a readOnly body echo of the same
+     name) so the generated request does not send an empty required parameter
+     (issue #40)
    - `writeOnly: true` → `WriteOnly: true` + `Sensitive: true` (renamed to `<name>_wo` with a companion `<name>_wo_version` attribute)
    - Default values are carried in the IR; no `Default` schema field is emitted
 8. **Security mapping**: Convert security schemes to provider config attributes.
@@ -1865,6 +1872,14 @@ They **cannot** be stored in state, passed to modules, or referenced in non-ephe
 **List resources** (Terraform 1.14+) enable `terraform query` operations that search for resources within a scope. They stream results back to Terraform and can optionally include full resource data. List resources require a corresponding managed resource implementation (they share the same identity schema).
 
 This is the natural Terraform mapping for OpenAPI `GET` collection endpoints — the same endpoints that also power data sources, but with a focus on listing/scanning rather than reading a single known instance.
+
+Collection responses wrapped as `{<items>: [...], context: {...}}` (`meta`/
+`links` companions are also allowed) are unwrapped to the item array so the
+list resource's identity, item schema, and `List` wiring populate. The config
+(filter) schema is built from the collection operation's path/query/header
+parameters independently of the response shape, so a required query or header
+parameter is not dropped when the response is an envelope rather than a bare
+array.
 
 #### How List Resources Map from OpenAPI
 
@@ -3181,6 +3196,7 @@ implemented; `CHANGELOG.md` [Unreleased] records the detail:
 | Wire fidelity: camelCase keys + uid path substitution (G14/G18/G19/G20) | `ir.AttributeIR` carries `WireName` (the original property/param name) and model fields emit a `json:"<wireName>"` tag so snake_cased attribute names round-trip against specs that use camelCase property names; `applyJSONToModel` null-defaults attributes the response did not carry and echoed request inputs become Optional+Computed; `resolvePathSubstitution` prefers the resource's `uid` attribute for UID-shaped path placeholders (`uid`, `*_uid`); every wired Update calls `preserveStateIntoPlan` to carry known state values (e.g. optimistic-concurrency `version`) into the plan. |
 | `resource_overrides` per-CRUD promotion (G8/G9) | `generate_resource` plus explicit `create_operation`/`read_operation`/`update_operation`/`delete_operation` fields promote an action to a managed resource wired to the specified operations (MyCloud dashboards: create on `POST /dashboards/db`, read/delete on `/dashboards/uid/{uid}`); `ManagedResourceSchema` appends request-body inputs the response does not echo as Optional attributes. |
 | Operational/framework notes closed as-is (G10, G21) | G10 — a merged reference spec can declare Enterprise/Cloud-only RBAC endpoints the target server does not serve (validate the spec against the server edition before generating); G21 — the recursive mute-timing `time_intervals` shape cannot be represented in terraform-plugin-framework (dynamic-in-collection), an accepted framework limitation. |
+| Required query/header params dropped or demoted (issue #40) | List-resource `ConfigSchema` is built from the collection operation's path/query/header parameters *before* the array-response check, so required filters survive enveloped `{items, context}` collections. `UnwrapResponseEnvelope` treats `{<array>, context}` as a collection envelope (`meta`/`links` companions still allowed) so identity and resource schemas populate and the list can wire. Managed-resource required query/header parameters are reconciled into schema flags (`Required`, not `Optional+Computed`). A property that is both `required` and `readOnly` emits a `diagnostics.Warning`. This is a generic OpenAPI pattern (required query/header params, collection envelopes, required+readOnly properties), not a vendor-specific exception. |
 
 ### 23.2 Accepted limitations (by design)
 

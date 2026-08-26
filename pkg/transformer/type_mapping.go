@@ -19,11 +19,15 @@ type SchemaSpec struct {
 	// attribute construction can set ir.AttributeIR.Description, which the
 	// generators already render as the framework MarkdownDescription and as the
 	// docs attribute blurb.
-	Description          string
-	Format               string
-	Nullable             bool
-	UniqueItems          bool
-	WriteOnly            bool
+	Description string
+	Format      string
+	Nullable    bool
+	UniqueItems bool
+	WriteOnly   bool
+	// ReadOnly is the OpenAPI `readOnly` flag. A readOnly property may appear
+	// in responses but is not a practitioner input, even when the spec also
+	// lists it on the request body (issue #40).
+	ReadOnly             bool
 	Required             []string
 	Items                *SchemaSpec
 	Properties           map[string]SchemaSpec
