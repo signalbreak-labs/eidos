@@ -77,6 +77,7 @@ func newStackResourceMockServer() *httptest.Server {
 			if _, ok := body["id"]; !ok {
 				body["id"] = "example-id"
 			}
+			id = fmt.Sprintf("%v", body["id"])
 			state0[id] = body
 			lastKey0 = id
 			w.Header().Set("Content-Type", "application/json")
