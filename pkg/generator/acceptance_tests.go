@@ -604,12 +604,28 @@ func acceptanceParamAttribute(r ir.ResourceIR) (string, ir.PrimitiveType, bool) 
 	if idAttr == "" {
 		idAttr = "id"
 	}
-	isIdentifier := func(name string) bool { return name == idAttr }
-	for _, attr := range r.Schema.Attributes {
-		if !includeInExample(attr) || isIdentifier(attr.Name) {
-			continue
+	// candidate reports whether the attribute can serve as the create/update
+	// mutation parameter: a configurable scalar (not a collection or object),
+	// included in the example config, and not the identifier. A Required Dynamic
+	// is excluded: acceptanceExampleValue/updatedValue emit the null literal for
+	// a Dynamic, and Terraform rejects null for a Required attribute at plan time
+	// ("Missing Configuration for Required Attribute"). writeHCLAcceptanceAttribute
+	// configures a Required Dynamic with a string scalar ("example") instead, so
+	// it round-trips without needing a parameter placeholder.
+	candidate := func(attr ir.AttributeIR) bool {
+		if !includeInExample(attr) || attr.Name == idAttr {
+			return false
 		}
 		if attr.Schema.Collection != nil || schema.IsObjectLike(attr.Schema) {
+			return false
+		}
+		if attr.Required && schema.IsDynamicAttribute(attr.Schema) {
+			return false
+		}
+		return true
+	}
+	for _, attr := range r.Schema.Attributes {
+		if !candidate(attr) {
 			continue
 		}
 		if attr.Schema.Type == ir.TypeString {
@@ -617,10 +633,7 @@ func acceptanceParamAttribute(r ir.ResourceIR) (string, ir.PrimitiveType, bool) 
 		}
 	}
 	for _, attr := range r.Schema.Attributes {
-		if !includeInExample(attr) || isIdentifier(attr.Name) {
-			continue
-		}
-		if attr.Schema.Collection != nil || schema.IsObjectLike(attr.Schema) {
+		if !candidate(attr) {
 			continue
 		}
 		if attr.Schema.Type != "" {
@@ -1573,6 +1586,19 @@ func statefulMockRouteHandler(route mockRoute, index int, schemes []ir.SecurityS
 					),
 				),
 			},
+			// Key state by the identity value (body[idKey]), matching create: the
+			// path-derived id is the URL tail the client substituted, which can
+			// differ from the identity value create stored under (a synthesized
+			// placeholder for a Computed identity, or a practitioner-supplied
+			// value for a Required one). Storing update under the same slot as
+			// create lets the post-update refresh's direct path-tail lookup serve
+			// the updated body instead of the stale create body, keeping the
+			// refresh plan empty (issue #35).
+			astgen.AssignStmt(
+				[]ast.Expr{astgen.Ident("id")},
+				[]ast.Expr{astgen.Call(astgen.QualExpr("fmt", "Sprintf"), astgen.Lit("%v"), astgen.IndexExpr(astgen.Ident("body"), astgen.Lit(idKey)))},
+				token.ASSIGN,
+			),
 			astgen.AssignStmt(
 				[]ast.Expr{astgen.IndexExpr(astgen.Ident(stateVar), astgen.Ident("id"))},
 				[]ast.Expr{astgen.Ident("body")},

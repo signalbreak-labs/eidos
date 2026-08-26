@@ -99,6 +99,67 @@ func TestManagedResourceSchema_MyCloudPetsReconciliation(t *testing.T) {
 	}
 }
 
+// TestManagedResourceSchema_SingleArrayResponseUnwraps verifies a "get one"
+// read that returns a single-array response wrapper (e.g. Gigamon
+// {"Policies": [{...}]}) derives the resource schema from the array item's
+// properties, not the collection itself. UnwrapResponseEnvelope flattens the
+// wrapper to an array schema (E1); the resource represents a single instance,
+// so its shape is the item. Unwrapping the array lets the resource wire with
+// the item's fields instead of scaffolding with an empty schema (issue #35).
+func TestManagedResourceSchema_SingleArrayResponseUnwraps(t *testing.T) {
+	policyItem := func() *SchemaSpec {
+		return &SchemaSpec{
+			Type: "object",
+			Properties: map[string]SchemaSpec{
+				"policyId":    {Type: "string"},
+				"policyName":  {Type: "string"},
+				"description": {Type: "string"},
+			},
+		}
+	}
+	c := ResourceCRUD{
+		Name:           "policy",
+		CollectionPath: "/intent/policies",
+		InstancePath:   "/intent/policies/{policyId}",
+		Create: &Operation{
+			Method: MethodPost,
+			Path:   "/intent/policies",
+			RequestSchema: &SchemaSpec{
+				Type:     "object",
+				Required: []string{"policyName"},
+				Properties: map[string]SchemaSpec{
+					"policyName":  {Type: "string"},
+					"description": {Type: "string"},
+				},
+			},
+		},
+		Read: &Operation{
+			Method:         MethodGet,
+			Path:           "/intent/policies/{policyId}",
+			ResponseSchema: &SchemaSpec{Type: "array", Items: policyItem()},
+		},
+		Delete: &Operation{Method: MethodDelete, Path: "/intent/policies/{policyId}"},
+		ID:     IDInfo{Kind: IDSimple, ParameterNames: []string{"policyId"}, AttributeName: "policy_id", ImportFormat: "%s"},
+	}
+
+	schema, _ := ManagedResourceSchema(c)
+
+	// The item's fields must be exposed as attributes, not an empty schema.
+	policyName, ok := findAttr(schema.Attributes, "policy_name")
+	if !ok {
+		t.Fatalf("no policy_name attribute in schema (array item not unwrapped): %+v", schema.Attributes)
+	}
+	if !policyName.Required {
+		t.Errorf("policy_name must be Required (declared in the create request's required list): got Required=%v", policyName.Required)
+	}
+	if _, ok := findAttr(schema.Attributes, "policy_id"); !ok {
+		t.Errorf("no policy_id attribute in schema (should derive from the array item): %+v", schema.Attributes)
+	}
+	if len(schema.Attributes) == 0 {
+		t.Errorf("schema must expose the array item's attributes; got empty schema")
+	}
+}
+
 func TestManagedResourceSchema_SyntheticIDWhenResponseHasNoID(t *testing.T) {
 	// A response with no "id" property but a path param of {id}: a synthetic
 	// Computed string "id" attribute is added so path substitution resolves

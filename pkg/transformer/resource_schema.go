@@ -263,6 +263,18 @@ func applyManagedAttributeFlags(
 func ManagedResourceSchema(c ResourceCRUD) (ir.ObjectSchemaIR, string) {
 	stateSpec := resourceStateSpec(c)
 
+	// A "get one" read that returns a single-array response wrapper (e.g.
+	// {"Policies": [{...}]}) is flattened by UnwrapResponseEnvelope to an array
+	// schema (E1). The resource represents a single instance, so the instance's
+	// shape is the array's items, not the collection itself; unwrap the array
+	// before deriving attributes so the element's fields are exposed (and the
+	// resource wires) instead of the schema staying empty and the resource
+	// scaffolding. A scalar item (a read returning a bare list of values) has no
+	// properties and keeps the resource honestly scaffolded, as before.
+	if stateSpec != nil && strings.EqualFold(stateSpec.Type, "array") && stateSpec.Items != nil {
+		stateSpec = stateSpec.Items
+	}
+
 	// A top-level oneOf/anyOf response (the instance itself is a union, e.g.
 	// Pet = oneOf[Cat, Dog]) cannot flatten into a concrete attribute set.
 	// Surface it as a single Computed wrapper attribute carrying the union (D1)

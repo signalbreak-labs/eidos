@@ -175,6 +175,107 @@ func TestResourceAcceptanceTestFile_WireNameIDLookup(t *testing.T) {
 	}
 }
 
+// TestResourceAcceptanceTestFile_UpdateKeysStateByIdentity verifies the update
+// branch re-derives the state key from the echoed body's identity value
+// (body[idKey]) rather than the URL path tail. The path-derived id is the tail
+// the client substituted for the update request, which can differ from the
+// identity value create stored under (a synthesized placeholder for a Computed
+// identity, or the practitioner-supplied value for a Required one). Storing
+// update under the same slot as create lets the post-update refresh's direct
+// path-tail lookup serve the updated body instead of the stale create body,
+// keeping the refresh plan empty (issue #35).
+func TestResourceAcceptanceTestFile_UpdateKeysStateByIdentity(t *testing.T) {
+	r := sampleResourceIR()
+	pir := sampleProviderWithResourceIR()
+	pir.Resources = []ir.ResourceIR{r}
+	cfg := BuildConfig{ProviderName: pir.Name, Namespace: pir.Name}
+
+	file := ResourceAcceptanceTestFile(pir, r, cfg)
+	var buf bytes.Buffer
+	if err := file.Render(&buf); err != nil {
+		t.Fatalf("Render() error = %v", err)
+	}
+	got := buf.String()
+
+	// sampleResourceIR has a Computed "id" identity, a POST collection create, and
+	// a PUT instance update. Both the create and update branches must re-key
+	// state by the identity value read from the body; before the fix the update
+	// branch keyed state[id] by the path tail only, leaving the stale create body
+	// in the create slot for the post-update refresh to serve.
+	if n := strings.Count(got, `id = fmt.Sprintf("%v", body["id"])`); n != 2 {
+		t.Errorf("expected 2 `id = fmt.Sprintf(\"%%v\", body[\"id\"])` assignments (create + update), got %d\ncontent:\n%s", n, got)
+	}
+}
+
+// TestAcceptanceParamAttribute_RequiredDynamicSkipped verifies a Required
+// Dynamic attribute is never selected as the create/update mutation parameter
+// (issue #35): acceptanceExampleValue/updatedValue emit the null literal for a
+// Dynamic, and Terraform rejects null for a Required attribute at plan time
+// ("Missing Configuration for Required Attribute"). writeHCLAcceptanceAttribute
+// instead hardcodes a scalar "example" for a Required Dynamic so it round-trips
+// without needing a parameter placeholder, so the param selection must skip it
+// and pick a different configurable scalar.
+func TestAcceptanceParamAttribute_RequiredDynamicSkipped(t *testing.T) {
+	reqDynamic := ir.AttributeIR{
+		Name:     "metadata",
+		Required: true,
+		Schema:   ir.SchemaIR{Type: ir.TypeDynamic},
+	}
+	strAttr := func(name string, required bool) ir.AttributeIR {
+		return ir.AttributeIR{Name: name, Required: required, Optional: !required, Schema: ir.SchemaIR{Type: ir.TypeString}}
+	}
+	cases := []struct {
+		name     string
+		attrs    []ir.AttributeIR
+		wantName string
+		wantType ir.PrimitiveType
+		wantOK   bool
+	}{
+		{
+			name: "required dynamic alongside required string",
+			attrs: []ir.AttributeIR{
+				strAttr("id", true),
+				reqDynamic,
+				strAttr("name", true),
+			},
+			wantName: "name",
+			wantType: ir.TypeString,
+			wantOK:   true,
+		},
+		{
+			name: "required dynamic alongside optional string",
+			attrs: []ir.AttributeIR{
+				strAttr("id", true),
+				reqDynamic,
+				strAttr("tag", false),
+			},
+			wantName: "tag",
+			wantType: ir.TypeString,
+			wantOK:   true,
+		},
+		{
+			name: "only required dynamic is not a candidate",
+			attrs: []ir.AttributeIR{
+				strAttr("id", true),
+				reqDynamic,
+			},
+			wantName: "",
+			wantType: "",
+			wantOK:   false,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			r := ir.ResourceIR{Schema: ir.ObjectSchemaIR{Attributes: tc.attrs}}
+			gotName, gotType, gotOK := acceptanceParamAttribute(r)
+			if gotName != tc.wantName || gotType != tc.wantType || gotOK != tc.wantOK {
+				t.Errorf("acceptanceParamAttribute() = (%q, %q, %v), want (%q, %q, %v)",
+					gotName, gotType, gotOK, tc.wantName, tc.wantType, tc.wantOK)
+			}
+		})
+	}
+}
+
 // TestResourceAcceptanceTestFile_CompositeIdentityImport verifies the mock
 // resolves import for a composite-identity resource (e.g. GitLab
 // /groups/{group}/labels/{name}). Such a resource is created on a collection

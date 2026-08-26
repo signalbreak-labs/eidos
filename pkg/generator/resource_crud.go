@@ -1280,11 +1280,18 @@ func decodeAndApplyStmts(summary, modelVar, envelope, innerPath string) []ast.St
 			),
 		},
 	}
-	// A {data: ...} response envelope (E1): the transformer flattened the payload
+	// A {data: ...} response envelope (E1): the backend flattened the payload
 	// out of the response schema, so unwrap the decoded body by the same key
-	// before applying it to the model. The type assertion is fail-safe — a
+	// before applying it to the model. The type assertions are fail-safe — a
 	// response that does not carry the envelope object leaves data untouched and
 	// applyJSONToModel simply finds no matching fields.
+	//
+	// An array-valued envelope is a "get one" list wrapper (e.g. Gigamon
+	// {"Policies": [{...}]}): the payload is the array's first element, so unwrap
+	// that element when it is an object. The transformer unwraps a single-array
+	// response wrapper to the item schema for managed resources
+	// (ManagedResourceSchema), so applying the element's fields keeps the
+	// schema and the response consistent (issue #35).
 	if envelope != "" {
 		stmts = append(stmts, &ast.IfStmt{
 			Init: astgen.Assign(
@@ -1306,6 +1313,33 @@ func decodeAndApplyStmts(summary, modelVar, envelope, innerPath string) []ast.St
 							token.ASSIGN,
 						),
 					),
+					Else: &ast.IfStmt{
+						Init: astgen.Assign(
+							[]ast.Expr{astgen.Ident("arr"), astgen.Ident("ok")},
+							[]ast.Expr{astgen.TypeAssertExpr(astgen.Ident("v"), astgen.ArrayType(nil, astgen.Ident("any")))},
+						),
+						Cond: astgen.Binary(
+							astgen.Ident("ok"),
+							token.LAND,
+							astgen.Binary(astgen.Call(astgen.Ident("len"), astgen.Ident("arr")), token.GTR, astgen.IntLit(0)),
+						),
+						Body: astgen.Block(
+							&ast.IfStmt{
+								Init: astgen.Assign(
+									[]ast.Expr{astgen.Ident("m"), astgen.Ident("ok")},
+									[]ast.Expr{astgen.TypeAssertExpr(astgen.IndexExpr(astgen.Ident("arr"), astgen.IntLit(0)), astgen.MapType(astgen.Ident("string"), astgen.Ident("any")))},
+								),
+								Cond: astgen.Ident("ok"),
+								Body: astgen.Block(
+									astgen.AssignStmt(
+										[]ast.Expr{astgen.Ident("data")},
+										[]ast.Expr{astgen.Ident("m")},
+										token.ASSIGN,
+									),
+								),
+							},
+						),
+					},
 				},
 			),
 		})

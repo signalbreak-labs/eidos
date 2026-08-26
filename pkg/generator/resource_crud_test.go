@@ -526,6 +526,36 @@ func TestWiredCreateBody_NoInnerPathByDefault(t *testing.T) {
 	}
 }
 
+// TestWiredCreateBody_ArrayEnvelopeUnwrap asserts the wired Create body unwraps
+// a "get one" list wrapper — an envelope whose value is a single-element array
+// (e.g. Gigamon {"Policies": [{...}]}) — down to the first element before
+// applying the body to the model. The transformer unwraps a single-array
+// response wrapper to the item schema for managed resources
+// (ManagedResourceSchema), so the decoder must apply the same shape or the
+// model fields resolve against the array instead of the item and the
+// identifier lookup fails (issue #35).
+func TestWiredCreateBody_ArrayEnvelopeUnwrap(t *testing.T) {
+	r := sampleResourceIR()
+	r.CRUDMapping.Create.ResponseEnvelope = "Policies"
+
+	file := ResourceFile(r, testClientImport)
+	var buf bytes.Buffer
+	if err := file.Render(&buf); err != nil {
+		t.Fatalf("Render() error = %v", err)
+	}
+	got := buf.String()
+
+	for _, want := range []string{
+		`if v, ok := data["Policies"]; ok {`,
+		`else if arr, ok := v.([]any); ok && len(arr) > 0 {`,
+		`m, ok := arr[0].(map[string]any)`,
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("generated create body missing %q\n--- body ---\n%s", want, got)
+		}
+	}
+}
+
 // identityResourceIR returns a wired resource paired with a list resource via a
 // shared identity schema, mirroring the SpaceTraders ship resource: the
 // identity attribute "ship_symbol" is sourced from the model's "symbol" field
