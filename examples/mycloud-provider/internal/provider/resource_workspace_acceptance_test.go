@@ -77,6 +77,7 @@ func newWorkspaceResourceMockServer() *httptest.Server {
 			if _, ok := body["name"]; !ok {
 				body["name"] = "example-id"
 			}
+			id = fmt.Sprintf("%v", body["name"])
 			state0[id] = body
 			lastKey0 = id
 			w.Header().Set("Content-Type", "application/json")

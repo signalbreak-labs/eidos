@@ -107,7 +107,7 @@
   {
     "path": "internal/provider/resource_notif_meta_config_acceptance_test.go",
     "reason": "acceptance tests for resource notif_meta_config",
-    "body_hash": "f713bc3841b96aa9"
+    "body_hash": "b083acb018804b72"
   },
   {
     "path": "internal/provider/resource_notif_meta_config_remote_test.go",
