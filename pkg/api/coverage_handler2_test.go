@@ -491,7 +491,7 @@ func TestBuildGroupedResources_RejectedGroup(t *testing.T) {
 		},
 	}
 	var diags diagnostics.Diagnostics
-	resources, _ := buildGroupedResources(&parser.Spec{}, "acme", pathOps, &diags, true)
+	resources, _ := buildGroupedResources(&parser.Spec{}, "acme", pathOps, nil, &diags, true)
 	if len(resources) != 0 {
 		t.Errorf("rejected group must not emit a resource, got %d", len(resources))
 	}
@@ -640,7 +640,7 @@ func TestBuildGroupedResources_PartialUpdate(t *testing.T) {
 		},
 	}
 	var diags diagnostics.Diagnostics
-	resources, consumed := buildGroupedResources(&parser.Spec{}, "acme", pathOps, &diags, true)
+	resources, consumed := buildGroupedResources(&parser.Spec{}, "acme", pathOps, nil, &diags, true)
 	if len(resources) != 1 {
 		t.Fatalf("expected 1 grouped resource, got %d", len(resources))
 	}
@@ -668,7 +668,7 @@ func TestBuildGroupedResources_TwoGroups(t *testing.T) {
 		},
 	}
 	var diags diagnostics.Diagnostics
-	resources, _ := buildGroupedResources(&parser.Spec{}, "acme", pathOps, &diags, true)
+	resources, _ := buildGroupedResources(&parser.Spec{}, "acme", pathOps, nil, &diags, true)
 	if len(resources) != 2 {
 		t.Fatalf("expected 2 grouped resources, got %d", len(resources))
 	}
@@ -764,7 +764,7 @@ func TestResourceFromOverrideCRUD_Update(t *testing.T) {
 		Delete:         &transformer.Operation{Method: transformer.MethodDelete, Path: "/widgets/{id}", OperationID: "deleteWidget"},
 	}
 	var diags diagnostics.Diagnostics
-	res := resourceFromOverrideCRUD(spec, "acme", g, &diags)
+	res := resourceFromOverrideCRUD(spec, "acme", g, &diags, false)
 	if res == nil {
 		t.Fatal("resourceFromOverrideCRUD returned nil")
 	}

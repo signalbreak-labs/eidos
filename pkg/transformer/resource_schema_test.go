@@ -931,7 +931,7 @@ func TestManagedResourceSchemaDedupsSnakeCaseCollisions(t *testing.T) {
 			},
 		},
 		ID: IDInfo{Kind: IDSimple, ParameterNames: []string{"id"}, AttributeName: "id", ImportFormat: "%s"},
-	}, &diags)
+	}, &diags, false)
 
 	// Exactly one foo_bar attribute survives.
 	count := 0
