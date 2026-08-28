@@ -78,16 +78,16 @@ Eidos dry-run summary for provider "mycloud"
 Spec: test/specs/mycloud.yaml (OpenAPI 3.0)
 
 Generated constructs:
-  Resources:            11
+  Resources:            7
   Data sources:         17
-  Actions:              0
+  Actions:              4
   Ephemeral resources:  0
   List resources:       12
   Functions:            0
   Security schemes:     1
   Write-only attributes:0
 
-Files that would be written (180):
+Files that would be written (203):
   .github/workflows/release.yml
   .goreleaser.yml
   GNUmakefile
@@ -127,8 +127,8 @@ eidos generate --spec ./mycloud.yaml --config ./mycloud-generator.yaml --output 
 - **`eidos api`** — an HTTP validation server (`POST /api/v1/validate`) that
   returns diagnostics plus an IR preview for a spec.
 - **`eidos mcp`** — a Model Context Protocol server exposing
-  `generate-config`, `inspect`, `generate`, `validate-schemas`, and
-  `override-preview` tools.
+  `generate-config`, `inspect`, `generate`, `validate-schemas`,
+  `override-preview`, `lookup`, and `suggest-resources` tools.
 - **Shell completion** — `eidos completion bash|zsh|fish|powershell` (Cobra).
 - **Remote specs** — `--spec` accepts an `https://` URL with an SSRF guard,
   size/timeout caps, and optional env-var auth.
@@ -147,7 +147,7 @@ eidos generate --spec ./mycloud.yaml --config ./mycloud-generator.yaml --output 
 
 Toolchain, lint, formatting, and testing conventions live in
 [`docs/standards.md`](docs/standards.md). The project uses Go 1.26.0 with
-`toolchain go1.26.5` (CI reads the version from `go.mod`), golangci-lint v2
+`toolchain go1.26.6` (CI reads the version from `go.mod`), golangci-lint v2
 pinned to Go 1.26, and `goimports` with local prefix
 `github.com/signalbreak-labs/eidos`. Releases are versioned with release-please and
 shipped as cross-compiled GitHub Release binaries by GoReleaser, which also

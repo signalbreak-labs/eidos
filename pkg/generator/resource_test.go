@@ -668,6 +668,18 @@ func TestResourceFile_Deprecated(t *testing.T) {
 	}
 }
 
+// TestResourceFile_ResourceLevelDeprecation verifies M-10: a resource whose
+// source operation is deprecated carries a DeprecationMessage on the resource
+// schema itself, so practitioners see it in plan output.
+func TestResourceFile_ResourceLevelDeprecation(t *testing.T) {
+	r := sampleResourceIR()
+	r.DeprecationMessage = "This resource is deprecated."
+	got := renderResourceString(t, r)
+	if !strings.Contains(got, `DeprecationMessage: "This resource is deprecated."`) {
+		t.Errorf("generated resource file missing resource-level DeprecationMessage\n%s", got)
+	}
+}
+
 // TestResourceFile_DynamicAttribute verifies DynamicAttribute generation.
 func TestResourceFile_DynamicAttribute(t *testing.T) {
 	r := sampleResourceIR()

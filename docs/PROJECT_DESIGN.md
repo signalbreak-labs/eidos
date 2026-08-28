@@ -806,7 +806,6 @@ type ClientIR struct {
     RetryWaitMin    time.Duration
     RetryWaitMax    time.Duration
     Timeout         time.Duration
-    AuthMiddleware  []string  // ordered list of auth handler names
     Pagination      *PaginationIR
     Logging         *LoggingIR
 }
@@ -858,7 +857,7 @@ eidos generate \
 
 | Flag | Description | Default |
 |------|-------------|---------|
-| `--spec` | Path to OpenAPI spec file (JSON or YAML), or an http(s) URL to fetch | Required |
+| `--spec` | Path to OpenAPI spec file (JSON or YAML), or an http(s) URL to fetch | Optional when `--config` supplies `spec.path` |
 | `--output` | Output directory for generated provider | Required for full generation |
 | `--config` | Path to `generator.yaml` overrides file | None |
 | `--dry-run` | Run the full pipeline without writing files; print a summary | `false` |
@@ -867,6 +866,10 @@ eidos generate \
 | `--force` | Overwrite an existing `generator.yaml` (with `--generate-config`) or existing generated provider files (write mode) | `false` |
 | `--provider-name` | Provider name for the starter config when used with `--generate-config` | Spec title |
 | `--generate-terraform-tests` | Generate native Terraform `.tftest.hcl` files | `false` |
+| `--no-use-put-as-create` | With `--generate-config`, record `use_put_as_create: false` (the kill-switch) in the starter config | `false` |
+| `--skip-build` | Omit the build/CI/release files (`GNUmakefile`, `.goreleaser.yml`, `.github/workflows/release.yml`, `terraform-registry-manifest.json`) from the output. Mirrors `generation.skip_build`; the flag wins when both are set | `false` |
+| `--only-build` | Emit only the build/CI/release files and nothing else. Mutually exclusive with `--skip-build`; requires `--output` unless `--dry-run` | `false` |
+| `--dynamic-release` | Also generate `.github/workflows/regenerate-and-release.yml`, a manually-dispatched workflow that regenerates the provider from its spec and publishes a release using the eidos CI image. Mirrors `generation.dynamic_release.enabled`; the flag wins when both are set | `false` |
 | `--spec-allow-http` | Permit `http://` spec URLs (https is the default for remote specs) | `false` |
 | `--spec-auth-scheme` | Authenticate a remote spec fetch: `bearer`, `basic`, `apiKey`, or `oauth2-client-credentials` | None |
 | `--spec-token-env` | Env var holding the bearer token for `--spec-auth-scheme bearer` | None |
@@ -3062,13 +3065,11 @@ Eidos generates all artifacts required for Terraform Registry publishing:
 
 **Registry naming requirement**: The GitHub repository must be named `terraform-provider-<NAME>`, where `<NAME>` matches the provider type name.
 
-**Signing**: GPG signing is not automatic. The generator's `.goreleaser.yml` and
-release-workflow templates include a `signs:` block and GPG key-import step only
-when the `SignRelease` build option is enabled (which requires configuring
-`GPG_PRIVATE_KEY` and `GPG_PASSPHRASE` repository secrets and uploading the
-public key to the Registry). `SignRelease` is currently a `BuildConfig` field
-that is not wired to any `generator.yaml` key or CLI flag, so generated releases
-are unsigned by default.
+**Signing**: GPG signing is default-on. The generator's `.goreleaser.yml` and
+release-workflow templates include a `signs:` block and GPG key-import step
+(which requires configuring `GPG_PRIVATE_KEY` and `GPG_PASSPHRASE` repository
+secrets and uploading the public key to the Registry). Set `sign_release: false`
+in `generator.yaml` to opt out and produce unsigned releases without GPG secrets.
 
 ---
 
@@ -3268,8 +3269,8 @@ for verification that have not yet been broadly exercised against real specs.
   has not been broadly verified. (`generator.yaml` overrides can always pin a
   name via the `METHOD /path` form.)
 - **Golden snapshot coverage is structural, not content.** The golden test
-  corpus records only `{Path, Reason}` per generated file (a structural
-  fingerprint), so the full generated output is only visible by regenerating
-  with `EIDOS_UPDATE_GOLDEN=1`. A change that preserves the file list and
-  reason strings but alters body content would pass the golden test silently;
-  richer snapshot content is a future hardening consideration.
+  corpus records `{Path, Reason, BodyHash}` per generated file — the FNV-1a body
+  hash catches content-only regressions, while the full generated output is only
+  visible by regenerating with `EIDOS_UPDATE_GOLDEN=1`. A change that preserves
+  the file list and reason strings but alters body content fails the golden test
+  on the body-hash mismatch.

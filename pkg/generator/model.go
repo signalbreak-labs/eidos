@@ -2,7 +2,7 @@ package generator
 
 import (
 	"fmt"
-	"path/filepath"
+	"path"
 
 	"github.com/signalbreak-labs/eidos/pkg/generator/internal/naming"
 	"github.com/signalbreak-labs/eidos/pkg/generator/internal/schema"
@@ -14,8 +14,8 @@ import (
 // struct types matching the resource schema, suitable for JSON marshaling when
 // calling the remote API.
 func ModelFile(r ir.ResourceIR) File {
-	path := filepath.Join("internal", "provider", fmt.Sprintf("model_%s.go", naming.SnakeCase(r.Name)))
-	return GoCodeAST(path, schema.GenerateModelFile(r))
+	relPath := path.Join("internal", "provider", fmt.Sprintf("model_%s.go", naming.SnakeCase(r.Name)))
+	return GoCodeAST(relPath, schema.GenerateModelFile(r))
 }
 
 // ModelFiles returns the generated model files for every ResourceIR in the

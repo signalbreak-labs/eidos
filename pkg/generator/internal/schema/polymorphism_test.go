@@ -304,3 +304,36 @@ func TestIsDynamicAttribute(t *testing.T) {
 		})
 	}
 }
+
+// TestObjectSchemaContainsDynamic covers the attribute and nested-block
+// recursion branches of objectSchemaContainsDynamic plus the clean case.
+func TestObjectSchemaContainsDynamic(t *testing.T) {
+	// A nested attribute carrying a dynamic type is detected.
+	if !objectSchemaContainsDynamic(ir.ObjectSchemaIR{Attributes: []ir.AttributeIR{
+		{Name: "blob", Schema: ir.SchemaIR{Type: ir.TypeDynamic}},
+	}}) {
+		t.Error("attribute with dynamic type must be detected")
+	}
+	// A nested block whose schema contains a dynamic attribute is detected.
+	if !objectSchemaContainsDynamic(ir.ObjectSchemaIR{Blocks: []ir.BlockIR{
+		{Name: "nested", Schema: ir.ObjectSchemaIR{Attributes: []ir.AttributeIR{
+			{Name: "blob", Schema: ir.SchemaIR{Type: ir.TypeDynamic}},
+		}}},
+	}}) {
+		t.Error("nested block with dynamic attribute must be detected")
+	}
+	// A schema of plain primitives and blocks is clean.
+	if objectSchemaContainsDynamic(ir.ObjectSchemaIR{Attributes: []ir.AttributeIR{
+		{Name: "id", Schema: ir.SchemaIR{Type: ir.TypeString}},
+	}, Blocks: []ir.BlockIR{
+		{Name: "nested", Schema: ir.ObjectSchemaIR{Attributes: []ir.AttributeIR{
+			{Name: "count", Schema: ir.SchemaIR{Type: ir.TypeInt}},
+		}}},
+	}}) {
+		t.Error("plain schema must not be detected as containing dynamic")
+	}
+	// An empty schema is clean.
+	if objectSchemaContainsDynamic(ir.ObjectSchemaIR{}) {
+		t.Error("empty schema must not be detected as containing dynamic")
+	}
+}

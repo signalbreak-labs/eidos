@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"go/ast"
 	"go/token"
-	"path/filepath"
+	"path"
 	"sort"
 	"strings"
 
@@ -28,14 +28,14 @@ var ErrUnknownEphemeralBlockNesting = errors.New("unknown ephemeral block nestin
 // EphemeralResourceIR. clientImport is the import path of the generated
 // internal/client package, used when the Open body is wired to the API client.
 func EphemeralFile(er ir.EphemeralResourceIR, clientImport string) File {
-	path := filepath.Join("internal", "provider", fmt.Sprintf("ephemeral_%s.go", naming.SnakeCase(er.Name)))
+	relPath := path.Join("internal", "provider", fmt.Sprintf("ephemeral_%s.go", naming.SnakeCase(er.Name)))
 	file, err := renderEntitySafely(func() (*ast.File, error) {
 		return generateEphemeralFile(er, clientImport), nil
 	})
 	if err != nil {
-		return ErrorFile(path, err)
+		return ErrorFile(relPath, err)
 	}
-	return GoCodeAST(path, file)
+	return GoCodeAST(relPath, file)
 }
 
 // EphemeralFiles returns the generated ephemeral resource files for every
@@ -564,15 +564,15 @@ func ephemeralAttributeExpr(attr ir.AttributeIR, resourceName string) ast.Expr {
 // can be reported with their full location. resourceName is included in the panic
 // message alongside the path.
 func ephemeralAttributeExprWithPath(attr ir.AttributeIR, parentPath, resourceName string) ast.Expr {
-	path := fullAttrPath(parentPath, attr.Name)
-	expr := ephemeralFrameworkAttributeExpr(attr, path, resourceName)
+	attrPath := fullAttrPath(parentPath, attr.Name)
+	expr := ephemeralFrameworkAttributeExpr(attr, attrPath, resourceName)
 	if expr == nil {
 		// A nested attribute that cannot be represented (e.g. a nested
 		// collection) is dropped by the nested map builder; a top-level
 		// attribute should never be nil because the framework expr falls back
 		// to DynamicAttribute (G2).
 		if parentPath == "" {
-			panic(fmt.Sprintf("ephemeral resource %q attribute %q: schema has no recognizable type or nested shape", resourceName, path))
+			panic(fmt.Sprintf("ephemeral resource %q attribute %q: schema has no recognizable type or nested shape", resourceName, attrPath))
 		}
 		return nil
 	}

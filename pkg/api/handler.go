@@ -717,6 +717,12 @@ func buildIRPreview(spec *parser.Spec, version parser.Version, cfg *config.Confi
 	}
 	preview.Servers = providerServersIR(spec)
 
+	// Thread the generator.yaml client config onto the provider client IR so the
+	// generator can bake the base URL template, user agent, timeout, and retry
+	// settings into the generated client (L-5). clientConfigFromIR guards each
+	// field, so a partial ClientIR leaves the other client defaults intact.
+	preview.ClientIR = clientIRFromConfig(cfg)
+
 	// Thread the generator.yaml pagination config onto the provider client IR
 	// before data sources are built so list data sources can carry it into their
 	// wired Read body (REMAINING_GAPS §2). clientConfigFromIR guards each field,
@@ -783,7 +789,7 @@ func buildIRPreview(spec *parser.Spec, version parser.Version, cfg *config.Confi
 	// promote an action to a managed resource (G8). Run before the per-operation
 	// pass so the consumed operations are not double-emitted as actions.
 	if cfg != nil {
-		applyResourceCreationOverrides(preview, spec, name, pathOps, cfg.ResourceOverrides, consumed)
+		applyResourceCreationOverrides(preview, spec, name, pathOps, cfg.ResourceOverrides, consumed, &previewDiags)
 	}
 
 	// Collection GETs paired with an instance Read are promoted to list
@@ -909,7 +915,12 @@ func applyOperationFilters(spec *parser.Spec, cfg *config.Config) diagnostics.Di
 }
 
 // addSpecPathOperations runs the per-operation classification over the spec's
-// paths and webhooks maps.
+// paths map. OpenAPI 3.1 webhooks are deliberately excluded: a webhook
+// describes a callback the API provider makes to the client, not an endpoint
+// the server exposes, so classifying it as a provider-side operation would
+// generate a wired action that POSTs to a path the server does not host (M-11).
+// Webhooks are parsed but not mapped to a Terraform construct, and each is
+// surfaced with a fail-loud warning so the omission is never silent.
 func addSpecPathOperations(preview *ir.ProviderIR, spec *parser.Spec, providerName string, consumed map[string]map[string]bool, pathOps map[string]map[transformer.HTTPMethod]transformer.Operation, listPaths map[string][]string, diags *diagnostics.Diagnostics) {
 	if spec.Paths != nil {
 		for _, path := range sortedKeys(spec.Paths) {
@@ -917,8 +928,13 @@ func addSpecPathOperations(preview *ir.ProviderIR, spec *parser.Spec, providerNa
 		}
 	}
 	if spec.Webhooks != nil {
-		for _, path := range sortedKeys(spec.Webhooks) {
-			addPathOperations(preview, spec, path, spec.Webhooks[path], providerName, consumed, pathOps, listPaths, diags)
+		for _, name := range sortedKeys(spec.Webhooks) {
+			*diags = append(*diags, diagnostics.Diagnostic{
+				Severity: diagnostics.Warning,
+				Summary:  fmt.Sprintf("OpenAPI webhook %q is parsed but not mapped to a Terraform construct", name),
+				Detail: "Webhook operations describe callbacks the API provider makes to the client, " +
+					"not endpoints the server exposes, so no action, resource, or data source is generated for them.",
+			})
 		}
 	}
 }
@@ -1131,6 +1147,9 @@ func datasourceFromResource(providerName string, r ir.ResourceIR, override confi
 		Schema:          transformer.DataSourceSchema(*top, diags),
 		ReadMapping:     read,
 		SourceOperation: r.SourceOperation,
+		// A data source derived from a deprecated resource inherits the
+		// deprecation so the flag reaches the generated schema (M-10).
+		DeprecationMessage: r.DeprecationMessage,
 	}
 	return &ds
 }
@@ -1422,6 +1441,32 @@ func inferSensitiveAttributesToProvider(provider *ir.ProviderIR, diags *diagnost
 	}
 }
 
+// clientIRFromConfig translates the generator.yaml client config onto the
+// provider client IR. config.ClientConfig is the user-facing generator.yaml
+// shape; ClientIR uses the generated client's field names. Duration fields are
+// converted from the config Duration wrapper to time.Duration. Returns a
+// zero-value ClientIR when no client config is set, so the generator's
+// clientConfigFromIR guards fall back to the defaults (L-5).
+func clientIRFromConfig(cfg *config.Config) ir.ClientIR {
+	var out ir.ClientIR
+	if cfg == nil || cfg.Client == nil {
+		return out
+	}
+	out.BaseURLTemplate = cfg.Client.BaseURLTemplate
+	out.UserAgent = cfg.Client.UserAgent
+	out.RetryMax = cfg.Client.RetryMax
+	if cfg.Client.Timeout != nil {
+		out.Timeout = cfg.Client.Timeout.Duration()
+	}
+	if cfg.Client.RetryWaitMin != nil {
+		out.RetryWaitMin = cfg.Client.RetryWaitMin.Duration()
+	}
+	if cfg.Client.RetryWaitMax != nil {
+		out.RetryWaitMax = cfg.Client.RetryWaitMax.Duration()
+	}
+	return out
+}
+
 // loggingIRFromConfig translates the generator.yaml logging config onto the
 // provider client IR. config.LoggingConfig is the user-facing generator.yaml
 // shape; LoggingIR uses the generated client's field names (FilePath→LogFile).
@@ -1448,8 +1493,9 @@ func loggingIRFromConfig(cfg *config.Config) *ir.LoggingIR {
 // buildSecurityIR assembles the security IR from the spec's declared schemes
 // and global security requirements. The schemes populate SecurityIR.Schemes
 // (each becomes a provider-config attribute + generated client interceptor); the
-// global security requirements populate SecurityIR.DefaultRequirements so they
-// are no longer silently dropped.
+// global security requirements populate SecurityIR.DefaultRequirements and are
+// validated so a requirement naming an undeclared scheme is surfaced as a
+// Warning instead of being silently dropped.
 //
 // OpenAPI security semantics: the `security` field is a list of requirement
 // objects; multiple objects in the list mean OR (any one suffices), while
@@ -1468,23 +1514,7 @@ func buildSecurityIR(spec *parser.Spec, cfg *config.Config, diags *diagnostics.D
 		selectedScheme = strings.TrimSpace(cfg.Security.Scheme)
 	}
 
-	// Carry the global security requirements into the IR so they are not
-	// silently dropped. Each parser.SecurityRequirement wraps a
-	// map[schemeName][]scopes; copy it into a fresh map to avoid aliasing the
-	// parser's storage.
-	for _, req := range spec.Security {
-		if req.Requirements == nil {
-			// An empty requirement object {} marks the API as allowing
-			// unauthenticated access; preserve it as an empty map.
-			security.DefaultRequirements = append(security.DefaultRequirements, map[string][]string{})
-			continue
-		}
-		reqCopy := make(map[string][]string, len(req.Requirements))
-		for schemeName, scopes := range req.Requirements {
-			reqCopy[schemeName] = scopes
-		}
-		security.DefaultRequirements = append(security.DefaultRequirements, reqCopy)
-	}
+	security.DefaultRequirements = copySecurityRequirements(spec.Security)
 
 	if len(spec.Security) > 1 && selectedScheme == "" {
 		// OR semantics: more than one global security requirement means any one
@@ -1509,9 +1539,84 @@ func buildSecurityIR(spec *parser.Spec, cfg *config.Config, diags *diagnostics.D
 		})
 	}
 
+	warnUndeclaredSecuritySchemes(spec, selectedScheme, diags)
+
 	if spec.Components == nil {
 		return security
 	}
+	security.Schemes = buildSecuritySchemes(spec, selectedScheme)
+	// Apply generator.yaml `auth:` overrides so the documented auth section is
+	// actually consumed: header_name, token_url, discovery_url, flow, and the
+	// env-var hints override the auto-derived scheme configuration (M-5).
+	if cfg != nil && len(cfg.Auth) > 0 {
+		security.Schemes = transformer.ApplyAuthOverrides(security.Schemes, cfg.Auth, diags)
+	}
+	return security
+}
+
+// copySecurityRequirements carries the global security requirements into the IR
+// so they are not silently dropped. Each parser.SecurityRequirement wraps a
+// map[schemeName][]scopes; it is copied into a fresh map to avoid aliasing the
+// parser's storage. An empty requirement object {} marks the API as allowing
+// unauthenticated access; the copy preserves it as an empty map.
+func copySecurityRequirements(requirements []parser.SecurityRequirement) []map[string][]string {
+	out := make([]map[string][]string, 0, len(requirements))
+	for _, req := range requirements {
+		reqCopy := make(map[string][]string, len(req.Requirements))
+		for schemeName, scopes := range req.Requirements {
+			reqCopy[schemeName] = scopes
+		}
+		out = append(out, reqCopy)
+	}
+	return out
+}
+
+// warnUndeclaredSecuritySchemes validates that every scheme referenced by the
+// global security requirements is actually declared in
+// components.securitySchemes. A requirement naming an undeclared scheme would
+// otherwise be silently dropped — the generated client can only apply schemes
+// it knows about — so it is surfaced as a Warning (fail-loud). When
+// generator.yaml selects a single scheme, requirements naming other schemes are
+// intentionally not applied and are not validated.
+func warnUndeclaredSecuritySchemes(spec *parser.Spec, selectedScheme string, diags *diagnostics.Diagnostics) {
+	declaredSchemes := make(map[string]struct{})
+	if spec.Components != nil {
+		for name := range spec.Components.SecuritySchemes {
+			declaredSchemes[name] = struct{}{}
+		}
+	}
+	for _, req := range spec.Security {
+		for schemeName := range req.Requirements {
+			if _, ok := declaredSchemes[schemeName]; ok {
+				continue
+			}
+			if selectedScheme != "" && schemeName != selectedScheme {
+				// The user selected one scheme; other requirements are
+				// intentionally ignored, so an undeclared name there is not a
+				// silent drop.
+				continue
+			}
+			*diags = append(*diags, diagnostics.Diagnostic{
+				Severity: diagnostics.Warning,
+				Summary:  "Security requirement references undeclared scheme",
+				Detail: fmt.Sprintf(
+					"The global security requirement references scheme %q, which is "+
+						"not declared in components.securitySchemes. The generated "+
+						"provider cannot apply it, so this requirement is dropped. "+
+						"Declare the scheme in components.securitySchemes or remove "+
+						"the requirement from the spec.",
+					schemeName,
+				),
+			})
+		}
+	}
+}
+
+// buildSecuritySchemes converts every declared security scheme (optionally
+// filtered to the generator.yaml-selected scheme) into its IR form, sorted by
+// name for deterministic output.
+func buildSecuritySchemes(spec *parser.Spec, selectedScheme string) []ir.SecuritySchemeIR {
+	var schemes []ir.SecuritySchemeIR
 	for _, name := range sortedKeys(spec.Components.SecuritySchemes) {
 		if selectedScheme != "" && name != selectedScheme {
 			continue
@@ -1542,12 +1647,12 @@ func buildSecurityIR(spec *parser.Spec, cfg *config.Config, diags *diagnostics.D
 				irScheme.Flows.AuthorizationCode = oauthFlowToIR(scheme.Flows.AuthorizationCode)
 			}
 		}
-		security.Schemes = append(security.Schemes, irScheme)
+		schemes = append(schemes, irScheme)
 	}
-	sort.Slice(security.Schemes, func(i, j int) bool {
-		return security.Schemes[i].Name < security.Schemes[j].Name
+	sort.Slice(schemes, func(i, j int) bool {
+		return schemes[i].Name < schemes[j].Name
 	})
-	return security
+	return schemes
 }
 
 // warnPerOpORSecurity emits a Warning for each operation that declares more than
@@ -1973,6 +2078,9 @@ func buildGroupedResources(spec *parser.Spec, providerName string, pathOps map[s
 			TypeName:        providerName + "_" + name,
 			Description:     operationDescription(crudGroupDescriptionOp(spec, g), fmt.Sprintf("Manages the %s resource.", humanizeConstructName(name))),
 			SourceOperation: groupSourceOperation(g),
+			// A CRUD group whose source operation is deprecated surfaces as a
+			// deprecated resource so the flag reaches the generated schema (M-10).
+			DeprecationMessage: groupDeprecationMessage(spec, g),
 		}
 		// The Create mapping is built from the resolved Create op's method and
 		// path so it is honest for both POST-create (method POST, collection path)
@@ -1999,7 +2107,7 @@ func buildGroupedResources(spec *parser.Spec, providerName string, pathOps map[s
 		res.CRUDMapping.Delete = resourceOperationMapping(spec, "DELETE", g.InstancePath, parserOp(spec, g.InstancePath, "DELETE"), envelopeOf(g.Delete))
 		res.CRUDMapping.Delete.MediaType = mediaTypeOf(g.Delete)
 
-		schema, idAttr := transformer.ManagedResourceSchema(g)
+		schema, idAttr := transformer.ManagedResourceSchemaWithDiagnostics(g, diags)
 		res.Schema = schema
 		res.IDAttribute = idAttr
 		// Fail loud when a managed resource ends up with no practitioner-writable
@@ -2106,7 +2214,7 @@ func resolveOperationByID(pathOps map[string]map[transformer.HTTPMethod]transfor
 // reconciled from the create request body and the read response. Operations the
 // override consumes are marked so the per-operation pass does not double-emit
 // them as actions.
-func applyResourceCreationOverrides(preview *ir.ProviderIR, spec *parser.Spec, providerName string, pathOps map[string]map[transformer.HTTPMethod]transformer.Operation, overrides []config.ResourceOverride, consumed map[string]map[string]bool) {
+func applyResourceCreationOverrides(preview *ir.ProviderIR, spec *parser.Spec, providerName string, pathOps map[string]map[transformer.HTTPMethod]transformer.Operation, overrides []config.ResourceOverride, consumed map[string]map[string]bool, diags *diagnostics.Diagnostics) {
 	for _, ro := range overrides {
 		gen := ro.GenerateResource != nil && *ro.GenerateResource
 		explicit := ro.CreateOperation != "" || ro.ReadOperation != "" || ro.UpdateOperation != "" || ro.DeleteOperation != ""
@@ -2142,7 +2250,7 @@ func applyResourceCreationOverrides(preview *ir.ProviderIR, spec *parser.Spec, p
 			Update:         updateOp,
 			Delete:         deleteOp,
 		}
-		res := resourceFromOverrideCRUD(spec, providerName, g)
+		res := resourceFromOverrideCRUD(spec, providerName, g, diags)
 		if res == nil {
 			continue
 		}
@@ -2186,7 +2294,7 @@ func resourceNameFromOverride(ro config.ResourceOverride, createPath string) str
 // resourceFromOverrideCRUD builds a managed ResourceIR from a CRUD group whose
 // operations were resolved from an override (G8). Unlike inferred groups, the
 // create/read/update/delete paths may differ (e.g. dashboards).
-func resourceFromOverrideCRUD(spec *parser.Spec, providerName string, g transformer.ResourceCRUD) *ir.ResourceIR {
+func resourceFromOverrideCRUD(spec *parser.Spec, providerName string, g transformer.ResourceCRUD, diags *diagnostics.Diagnostics) *ir.ResourceIR {
 	// Normalize the CRUD group name to snake_case for the Terraform type name
 	// (camelCase is a convention violation; hyphens make the resource handle
 	// unreferenceable in HCL expressions). See the inferred-group counterpart
@@ -2199,6 +2307,9 @@ func resourceFromOverrideCRUD(spec *parser.Spec, providerName string, g transfor
 		TypeName:        providerName + "_" + name,
 		Description:     operationDescription(crudGroupDescriptionOp(spec, g), fmt.Sprintf("Manages the %s resource.", humanizeConstructName(name))),
 		SourceOperation: groupSourceOperation(g),
+		// A CRUD group whose source operation is deprecated surfaces as a
+		// deprecated resource so the flag reaches the generated schema (M-10).
+		DeprecationMessage: groupDeprecationMessage(spec, g),
 	}
 	if g.Create != nil {
 		res.CRUDMapping.Create = resourceOperationMapping(spec, string(g.Create.Method), g.Create.Path, parserOp(spec, g.Create.Path, string(g.Create.Method)), envelopeOf(g.Create))
@@ -2223,7 +2334,7 @@ func resourceFromOverrideCRUD(spec *parser.Spec, providerName string, g transfor
 		res.CRUDMapping.Delete = resourceOperationMapping(spec, string(g.Delete.Method), g.Delete.Path, parserOp(spec, g.Delete.Path, string(g.Delete.Method)), envelopeOf(g.Delete))
 		res.CRUDMapping.Delete.MediaType = mediaTypeOf(g.Delete)
 	}
-	schema, idAttr := transformer.ManagedResourceSchema(g)
+	schema, idAttr := transformer.ManagedResourceSchemaWithDiagnostics(g, diags)
 	res.Schema = schema
 	res.IDAttribute = idAttr
 	res.OverrideCreated = true
@@ -2486,6 +2597,29 @@ func groupSourceOperation(g transformer.ResourceCRUD) string {
 	return ""
 }
 
+// groupDeprecationMessage returns the deprecation message for a CRUD group whose
+// source operation declares deprecated: true, mirroring groupSourceOperation's
+// priority (create, then read, then delete) so the message tracks the same
+// operation the resource is sourced from (M-10).
+func groupDeprecationMessage(spec *parser.Spec, g transformer.ResourceCRUD) string {
+	if g.Create != nil {
+		if op := parserOp(spec, g.Create.Path, string(g.Create.Method)); op != nil && op.Deprecated {
+			return deprecationMessage("resource", true)
+		}
+	}
+	if g.Read != nil {
+		if op := parserOp(spec, g.Read.Path, string(g.Read.Method)); op != nil && op.Deprecated {
+			return deprecationMessage("resource", true)
+		}
+	}
+	if g.Delete != nil {
+		if op := parserOp(spec, g.Delete.Path, string(g.Delete.Method)); op != nil && op.Deprecated {
+			return deprecationMessage("resource", true)
+		}
+	}
+	return ""
+}
+
 // parserOp returns the parser operation for a (path, method) pair, or nil when
 // the path or method is absent. method is matched case-insensitively.
 func parserOp(spec *parser.Spec, path, method string) *parser.Operation {
@@ -2568,6 +2702,9 @@ func resourceFromOperation(op *parser.Operation, providerName, path, method stri
 		TypeName:        providerName + "_" + name,
 		Description:     operationDescription(op, fmt.Sprintf("Manages the %s resource.", humanizeConstructName(name))),
 		SourceOperation: op.OperationID,
+		// An operation marked deprecated: true surfaces as a deprecated resource
+		// so the flag reaches the generated schema (M-10).
+		DeprecationMessage: deprecationMessage("resource", op.Deprecated),
 	}
 	mapping := operationMapping(method, path, op, envelopeOfTransformerOp(pathOps, path, method))
 	switch method {
@@ -2592,6 +2729,9 @@ func dataSourceFromOperation(op *parser.Operation, providerName, path, method st
 		Description:     operationDescription(op, fmt.Sprintf("Reads the %s data source.", humanizeConstructName(name))),
 		SourceOperation: op.OperationID,
 		ReadMapping:     operationMapping(method, path, op, envelopeOfTransformerOp(pathOps, path, method)),
+		// An operation marked deprecated: true surfaces as a deprecated data
+		// source so the flag reaches the generated schema (M-10).
+		DeprecationMessage: deprecationMessage("data source", op.Deprecated),
 	}
 	// Build the data source schema from the resolved read operation so the
 	// generator can wire Read against real filter/output attributes instead of
@@ -3315,6 +3455,17 @@ func operationDescription(op *parser.Operation, fallback string) string {
 	return fallback
 }
 
+// deprecationMessage returns the standard deprecation message for a construct
+// whose source OpenAPI operation declares deprecated: true. OpenAPI carries no
+// message with the boolean flag, so a fixed honest message naming the construct
+// kind is used (M-10). An empty kind yields the empty message (not deprecated).
+func deprecationMessage(kind string, deprecated bool) string {
+	if !deprecated {
+		return ""
+	}
+	return fmt.Sprintf("This %s is deprecated.", kind)
+}
+
 // humanizeConstructName turns a snake_case construct name into a space-separated
 // phrase for use in a generated description fallback (e.g. "alert_policy" ->
 // "alert policy").
@@ -3358,21 +3509,23 @@ func actionConfigAttributes(op *parser.Operation) []ir.AttributeIR {
 		switch strings.ToLower(p.In) {
 		case "path":
 			attrs = append(attrs, ir.AttributeIR{
-				Name:        transformer.SanitizeAttributeName(p.Name),
-				WireName:    p.Name,
-				Description: p.Description,
-				Required:    true,
-				Schema:      ir.SchemaIR{Type: paramPrimitiveType(p.Schema)},
-				Deprecated:  p.Deprecated,
+				Name:               transformer.SanitizeAttributeName(p.Name),
+				WireName:           p.Name,
+				Description:        p.Description,
+				Required:           true,
+				Schema:             ir.SchemaIR{Type: paramPrimitiveType(p.Schema)},
+				Deprecated:         p.Deprecated,
+				DeprecationMessage: deprecationMessage("parameter", p.Deprecated),
 			})
 		case "query", "header", "cookie":
 			attrs = append(attrs, ir.AttributeIR{
-				Name:        transformer.SanitizeAttributeName(p.Name),
-				WireName:    p.Name,
-				Description: p.Description,
-				Required:    p.Required,
-				Schema:      ir.SchemaIR{Type: paramPrimitiveType(p.Schema)},
-				Deprecated:  p.Deprecated,
+				Name:               transformer.SanitizeAttributeName(p.Name),
+				WireName:           p.Name,
+				Description:        p.Description,
+				Required:           p.Required,
+				Schema:             ir.SchemaIR{Type: paramPrimitiveType(p.Schema)},
+				Deprecated:         p.Deprecated,
+				DeprecationMessage: deprecationMessage("parameter", p.Deprecated),
 			})
 		}
 	}
@@ -3396,7 +3549,7 @@ func ephemeralFromOperation(spec *parser.Spec, op *parser.Operation, providerNam
 	// the same builders its own inferEphemeralResource uses.
 	if top := lookupTransformerOp(pathOps, path, method); top != nil {
 		er.ConfigSchema = transformer.ObjectSchemaFromOperationWithDiagnostics(*top, diags)
-		er.ResultSchema = transformer.ResultSchemaFromResponse(top.ResponseSchema)
+		er.ResultSchema = transformer.ResultSchemaFromResponseWithDiagnostics(top.ResponseSchema, diags)
 	}
 	// Renew/Close are wired to the sibling lifecycle operations when the spec
 	// declares them (POST <path>/renew, DELETE <path>/close, with DELETE
@@ -3461,7 +3614,7 @@ func listResourceFromOperation(op *parser.Operation, providerName, path, method 
 	if item == nil || len(item.Properties) == 0 {
 		return lr
 	}
-	rs := transformer.ObjectSchemaFromSpec(item)
+	rs := transformer.ObjectSchemaFromSpecWithDiagnostics(item, diags)
 	lr.ResourceSchema = &rs
 
 	// Identity: the paired instance path's parameters when known, else the

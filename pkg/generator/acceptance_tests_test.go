@@ -1260,3 +1260,65 @@ func TestResourceAcceptanceTestFile_PutAsCreateDispatch(t *testing.T) {
 		t.Errorf("update step must not mutate the identifier attribute alarm_id\ncontent:\n%s", got)
 	}
 }
+
+// TestResourceAcceptanceTestFile_DiscriminatedUnion verifies that a
+// discriminated-union attribute renders as an HCL object literal in the
+// acceptance test config (the writeHCLDiscriminatedUnion path), not a scalar
+// placeholder — a union attribute with empty Attributes would otherwise fall
+// through to primitiveExampleValue and emit a string for an object attribute,
+// failing schema validation at plan time.
+func TestResourceAcceptanceTestFile_DiscriminatedUnion(t *testing.T) {
+	r := sampleResourceIR()
+	r.Schema.Attributes = append(r.Schema.Attributes, ir.AttributeIR{
+		Name:     "animal",
+		Required: true,
+		Schema: ir.SchemaIR{
+			Union: &ir.UnionType{
+				Kind: ir.OneOf,
+				Variants: []ir.SchemaIR{
+					{
+						Name: "cat",
+						Attributes: []ir.AttributeIR{
+							{Name: "animal_type", Required: true, Schema: ir.SchemaIR{Type: ir.TypeString}},
+							{Name: "lives", Optional: true, Schema: ir.SchemaIR{Type: ir.TypeInt}},
+						},
+					},
+					{
+						Name: "dog",
+						Attributes: []ir.AttributeIR{
+							{Name: "animal_type", Required: true, Schema: ir.SchemaIR{Type: ir.TypeString}},
+							{Name: "bark_volume", Optional: true, Schema: ir.SchemaIR{Type: ir.TypeInt}},
+						},
+					},
+				},
+				Discriminator: &ir.DiscriminatorIR{
+					PropertyName: "animalType",
+					Mapping:      map[string]string{"cat": "CatVariant", "dog": "DogVariant"},
+				},
+			},
+		},
+	})
+
+	pir := sampleProviderWithResourceIR()
+	pir.Resources[0] = r
+	cfg := BuildConfig{ProviderName: pir.Name, Namespace: pir.Name}
+
+	file := ResourceAcceptanceTestFile(pir, r, cfg)
+	var buf bytes.Buffer
+	if err := file.Render(&buf); err != nil {
+		t.Fatalf("Render() error = %v", err)
+	}
+	got := buf.String()
+
+	// The union must render as an HCL object literal keyed by the attribute
+	// name, with the discriminator and a variant field present.
+	if !strings.Contains(got, "animal = {") {
+		t.Errorf("union attribute must render as an object literal\ncontent:\n%s", got)
+	}
+	if !strings.Contains(got, "animal_type = ") {
+		t.Errorf("union object literal must include the discriminator field\ncontent:\n%s", got)
+	}
+	if !strings.Contains(got, "lives = ") {
+		t.Errorf("union object literal must include a variant field\ncontent:\n%s", got)
+	}
+}

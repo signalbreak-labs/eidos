@@ -116,6 +116,11 @@ func (r *WorkspaceResource) createRemote(ctx context.Context, plan *WorkspaceRes
 	if plan.Name.IsNull() || plan.Name.IsUnknown() {
 		loc := httpResp.Header.Get("Location")
 		if loc != "" {
+			loc = strings.TrimRight(loc, "/")
+			i := strings.LastIndex(loc, "/")
+			if i >= 0 {
+				loc = loc[i+1:]
+			}
 			plan.Name = types.StringValue(loc)
 		} else {
 			resp.Diagnostics.AddError("Error creating mycloud_workspace", "The create response did not contain an identifier and no Location header was returned, so the resource cannot be tracked in state.")

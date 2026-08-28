@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	"github.com/signalbreak-labs/eidos/pkg/api"
+	"github.com/signalbreak-labs/eidos/pkg/diagnostics"
 	"github.com/signalbreak-labs/eidos/pkg/generator"
 	"github.com/signalbreak-labs/eidos/pkg/ir"
 )
@@ -93,6 +94,18 @@ type goldenEntry struct {
 	BodyHash string `json:"body_hash,omitempty"`
 }
 
+// goldenSnapshot is the checked-in snapshot for one reference spec: the planned
+// file list (with body hashes) plus the fail-loud warning summaries the spec
+// produces. Snapshotting warnings closes the M-12 gap: before, TestGoldenFiles
+// failed only on error-severity diagnostics, so a regression that added a
+// spurious Warning — or dropped an expected one (e.g. the uniqueItems→List
+// downgrade, A1) — passed the corpus silently. Warnings are ordered by the
+// pipeline's deterministic emission order, so the snapshot is stable.
+type goldenSnapshot struct {
+	Files    []goldenEntry `json:"files"`
+	Warnings []string      `json:"warnings,omitempty"`
+}
+
 // bodyHash returns an FNV-1a 64-bit hash of b, formatted as 16 lowercase hex
 // digits. It is collision-resistant enough to detect any body regression or
 // run-to-run nondeterminism in the golden corpus.
@@ -129,6 +142,17 @@ func TestGoldenFiles(t *testing.T) {
 				t.Fatalf("spec %s produced no IR preview", tc.spec)
 			}
 
+			// Collect the fail-loud warning summaries for the snapshot (M-12).
+			// Warnings are non-blocking, so resp.Valid stays true; snapshotting
+			// them makes a spurious or dropped warning a corpus failure instead
+			// of a silent pass.
+			var warnings []string
+			for _, d := range resp.Diagnostics {
+				if d.Severity == diagnostics.Warning.String() {
+					warnings = append(warnings, d.Summary)
+				}
+			}
+
 			entries, err := generator.Run(resp.IRPreview, generator.Options{
 				Mode:           generator.ModeRecord,
 				CollectOptions: generator.DefaultCollectOptions(),
@@ -143,10 +167,17 @@ func TestGoldenFiles(t *testing.T) {
 			// truth as write mode, so the hashed bodies are exactly what write
 			// mode would emit.
 			hashes := renderAllFileHashes(t, resp.IRPreview)
-			got := make([]goldenEntry, 0, len(entries))
+			// Record/write lockstep over the real corpus (L-10): the snapshot is
+			// keyed off record-mode entries, so a file write mode emits but record
+			// mode omits would be invisible to it — exactly the drift direction
+			// M-4's Windows path-separator bug would cause. Assert set-equality
+			// here so any divergence is a corpus failure, not a silent skip.
+			assertRecordWriteLockstep(t, entries, hashes)
+			files := make([]goldenEntry, 0, len(entries))
 			for _, e := range entries {
-				got = append(got, goldenEntry{Path: e.Path, Reason: e.Reason, BodyHash: hashes[e.Path]})
+				files = append(files, goldenEntry{Path: e.Path, Reason: e.Reason, BodyHash: hashes[e.Path]})
 			}
+			got := goldenSnapshot{Files: files, Warnings: warnings}
 
 			rendered := renderSourceFiles(t, resp.IRPreview)
 			assertHonestScaffolds(t, rendered)
@@ -156,6 +187,11 @@ func TestGoldenFiles(t *testing.T) {
 			// syntactically broken Go in short mode, where the full compile
 			// corpus (TestGoldenFiles_Compile) is skipped (N-29).
 			assertGoSyntax(t, rendered)
+			// The emitted *_test.go files (coverage, client, provider, mapper,
+			// acceptance) are part of the generated module and must parse too.
+			// go build ./... does not compile test files, so without this guard a
+			// syntactically broken test file would pass every in-repo check (M-13).
+			assertGoSyntax(t, renderTestFiles(t, resp.IRPreview))
 
 			goldenPath := filepath.Join("..", "..", "testfixtures", "golden", tc.name+".golden.json")
 
@@ -270,6 +306,27 @@ func renderSourceFiles(t *testing.T, provider *ir.ProviderIR) []sourceFile {
 	return out
 }
 
+// renderTestFiles returns the bodies of all generated *_test.go files for the
+// supplied provider IR. TestFiles is the same source of truth write mode uses,
+// so the rendered bodies are exactly what write mode would emit. These files
+// are excluded from the honest-scaffold and wiring checks (they are not
+// constructs), but they must still parse and compile (M-13).
+func renderTestFiles(t *testing.T, provider *ir.ProviderIR) []sourceFile {
+	t.Helper()
+
+	cfg := buildConfigFor(provider)
+	files := generator.TestFiles(*provider, cfg)
+	out := make([]sourceFile, 0, len(files))
+	for _, f := range files {
+		var buf bytes.Buffer
+		if err := f.Render(&buf); err != nil {
+			t.Fatalf("render test file %s: %v", f.Path, err)
+		}
+		out = append(out, sourceFile{Path: f.Path, Body: buf.String()})
+	}
+	return out
+}
+
 // renderAllFileHashes renders the complete generated file set for the provider
 // — the same FilesForProviderIR source of truth that write mode emits — and
 // returns a map from output path to an FNV-1a body hash (N-29). Any render
@@ -293,6 +350,50 @@ func renderAllFileHashes(t *testing.T, provider *ir.ProviderIR) map[string]strin
 	return hashes
 }
 
+// assertRecordWriteLockstep asserts the record-mode file list and the
+// write-mode file set are identical for the same provider and options. A
+// divergence means dry-run either lies (records a file write mode never emits)
+// or is incomplete (omits a file write mode emits) — the drift direction M-4's
+// Windows path-separator bug would cause. The golden snapshot is keyed off
+// record-mode entries, so without this assertion a writer-only file would be
+// invisible to the corpus (L-10).
+func assertRecordWriteLockstep(t testing.TB, entries []generator.FileEntry, writeHashes map[string]string) {
+	t.Helper()
+	recordSet := make(map[string]struct{}, len(entries))
+	for _, e := range entries {
+		recordSet[e.Path] = struct{}{}
+	}
+	var extraInRecord, missingFromRecord []string
+	for p := range recordSet {
+		if _, ok := writeHashes[p]; !ok {
+			extraInRecord = append(extraInRecord, p)
+		}
+	}
+	for p := range writeHashes {
+		if _, ok := recordSet[p]; !ok {
+			missingFromRecord = append(missingFromRecord, p)
+		}
+	}
+	if len(extraInRecord) != 0 || len(missingFromRecord) != 0 {
+		t.Errorf("record mode and write mode file sets diverge:\n"+
+			"  recorded but not written: %v\n"+
+			"  written but not recorded: %v",
+			extraInRecord, missingFromRecord)
+	}
+}
+
+// goSyntaxError reports whether a single generated .go body fails to parse and
+// reformat. format.Source parses the file and would error on malformed syntax;
+// name resolution is intentionally out of scope (N-29). Non-.go paths are not
+// Go and never fail.
+func goSyntaxError(path, body string) error {
+	if !strings.HasSuffix(path, ".go") {
+		return nil
+	}
+	_, err := format.Source([]byte(body))
+	return err
+}
+
 // assertGoSyntax parses and reformats every generated .go body so syntactically
 // broken Go is caught in every test run, including -short mode where the full
 // compile corpus is skipped. format.Source parses the file and would error on
@@ -300,10 +401,7 @@ func renderAllFileHashes(t *testing.T, provider *ir.ProviderIR) map[string]strin
 func assertGoSyntax(t *testing.T, files []sourceFile) {
 	t.Helper()
 	for _, f := range files {
-		if !strings.HasSuffix(f.Path, ".go") {
-			continue
-		}
-		if _, err := format.Source([]byte(f.Body)); err != nil {
+		if err := goSyntaxError(f.Path, f.Body); err != nil {
 			t.Errorf("generated Go file %q does not parse/reformat: %v", f.Path, err)
 		}
 	}
@@ -462,27 +560,27 @@ func assertHonestScaffolds(t *testing.T, files []sourceFile) {
 	}
 }
 
-func writeGolden(path string, entries []goldenEntry) error {
+func writeGolden(path string, snap goldenSnapshot) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
 		return err
 	}
-	data, err := json.MarshalIndent(entries, "", "  ")
+	data, err := json.MarshalIndent(snap, "", "  ")
 	if err != nil {
 		return err
 	}
 	return os.WriteFile(path, data, 0o600)
 }
 
-func readGolden(path string) ([]goldenEntry, error) {
+func readGolden(path string) (goldenSnapshot, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return nil, err
+		return goldenSnapshot{}, err
 	}
-	var entries []goldenEntry
-	if err := json.Unmarshal(data, &entries); err != nil {
-		return nil, err
+	var snap goldenSnapshot
+	if err := json.Unmarshal(data, &snap); err != nil {
+		return goldenSnapshot{}, err
 	}
-	return entries, nil
+	return snap, nil
 }
 
 func formatJSON(v any) string {
@@ -493,14 +591,204 @@ func formatJSON(v any) string {
 	return string(data)
 }
 
-func goldenEqual(a, b []goldenEntry) bool {
-	if len(a) != len(b) {
+func goldenEqual(a, b goldenSnapshot) bool {
+	if len(a.Files) != len(b.Files) || len(a.Warnings) != len(b.Warnings) {
 		return false
 	}
-	for i := range a {
-		if a[i].Path != b[i].Path || a[i].Reason != b[i].Reason || a[i].BodyHash != b[i].BodyHash {
+	for i := range a.Files {
+		if a.Files[i].Path != b.Files[i].Path || a.Files[i].Reason != b.Files[i].Reason || a.Files[i].BodyHash != b.Files[i].BodyHash {
+			return false
+		}
+	}
+	for i := range a.Warnings {
+		if a.Warnings[i] != b.Warnings[i] {
 			return false
 		}
 	}
 	return true
+}
+
+// TestGoldenEqual_WarningsAsserted verifies the M-12 fix: goldenEqual compares
+// the snapshot's warning list, so a regression that adds a spurious Warning or
+// drops an expected one (e.g. the uniqueItems→List downgrade) fails the corpus
+// instead of passing silently. Before the fix the golden snapshot carried no
+// warnings and goldenEqual ignored them entirely.
+func TestGoldenEqual_WarningsAsserted(t *testing.T) {
+	base := goldenSnapshot{
+		Files: []goldenEntry{
+			{Path: "internal/provider/resource_pet.go", Reason: "resource mycloud_pet", BodyHash: "abc"},
+		},
+		Warnings: []string{"uniqueItems on a list resource is not supported by the list/schema API; falling back to List"},
+	}
+
+	// Identical snapshots compare equal.
+	if !goldenEqual(base, base) {
+		t.Error("goldenEqual(identical) = false, want true")
+	}
+
+	// A spurious extra warning must fail.
+	extra := base
+	extra.Warnings = append(append([]string{}, base.Warnings...), "spurious warning")
+	if goldenEqual(base, extra) {
+		t.Error("goldenEqual with an extra warning = true, want false (spurious warning must fail the corpus)")
+	}
+
+	// A dropped expected warning must fail.
+	dropped := base
+	dropped.Warnings = nil
+	if goldenEqual(base, dropped) {
+		t.Error("goldenEqual with a dropped warning = true, want false (dropped warning must fail the corpus)")
+	}
+
+	// A changed warning must fail.
+	changed := base
+	changed.Warnings = []string{"a different warning"}
+	if goldenEqual(base, changed) {
+		t.Error("goldenEqual with a changed warning = true, want false")
+	}
+
+	// A file-list change must still fail.
+	fileChanged := base
+	fileChanged.Files = append([]goldenEntry{}, base.Files...)
+	fileChanged.Files[0].BodyHash = "def"
+	if goldenEqual(base, fileChanged) {
+		t.Error("goldenEqual with a changed body hash = true, want false")
+	}
+}
+
+// TestRenderTestFiles_SyntaxChecked is the M-13 regression guard: the emitted
+// *_test.go files (coverage, client, provider, mapper, acceptance) must be
+// rendered and syntax-checked by the golden test, not silently skipped. Before
+// the fix, assertGoSyntax ran only over renderSourceFiles, whose file set
+// excludes test files, so a syntactically broken generated test file passed
+// every in-repo check.
+func TestRenderTestFiles_SyntaxChecked(t *testing.T) {
+	// Build a provider IR with enough shape that every test-file family is
+	// emitted: resources and data sources produce *_test.go + *_remote_test.go,
+	// actions and ephemerals produce *_remote_test.go, and the client produces
+	// client/auth/logging_test.go.
+	pir := ir.ProviderIR{
+		Name:     "mycloud",
+		TypeName: "mycloud",
+		Resources: []ir.ResourceIR{
+			{
+				Name:     "pet",
+				TypeName: "mycloud_pet",
+				Schema: ir.ObjectSchemaIR{
+					Attributes: []ir.AttributeIR{
+						{Name: "id", Computed: true, Schema: ir.SchemaIR{Type: ir.TypeString}},
+						{Name: "name", Required: true, Schema: ir.SchemaIR{Type: ir.TypeString}},
+					},
+				},
+			},
+		},
+		DataSources: []ir.DataSourceIR{
+			{
+				Name:     "pets",
+				TypeName: "mycloud_pets",
+				Schema: ir.ObjectSchemaIR{
+					Attributes: []ir.AttributeIR{
+						{Name: "id", Computed: true, Schema: ir.SchemaIR{Type: ir.TypeString}},
+					},
+				},
+			},
+		},
+		Actions: []ir.ActionIR{
+			{Name: "reboot", TypeName: "mycloud_reboot"},
+		},
+		EphemeralResources: []ir.EphemeralResourceIR{
+			{Name: "temporary_credential", TypeName: "mycloud_temporary_credential"},
+		},
+	}
+
+	files := renderTestFiles(t, &pir)
+	if len(files) == 0 {
+		t.Fatal("renderTestFiles returned no files; the M-13 syntax guard would be vacuous")
+	}
+	for _, f := range files {
+		if !strings.HasSuffix(f.Path, "_test.go") {
+			t.Errorf("renderTestFiles returned non-test file %q", f.Path)
+		}
+	}
+	// assertGoSyntax must pass on the rendered test files; a parse failure here
+	// means the generator emits broken test Go.
+	assertGoSyntax(t, files)
+}
+
+// TestAssertGoSyntax_CatchesBrokenTestFile proves the syntax guard is not
+// vacuous: a malformed generated test body must fail goSyntaxError. This is
+// the failure mode M-13 describes — a broken *_test.go that go build ./... never
+// compiles — and it must be caught by the always-on syntax check.
+func TestAssertGoSyntax_CatchesBrokenTestFile(t *testing.T) {
+	if err := goSyntaxError("internal/provider/resource_pet_remote_test.go", "package provider\n\nfunc TestBroken( {"); err == nil {
+		t.Error("goSyntaxError accepted a malformed test file; the M-13 guard is vacuous")
+	}
+	if err := goSyntaxError("internal/provider/resource_pet_remote_test.go", "package provider\n\nfunc TestBroken() {}"); err != nil {
+		t.Errorf("goSyntaxError rejected a valid test file: %v", err)
+	}
+}
+
+// TestAssertRecordWriteLockstep proves the L-10 lockstep guard is not vacuous:
+// it must fail when record mode records a file write mode omits, when write
+// mode emits a file record mode omits (the writer-only-file drift direction
+// M-4's Windows path-separator bug would cause), and pass when the sets match.
+func TestAssertRecordWriteLockstep(t *testing.T) {
+	entries := []generator.FileEntry{
+		{Path: "internal/provider/resource_pet.go"},
+		{Path: "internal/provider/resource_dog.go"},
+	}
+	writeHashes := map[string]string{
+		"internal/provider/resource_pet.go": "hash-pet",
+		"internal/provider/resource_dog.go": "hash-dog",
+	}
+
+	t.Run("matching sets pass", func(t *testing.T) {
+		assertRecordWriteLockstep(t, entries, writeHashes)
+	})
+
+	t.Run("record-only file fails", func(t *testing.T) {
+		extra := append([]generator.FileEntry(nil), entries...)
+		extra = append(extra, generator.FileEntry{Path: "internal/provider/resource_cat.go"})
+		assertRecordWriteLockstepFails(t, extra, writeHashes, "recorded but not written")
+	})
+
+	t.Run("write-only file fails", func(t *testing.T) {
+		extra := map[string]string{
+			"internal/provider/resource_pet.go": "hash-pet",
+			"internal/provider/resource_dog.go": "hash-dog",
+			"internal/provider/resource_cat.go": "hash-cat",
+		}
+		assertRecordWriteLockstepFails(t, entries, extra, "written but not recorded")
+	})
+}
+
+// assertRecordWriteLockstepFails runs the guard and asserts it reports the
+// expected divergence direction. The guard calls t.Errorf, so a passing guard
+// would fail the test; we instead capture the failure via a sub-test that
+// expects the error text.
+func assertRecordWriteLockstepFails(t *testing.T, entries []generator.FileEntry, writeHashes map[string]string, wantSubstr string) {
+	t.Helper()
+	// Run the guard inside a fresh sub-test so its t.Errorf is recorded, then
+	// assert the recorded failure mentions the expected direction.
+	sub := &captureT{T: t}
+	assertRecordWriteLockstep(sub, entries, writeHashes)
+	if !sub.failed {
+		t.Fatalf("assertRecordWriteLockstep did not fail for %s", wantSubstr)
+	}
+	if !strings.Contains(sub.errText, wantSubstr) {
+		t.Errorf("assertRecordWriteLockstep failure %q does not mention %q", sub.errText, wantSubstr)
+	}
+}
+
+// captureT records t.Errorf output instead of failing the enclosing test, so a
+// negative test can assert on the guard's failure text.
+type captureT struct {
+	*testing.T
+	failed  bool
+	errText string
+}
+
+func (c *captureT) Errorf(formatStr string, args ...any) {
+	c.failed = true
+	c.errText += fmt.Sprintf(formatStr, args...)
 }

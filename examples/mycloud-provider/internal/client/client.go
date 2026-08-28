@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
 )
 
@@ -153,6 +154,20 @@ func (c *Client) NewRequest(ctx context.Context, method, path string, body io.Re
 	if err != nil {
 		return nil, fmt.Errorf("join base URL and path: %w", err)
 	}
+	// Guard against dot-segment traversal: url.JoinPath cleans ".." segments,
+	// so a path-param value of ".." could escape the base URL's path prefix
+	// (L-4). Reject any request whose resolved path is not under the base path.
+	base, err := url.Parse(c.baseURL)
+	if err != nil {
+		return nil, fmt.Errorf("parse base URL: %w", err)
+	}
+	joined, err := url.Parse(fullURL)
+	if err != nil {
+		return nil, fmt.Errorf("parse joined URL: %w", err)
+	}
+	if !pathWithin(base.Path, joined.Path) {
+		return nil, fmt.Errorf("request path %q escapes the base URL path %q", joined.Path, base.Path)
+	}
 	req, err := http.NewRequestWithContext(ctx, method, fullURL, body)
 	if err != nil {
 		return nil, err
@@ -166,6 +181,19 @@ func (c *Client) NewRequest(ctx context.Context, method, path string, body io.Re
 		}
 	}
 	return req, nil
+}
+
+// pathWithin reports whether p is base or a descendant of base, comparing path
+// segments so a sibling prefix like "/v1pets" is not treated as being under
+// "/v1". An empty or root base path contains every path.
+func pathWithin(base, p string) bool {
+	if base == "" || base == "/" {
+		return true
+	}
+	if p == base {
+		return true
+	}
+	return strings.HasPrefix(p, base+"/")
 }
 
 // resolveInterceptors selects the request interceptors to apply. With no

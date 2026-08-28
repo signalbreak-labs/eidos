@@ -191,6 +191,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
 )
 
@@ -337,6 +338,20 @@ func (c *Client) NewRequest(ctx context.Context, method, path string, body io.Re
 	if err != nil {
 		return nil, fmt.Errorf("join base URL and path: %w", err)
 	}
+	// Guard against dot-segment traversal: url.JoinPath cleans ".." segments,
+	// so a path-param value of ".." could escape the base URL's path prefix
+	// (L-4). Reject any request whose resolved path is not under the base path.
+	base, err := url.Parse(c.baseURL)
+	if err != nil {
+		return nil, fmt.Errorf("parse base URL: %w", err)
+	}
+	joined, err := url.Parse(fullURL)
+	if err != nil {
+		return nil, fmt.Errorf("parse joined URL: %w", err)
+	}
+	if !pathWithin(base.Path, joined.Path) {
+		return nil, fmt.Errorf("request path %q escapes the base URL path %q", joined.Path, base.Path)
+	}
 	req, err := http.NewRequestWithContext(ctx, method, fullURL, body)
 	if err != nil {
 		return nil, err
@@ -350,6 +365,19 @@ func (c *Client) NewRequest(ctx context.Context, method, path string, body io.Re
 		}
 	}
 	return req, nil
+}
+
+// pathWithin reports whether p is base or a descendant of base, comparing path
+// segments so a sibling prefix like "/v1pets" is not treated as being under
+// "/v1". An empty or root base path contains every path.
+func pathWithin(base, p string) bool {
+	if base == "" || base == "/" {
+		return true
+	}
+	if p == base {
+		return true
+	}
+	return strings.HasPrefix(p, base+"/")
 }
 
 // resolveInterceptors selects the request interceptors to apply. With no
@@ -1024,6 +1052,7 @@ const paginationGoTemplate = `package client
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"net/http"
 	"net/url"
@@ -1148,13 +1177,21 @@ func parseParams(rest string) []linkParam {
 	return params
 }
 
+// maxPages bounds ListAllPages so a misbehaving server that keeps returning a
+// next cursor or link cannot drive an unbounded request loop (M-9).
+const maxPages = 1000
+
 // ListAllPages repeatedly calls fetch with pagination parameters and collects all page bodies.
 // The next callback is invoked after each page; it may update params and should return false
-// when there are no more pages.
+// when there are no more pages. The loop is bounded by maxPages and stops early when a next
+// callback returns true without advancing the pagination parameters (loop-back detection), so
+// a server that echoes the same cursor cannot drive an infinite identical-request loop (M-9).
 func ListAllPages(ctx context.Context, params url.Values, fetch func(context.Context, url.Values) (*http.Response, error), next func(*http.Response, []byte, url.Values) bool) ([][]byte, error) {
 	var pages [][]byte
 	current := cloneValues(params)
-	for {
+	prev := cloneValues(params)
+	advanced := false
+	for page := 0; page < maxPages; page++ {
 		resp, err := fetch(ctx, current)
 		if err != nil {
 			return nil, err
@@ -1168,7 +1205,38 @@ func ListAllPages(ctx context.Context, params url.Values, fetch func(context.Con
 		if next == nil || !next(resp, body, current) {
 			return pages, nil
 		}
+		// Loop-back detection: a next callback that returns true without advancing
+		// the pagination parameters (e.g. the server echoed the same cursor) would
+		// otherwise issue an identical request forever. The guard only fires once
+		// the parameters have changed at least once, so link_header pagination
+		// (which advances via a response-embedded URL, not the parameters) is
+		// unaffected.
+		changed := !valuesEqual(current, prev)
+		if advanced && !changed {
+			return pages, nil
+		}
+		prev = cloneValues(current)
+		advanced = advanced || changed
 	}
+	return nil, fmt.Errorf("pagination exceeded %d pages; the server keeps returning a next page", maxPages)
+}
+
+func valuesEqual(a, b url.Values) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for key, av := range a {
+		bv, ok := b[key]
+		if !ok || len(av) != len(bv) {
+			return false
+		}
+		for i := range av {
+			if av[i] != bv[i] {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 func cloneValues(v url.Values) url.Values {

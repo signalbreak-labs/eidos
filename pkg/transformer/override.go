@@ -694,8 +694,6 @@ func applyListResourceConfigSchema(lr *ir.ListResourceIR, overrides []config.Lis
 		}
 
 		schema := ir.SchemaIR{Type: primitiveTypeFromConfig(override.Type)}
-		required := !override.Optional
-		optional := override.Optional
 
 		existing := findAttributeIndex(lr.ConfigSchema.Attributes, name)
 		if existing >= 0 {
@@ -705,11 +703,26 @@ func applyListResourceConfigSchema(lr *ir.ListResourceIR, overrides []config.Lis
 			if strings.TrimSpace(override.Description) != "" {
 				lr.ConfigSchema.Attributes[existing].Description = override.Description
 			}
-			lr.ConfigSchema.Attributes[existing].Required = required
-			lr.ConfigSchema.Attributes[existing].Optional = optional
+			// M-7: Optional is a *bool, so an omitted `optional:` key (nil) must
+			// not overwrite the existing attribute's Required/Optional — a
+			// description-only override would otherwise flip a spec-optional
+			// filter to Required. Only an explicit `optional:` value changes it.
+			if override.Optional != nil {
+				lr.ConfigSchema.Attributes[existing].Required = !*override.Optional
+				lr.ConfigSchema.Attributes[existing].Optional = *override.Optional
+			}
 			continue
 		}
 
+		// New attribute: an omitted `optional:` keeps the historical default of
+		// Required (matching the pre-M-7 behavior for brand-new entries); only an
+		// explicit `optional:` value changes it.
+		required := true
+		optional := false
+		if override.Optional != nil {
+			required = !*override.Optional
+			optional = *override.Optional
+		}
 		lr.ConfigSchema.Attributes = append(lr.ConfigSchema.Attributes, ir.AttributeIR{
 			Name:        name,
 			Description: override.Description,

@@ -15,6 +15,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/signalbreak-labs/eidos/pkg/config"
+	"github.com/signalbreak-labs/eidos/pkg/diagnostics"
 )
 
 // TestRecoverCommand covers N-65: a panic in a command's RunE body is converted
@@ -1175,4 +1176,25 @@ func TestConfigOutputCollidesWithInput(t *testing.T) {
 			t.Errorf("expected collision when config and output both resolve to %q, got false", absConfig)
 		}
 	})
+}
+
+// TestFailBuildProviderIR verifies failBuildProviderIR prints the pipeline
+// diagnostics to stderr and returns the wrapped error.
+func TestFailBuildProviderIR(t *testing.T) {
+	cmd, out := newTestCommand()
+	diags := diagnostics.Diagnostics{
+		{Severity: diagnostics.Warning, Summary: "warning summary", Detail: "warning detail"},
+		{Severity: diagnostics.Error, Summary: "error summary"},
+	}
+	err := failBuildProviderIR(cmd, diags, errors.New("build failed"))
+	if err == nil || err.Error() != "build failed" {
+		t.Fatalf("failBuildProviderIR returned %v, want the wrapped error", err)
+	}
+	got := out.String()
+	if !strings.Contains(got, "warning summary: warning detail") {
+		t.Errorf("stderr missing warning diagnostic:\n%s", got)
+	}
+	if !strings.Contains(got, "error summary") {
+		t.Errorf("stderr missing error diagnostic:\n%s", got)
+	}
 }

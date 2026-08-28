@@ -81,7 +81,7 @@ eidos generate --spec ./api.yaml --config ./generator.yaml --output ./terraform-
 
 | Flag | Default | Required | Description |
 |------|---------|----------|-------------|
-| `--spec` | — | **yes** | Path to the OpenAPI spec file (JSON or YAML), or an http(s) URL to fetch. |
+| `--spec` | — | no* | Path to the OpenAPI spec file (JSON or YAML), or an http(s) URL to fetch. Optional when `--config` supplies `spec.path`. |
 | `--output` | — | **yes** (full generation) | Target directory for generated files. Required when not using `--dry-run`. |
 | `--config` | *(none)* | no | Path to a `generator.yaml` overrides file. |
 | `--dry-run` | `false` | no | Run the pipeline without writing files and print a summary. |
@@ -375,6 +375,7 @@ ephemeral_resource_overrides: []EphemeralOverride
 list_resource_overrides: []ListResourceOverride
 function_overrides:     []FunctionOverride
 logging:                LoggingConfig
+client:                 ClientConfig
 auth:                   []AuthConfig
 security:               SecurityConfig
 naming:                 NamingConfig
@@ -604,6 +605,15 @@ list_resource_overrides:
 | `config_schema` | []ListConfigSchema | Filter/search arguments. |
 | `pagination` | PaginationConfig | Pagination behavior for this list resource. |
 
+Each `config_schema` entry:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `name` | string | **Required.** Filter/search argument name. |
+| `type` | string | Argument type (`string`, `integer`, `boolean`, …). |
+| `optional` | bool | Whether the argument is optional. When omitted, an existing inferred argument keeps its spec-derived optionality; a brand-new argument defaults to Required. |
+| `description` | string | Argument description. When omitted, an existing inferred argument keeps the spec's description. |
+
 ### `function_overrides`
 
 ```yaml
@@ -652,6 +662,32 @@ defaults; when a log file is configured (via `log_file` or a baked
 `enabled` + `file_path`), the provider attaches the generated client's HTTP
 trace round-tripper via `client.WithLogging`. `enabled` without `file_path`
 has no effect — logging is active iff a log file path is set.
+
+### `client`
+
+```yaml
+client:
+  base_url_template: https://api.mycloud.example/v2
+  user_agent: mycloud-terraform-provider/1.0.0
+  timeout: 45s
+  retry_max: 4
+  retry_wait_min: 500ms
+  retry_wait_max: 20s
+```
+
+These settings are baked into the generated HTTP client. Every field is
+optional; an unset field falls back to the generator's default (the spec's
+first server URL, `eidos-generated-client`, a 30s timeout, 3 retries with 1s/30s
+backoff). Duration fields accept Go duration strings (`"30s"`, `"1m30s"`).
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `base_url_template` | string | Base URL for all generated requests. Defaults to the spec's first server URL. |
+| `user_agent` | string | `User-Agent` header sent on every request. |
+| `timeout` | duration | Per-request HTTP timeout. |
+| `retry_max` | int | Maximum retry count for retryable requests. |
+| `retry_wait_min` | duration | Minimum backoff between retries. |
+| `retry_wait_max` | duration | Maximum backoff between retries. |
 
 ### `auth`
 

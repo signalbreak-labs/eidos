@@ -299,14 +299,16 @@ func TestSplitResources(t *testing.T) {
 					Name: "Cat",
 					Attributes: []ir.AttributeIR{
 						{Name: "name", Schema: ir.SchemaIR{Type: ir.TypeString}},
-						{Name: "petType", Schema: ir.SchemaIR{Type: ir.TypeString}},
+						// Snake_cased by the schema conversion, as in the live
+						// pipeline.
+						{Name: "pet_type", Schema: ir.SchemaIR{Type: ir.TypeString}},
 					},
 				},
 				{
 					Name: "Dog",
 					Attributes: []ir.AttributeIR{
 						{Name: "breed", Schema: ir.SchemaIR{Type: ir.TypeString}},
-						{Name: "petType", Schema: ir.SchemaIR{Type: ir.TypeString}},
+						{Name: "pet_type", Schema: ir.SchemaIR{Type: ir.TypeString}},
 					},
 				},
 			},
@@ -332,8 +334,58 @@ func TestSplitResources(t *testing.T) {
 
 	for _, r := range resources {
 		for _, a := range r.Schema.Attributes {
-			if a.Name == "petType" {
+			if a.Name == "pet_type" {
 				t.Errorf("resource %q should omit discriminator attribute", r.Name)
+			}
+		}
+	}
+}
+
+// TestSplitResourcesRemovesSnakeCasedDiscriminator locks in the M-6 fix: the
+// discriminator property is removed from each variant even when its raw
+// PropertyName is camelCase (petType) and the variant attributes were
+// snake_cased during schema conversion (pet_type). Before the fix the exact
+// case-sensitive compare silently no-oped and pet_type stayed in every
+// variant, contradicting the documented split_resources behavior.
+func TestSplitResourcesRemovesSnakeCasedDiscriminator(t *testing.T) {
+	schema := &ir.SchemaIR{
+		Name: "Pet",
+		Union: &ir.UnionType{
+			Kind: ir.OneOf,
+			Variants: []ir.SchemaIR{
+				{
+					Name: "Cat",
+					Attributes: []ir.AttributeIR{
+						{Name: "name", Schema: ir.SchemaIR{Type: ir.TypeString}},
+						// Snake_cased by the schema conversion, as in the live
+						// pipeline.
+						{Name: "pet_type", Schema: ir.SchemaIR{Type: ir.TypeString}},
+					},
+				},
+				{
+					Name: "Dog",
+					Attributes: []ir.AttributeIR{
+						{Name: "breed", Schema: ir.SchemaIR{Type: ir.TypeString}},
+						{Name: "pet_type", Schema: ir.SchemaIR{Type: ir.TypeString}},
+					},
+				},
+			},
+			// Raw camelCase PropertyName, as declared in the OpenAPI spec.
+			Discriminator: &ir.DiscriminatorIR{PropertyName: "petType"},
+		},
+	}
+
+	resources, err := SplitResources("Pet", schema, PolymorphismConfig{})
+	if err != nil {
+		t.Fatalf("SplitResources() unexpected error: %v", err)
+	}
+	if len(resources) != 2 {
+		t.Fatalf("expected 2 resources, got %d", len(resources))
+	}
+	for _, r := range resources {
+		for _, a := range r.Schema.Attributes {
+			if a.Name == "pet_type" {
+				t.Errorf("resource %q should omit the snake_cased discriminator attribute pet_type (M-6)", r.Name)
 			}
 		}
 	}

@@ -200,3 +200,52 @@ func contains(s, sub string) bool {
 	}
 	return false
 }
+
+// TestInferSensitiveRecursive_Branches drives every nested-schema branch of
+// inferSensitiveRecursive: the nil guard, union variants, and the JSON Schema
+// conditional/pattern siblings (not/if/then/else, dependent schemas, pattern
+// properties). Each nested node carries a password attribute that must be
+// marked Sensitive after the walk.
+func TestInferSensitiveRecursive_Branches(t *testing.T) {
+	// Nil guard: no panic, no-op.
+	inferSensitiveRecursive(nil)
+
+	// Union variants.
+	union := &ir.SchemaIR{Union: &ir.UnionType{Variants: []ir.SchemaIR{
+		{Attributes: []ir.AttributeIR{sensitiveAttr("password", "password", ir.TypeString)}},
+	}}}
+	inferSensitiveRecursive(union)
+	if !union.Union.Variants[0].Attributes[0].Sensitive {
+		t.Error("union variant password must be Sensitive")
+	}
+
+	// JSON Schema conditional/pattern siblings.
+	cond := &ir.SchemaIR{
+		Not:        &ir.SchemaIR{Attributes: []ir.AttributeIR{sensitiveAttr("not_password", "notPassword", ir.TypeString)}},
+		IfSchema:   &ir.SchemaIR{Attributes: []ir.AttributeIR{sensitiveAttr("if_password", "ifPassword", ir.TypeString)}},
+		ThenSchema: &ir.SchemaIR{Attributes: []ir.AttributeIR{sensitiveAttr("then_password", "thenPassword", ir.TypeString)}},
+		ElseSchema: &ir.SchemaIR{Attributes: []ir.AttributeIR{sensitiveAttr("else_password", "elsePassword", ir.TypeString)}},
+		DependentSchemas: map[string]*ir.SchemaIR{
+			"dep": {Attributes: []ir.AttributeIR{sensitiveAttr("dep_password", "depPassword", ir.TypeString)}},
+		},
+		PatternProperties: map[string]*ir.SchemaIR{
+			"^x-": {Attributes: []ir.AttributeIR{sensitiveAttr("pp_password", "ppPassword", ir.TypeString)}},
+		},
+	}
+	inferSensitiveRecursive(cond)
+	for _, tc := range []struct {
+		name string
+		attr *ir.AttributeIR
+	}{
+		{"not", &cond.Not.Attributes[0]},
+		{"if", &cond.IfSchema.Attributes[0]},
+		{"then", &cond.ThenSchema.Attributes[0]},
+		{"else", &cond.ElseSchema.Attributes[0]},
+		{"dependent", &cond.DependentSchemas["dep"].Attributes[0]},
+		{"pattern", &cond.PatternProperties["^x-"].Attributes[0]},
+	} {
+		if !tc.attr.Sensitive {
+			t.Errorf("%s password must be Sensitive, got %+v", tc.name, *tc.attr)
+		}
+	}
+}

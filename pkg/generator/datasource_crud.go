@@ -411,7 +411,7 @@ func wiredListDataSourceReadHelperBody(ds ir.DataSourceIR, plan crudOperationPla
 		listFetchAssign("d", plan, "config"),
 	)
 	if style != ir.PaginationStyleNone {
-		stmts = append(stmts, listNextAssign(style, pageParam, cursorField, nextLinkRel))
+		stmts = append(stmts, listNextAssign(style, pageParam, cursorField, nextLinkRel, plan.responseEnvelope))
 	}
 	// Fetch the pages through the generated client's ListAllPages helper, passing
 	// the next callback (or nil when pagination is disabled).
@@ -554,13 +554,17 @@ func listFetchAssign(receiver string, plan crudOperationPlan, configVar string) 
 // listNextAssign emits the `next := func(resp, body, p) bool { ... }` closure
 // passed to client.ListAllPages, specialized to the configured pagination
 // style. Returning true advances to the next page; false stops iteration.
-func listNextAssign(style, pageParam, cursorField, nextLinkRel string) ast.Stmt {
+// envelope is the response-envelope key ("" when the page body is a bare
+// array); the offset and cursor callbacks unwrap it before deciding whether
+// another page exists, so an enveloped list endpoint does not silently
+// truncate to page 1 (H-4).
+func listNextAssign(style, pageParam, cursorField, nextLinkRel, envelope string) ast.Stmt {
 	var body []ast.Stmt
 	switch style {
 	case ir.PaginationStyleOffset:
-		body = listOffsetNextBody(pageParam)
+		body = listOffsetNextBody(pageParam, envelope)
 	case ir.PaginationStyleCursor:
-		body = listCursorNextBody(cursorField)
+		body = listCursorNextBody(cursorField, envelope)
 	case ir.PaginationStyleLinkHeader:
 		body = listLinkHeaderNextBody(nextLinkRel)
 	default:
@@ -585,19 +589,72 @@ func listNextAssign(style, pageParam, cursorField, nextLinkRel string) ast.Stmt 
 // listOffsetNextBody advances offset pagination by incrementing the page
 // parameter, stopping when a page returns no items (decoded from the body so
 // trailing whitespace such as a trailing newline does not defeat the check).
-func listOffsetNextBody(pageParam string) []ast.Stmt {
+// When envelope is non-empty the page body is a JSON object whose envelope key
+// holds the item array (e.g. SpaceTraders' {data: [...], meta: ...}); the
+// array is extracted before the emptiness check, so an enveloped list endpoint
+// does not silently truncate to page 1 (H-4).
+func listOffsetNextBody(pageParam, envelope string) []ast.Stmt {
+	if envelope == "" {
+		return []ast.Stmt{
+			astgen.AssignSingle(
+				astgen.Ident("pageItems"),
+				astgen.CompositeLit(astgen.SliceType(astgen.Ident("any"))),
+			),
+			&ast.IfStmt{
+				Init: astgen.AssignSingle(astgen.Ident("unmarshalErr"), astgen.Call(
+					astgen.QualExpr("json", "Unmarshal"), astgen.Ident("body"), astgen.UnaryPtr(astgen.Ident("pageItems")),
+				)),
+				Cond: astgen.NotEqual(astgen.Ident("unmarshalErr"), astgen.Nil()),
+				Body: astgen.Block(astgen.Return(astgen.BoolLit(false))),
+			},
+			astgen.If(
+				astgen.Equal(astgen.Call(astgen.Ident("len"), astgen.Ident("pageItems")), astgen.IntLit(0)),
+				astgen.Block(astgen.Return(astgen.BoolLit(false))),
+			),
+			// page and parseErr are declared at the closure scope (not the if init
+			// scope) so page remains visible to the strconv.Itoa call below.
+			astgen.Assign(
+				[]ast.Expr{astgen.Ident("page"), astgen.Ident("parseErr")},
+				[]ast.Expr{astgen.Call(
+					astgen.QualExpr("strconv", "Atoi"),
+					astgen.Call(astgen.Selector(astgen.Ident("p"), "Get"), astgen.Lit(pageParam)),
+				)},
+			),
+			astgen.If(
+				astgen.NotEqual(astgen.Ident("parseErr"), astgen.Nil()),
+				astgen.Block(astgen.Return(astgen.BoolLit(false))),
+			),
+			astgen.ExprStmt(astgen.Call(
+				astgen.Selector(astgen.Ident("p"), "Set"),
+				astgen.Lit(pageParam),
+				astgen.Call(astgen.QualExpr("strconv", "Itoa"), astgen.Binary(astgen.Ident("page"), token.ADD, astgen.IntLit(1))),
+			)),
+			astgen.Return(astgen.BoolLit(true)),
+		}
+	}
 	return []ast.Stmt{
 		astgen.AssignSingle(
-			astgen.Ident("pageItems"),
-			astgen.CompositeLit(astgen.SliceType(astgen.Ident("any"))),
+			astgen.Ident("pageObj"),
+			astgen.CompositeLit(astgen.MapType(astgen.Ident("string"), astgen.Ident("any"))),
 		),
 		&ast.IfStmt{
 			Init: astgen.AssignSingle(astgen.Ident("unmarshalErr"), astgen.Call(
-				astgen.QualExpr("json", "Unmarshal"), astgen.Ident("body"), astgen.UnaryPtr(astgen.Ident("pageItems")),
+				astgen.QualExpr("json", "Unmarshal"), astgen.Ident("body"), astgen.UnaryPtr(astgen.Ident("pageObj")),
 			)),
 			Cond: astgen.NotEqual(astgen.Ident("unmarshalErr"), astgen.Nil()),
 			Body: astgen.Block(astgen.Return(astgen.BoolLit(false))),
 		},
+		astgen.Assign(
+			[]ast.Expr{astgen.Ident("pageItems"), astgen.Ident("ok")},
+			[]ast.Expr{astgen.TypeAssertExpr(
+				astgen.IndexExpr(astgen.Ident("pageObj"), astgen.Lit(envelope)),
+				astgen.SliceType(astgen.Ident("any")),
+			)},
+		),
+		astgen.If(
+			astgen.Unary(token.NOT, astgen.Ident("ok")),
+			astgen.Block(astgen.Return(astgen.BoolLit(false))),
+		),
 		astgen.If(
 			astgen.Equal(astgen.Call(astgen.Ident("len"), astgen.Ident("pageItems")), astgen.IntLit(0)),
 			astgen.Block(astgen.Return(astgen.BoolLit(false))),
@@ -627,8 +684,12 @@ func listOffsetNextBody(pageParam string) []ast.Stmt {
 // listCursorNextBody advances cursor pagination by reading the cursor token from
 // the response field named by cursorField and sending it back as the query
 // parameter of the same name, stopping when the response carries no cursor.
-func listCursorNextBody(cursorField string) []ast.Stmt {
-	return []ast.Stmt{
+// When envelope is non-empty the cursor is looked up at the top level first
+// (the common case: the cursor is a sibling of the envelope key) and, failing
+// that, inside the envelope object, so an enveloped cursor-paginated endpoint
+// does not silently truncate to page 1 (H-4).
+func listCursorNextBody(cursorField, envelope string) []ast.Stmt {
+	stmts := []ast.Stmt{
 		astgen.AssignSingle(
 			astgen.Ident("page"),
 			astgen.CompositeLit(astgen.MapType(astgen.Ident("string"), astgen.Ident("any"))),
@@ -647,6 +708,41 @@ func listCursorNextBody(cursorField string) []ast.Stmt {
 				astgen.Ident("string"),
 			)},
 		),
+	}
+	if envelope != "" {
+		// The cursor was not a top-level field; look inside the envelope object
+		// (e.g. {data: {items: [...], nextCursor: "..."}}). The inner type
+		// assertion uses a fresh ok2 so the outer ok is updated by the assignment
+		// inside the if body.
+		stmts = append(stmts,
+			astgen.If(
+				astgen.Unary(token.NOT, astgen.Ident("ok")),
+				astgen.Block(
+					&ast.IfStmt{
+						Init: astgen.Assign(
+							[]ast.Expr{astgen.Ident("inner"), astgen.Ident("ok2")},
+							[]ast.Expr{astgen.TypeAssertExpr(
+								astgen.IndexExpr(astgen.Ident("page"), astgen.Lit(envelope)),
+								astgen.MapType(astgen.Ident("string"), astgen.Ident("any")),
+							)},
+						),
+						Cond: astgen.Ident("ok2"),
+						Body: astgen.Block(
+							astgen.AssignStmt(
+								[]ast.Expr{astgen.Ident("cursor"), astgen.Ident("ok")},
+								[]ast.Expr{astgen.TypeAssertExpr(
+									astgen.IndexExpr(astgen.Ident("inner"), astgen.Lit(cursorField)),
+									astgen.Ident("string"),
+								)},
+								token.ASSIGN,
+							),
+						),
+					},
+				),
+			),
+		)
+	}
+	stmts = append(stmts,
 		astgen.If(
 			astgen.Binary(
 				astgen.Unary(token.NOT, astgen.Ident("ok")),
@@ -661,7 +757,8 @@ func listCursorNextBody(cursorField string) []ast.Stmt {
 			astgen.Ident("cursor"),
 		)),
 		astgen.Return(astgen.BoolLit(true)),
-	}
+	)
+	return stmts
 }
 
 // listLinkHeaderNextBody advances link_header pagination by extracting the next

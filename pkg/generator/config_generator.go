@@ -393,7 +393,13 @@ func convertSecurityScheme(providerName string, scheme ir.SecuritySchemeIR) conf
 			// pkg/generator/provider_auth.go). HeaderName is set only for header
 			// placement — query/cookie apiKeys carry no header, and EnvVar alone
 			// satisfies ValidateAuth ("apiKey requires header_name or env_var").
-			EnvVar: fmt.Sprintf("%s_%s", envPrefix(providerName), suffix),
+			EnvVar: scheme.EnvVar,
+		}
+		// A user-customized env var from generator.yaml `auth:` is preserved
+		// through the round-trip; otherwise recompute from the provider prefix
+		// (M-5).
+		if ac.EnvVar == "" {
+			ac.EnvVar = fmt.Sprintf("%s_%s", envPrefix(providerName), suffix)
 		}
 		if scheme.In == "header" || scheme.In == "" {
 			ac.HeaderName = scheme.NameField
@@ -404,44 +410,94 @@ func convertSecurityScheme(providerName string, scheme ir.SecuritySchemeIR) conf
 		case "basic":
 			return config.AuthConfig{Scheme: "basic"}
 		case "bearer":
-			return config.AuthConfig{
-				Scheme: "bearer",
-				EnvVar: fmt.Sprintf("%s_%s", envPrefix(providerName), suffix),
+			ac := config.AuthConfig{Scheme: "bearer", EnvVar: scheme.EnvVar}
+			if ac.EnvVar == "" {
+				ac.EnvVar = fmt.Sprintf("%s_%s", envPrefix(providerName), suffix)
 			}
+			return ac
 		default:
 			// Treat unknown HTTP schemes as bearer with an env hint.
-			return config.AuthConfig{
-				Scheme: "bearer",
-				EnvVar: fmt.Sprintf("%s_%s", envPrefix(providerName), suffix),
+			ac := config.AuthConfig{Scheme: "bearer", EnvVar: scheme.EnvVar}
+			if ac.EnvVar == "" {
+				ac.EnvVar = fmt.Sprintf("%s_%s", envPrefix(providerName), suffix)
 			}
+			return ac
 		}
 	case ir.SecuritySchemeOAuth2:
 		ac := config.AuthConfig{Scheme: "oauth2"}
 		ac.Flow = oauth2Flow(scheme.Flows)
-		if scheme.Flows != nil && scheme.Flows.ClientCredentials != nil {
-			ac.TokenURL = scheme.Flows.ClientCredentials.TokenURL
+		// A generator.yaml `auth:` flow selection overrides the derived flow so
+		// the round-trip preserves the user's choice (M-5).
+		if scheme.SelectedFlow != "" {
+			ac.Flow = scheme.SelectedFlow
 		}
-		if scheme.Flows != nil && scheme.Flows.AuthorizationCode != nil && ac.TokenURL == "" {
-			ac.TokenURL = scheme.Flows.AuthorizationCode.TokenURL
+		ac.TokenURL = oauth2TokenURL(scheme)
+		ac.ClientIDEnv = scheme.ClientIDEnv
+		if ac.ClientIDEnv == "" {
+			ac.ClientIDEnv = fmt.Sprintf("%s_CLIENT_ID", envPrefix(providerName))
 		}
-		ac.ClientIDEnv = fmt.Sprintf("%s_CLIENT_ID", envPrefix(providerName))
-		ac.ClientSecretEnv = fmt.Sprintf("%s_CLIENT_SECRET", envPrefix(providerName))
+		ac.ClientSecretEnv = scheme.ClientSecretEnv
+		if ac.ClientSecretEnv == "" {
+			ac.ClientSecretEnv = fmt.Sprintf("%s_CLIENT_SECRET", envPrefix(providerName))
+		}
 		return ac
 	case ir.SecuritySchemeOpenIDConnect:
 		// OpenID Connect discovery URLs are not token endpoints; route them to
 		// DiscoveryURL so downstream generators do not conflate the two.
-		return config.AuthConfig{
+		ac := config.AuthConfig{
 			Scheme:       "oauth2",
 			Flow:         "openIdConnect",
 			DiscoveryURL: scheme.OpenIDConnectURL,
-			ClientIDEnv:  fmt.Sprintf("%s_CLIENT_ID", envPrefix(providerName)),
+			ClientIDEnv:  scheme.ClientIDEnv,
 		}
+		if ac.ClientIDEnv == "" {
+			ac.ClientIDEnv = fmt.Sprintf("%s_CLIENT_ID", envPrefix(providerName))
+		}
+		return ac
 	default:
 		return config.AuthConfig{
 			Scheme: "apiKey",
 			EnvVar: fmt.Sprintf("%s_%s", envPrefix(providerName), suffix),
 		}
 	}
+}
+
+// oauth2TokenURL returns the token URL of the OAuth2 flow the generated provider
+// will use: the flow named by the scheme's SelectedFlow override when set,
+// otherwise the priority-order first declared flow. A generator.yaml `auth:`
+// token_url override is applied to that flow by ApplyAuthOverrides, so reading
+// the active flow here preserves the override through the round-trip (M-5).
+func oauth2TokenURL(scheme ir.SecuritySchemeIR) string {
+	if scheme.Flows == nil {
+		return ""
+	}
+	switch scheme.SelectedFlow {
+	case "client_credentials":
+		if scheme.Flows.ClientCredentials != nil {
+			return scheme.Flows.ClientCredentials.TokenURL
+		}
+	case "password":
+		if scheme.Flows.Password != nil {
+			return scheme.Flows.Password.TokenURL
+		}
+	case "authorization_code":
+		if scheme.Flows.AuthorizationCode != nil {
+			return scheme.Flows.AuthorizationCode.TokenURL
+		}
+	case "implicit":
+		if scheme.Flows.Implicit != nil {
+			return scheme.Flows.Implicit.TokenURL
+		}
+	}
+	switch {
+	case scheme.Flows.ClientCredentials != nil:
+		return scheme.Flows.ClientCredentials.TokenURL
+	case scheme.Flows.Password != nil:
+		return scheme.Flows.Password.TokenURL
+	case scheme.Flows.AuthorizationCode != nil:
+		return scheme.Flows.AuthorizationCode.TokenURL
+	}
+	return ""
 }
 
 func oauth2Flow(flows *ir.OAuthFlowsIR) string {
@@ -511,10 +567,11 @@ func convertTimeoutConfigIR(t *ir.TimeoutConfigIR) *config.TimeoutConfig {
 func convertListConfigSchema(schema ir.ObjectSchemaIR) []config.ListConfigSchema {
 	out := make([]config.ListConfigSchema, 0, len(schema.Attributes))
 	for _, attr := range schema.Attributes {
+		optional := attr.Optional || !attr.Required
 		out = append(out, config.ListConfigSchema{
 			Name:        attr.Name,
 			Type:        schemaTypeString(attr.Schema),
-			Optional:    attr.Optional || !attr.Required,
+			Optional:    &optional,
 			Description: attr.Description,
 		})
 	}

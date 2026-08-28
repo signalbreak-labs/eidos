@@ -121,7 +121,8 @@ CLI (cmd/eidos/) → Parser (pkg/parser/) → Transformer (pkg/transformer/)
   ephemeral/plan-modifier/validator inference; type mapping + overrides.
 - `pkg/ir/` — pure data structs decoupling parser/transformer from generation
   (`ProviderIR`, `ResourceIR`, `DataSourceIR`, `ActionIR`, `EphemeralResourceIR`,
-  `ListResourceIR`, `FunctionIR`, …). `server.go` defines the gRPC protocol model.
+  `ListResourceIR`, `FunctionIR`, …). `server.go` defines `ServerIR`/
+  `ServerVariableIR` for the OpenAPI `servers` URL template.
 - `pkg/generator/` — emits the provider via `pkg/generator/astgen`.
   `Harness` (`harness.go`) writes deterministically (lexicographic order,
   duplicate-path detection, all-or-nothing render). `recorder.go` does record

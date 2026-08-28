@@ -329,6 +329,12 @@ func TestLeadingVerb(t *testing.T) {
 		"getMyShip":     "get",
 		"purchase-ship": "purchase",
 		"archive.order": "archive",
+		"":              "",
+		"scrapship":     "scrapship", // all-lowercase: whole id
+		"-foo-bar":      "-foo-bar",  // leading separator at index 0: whole id lowercased
+		"-foo":          "-foo",      // leading separator, no later token
+		"Foo-bar":       "foo",       // leading uppercase with a later separator
+		"Foo":           "foo",       // leading uppercase, no separator
 	}
 	for in, want := range cases {
 		if got := leadingVerb(in); got != want {

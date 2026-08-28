@@ -483,6 +483,23 @@ func TestDataSourceFile_AdvancedAttributes(t *testing.T) {
 	}
 }
 
+// TestDataSourceFile_DataSourceLevelDeprecation verifies M-10: a data source
+// whose source operation is deprecated carries a DeprecationMessage on the data
+// source schema itself, so practitioners see it in plan output.
+func TestDataSourceFile_DataSourceLevelDeprecation(t *testing.T) {
+	ds := sampleDataSourceIR()
+	ds.DeprecationMessage = "This data source is deprecated."
+	file := DataSourceFile(ds, testClientImport)
+	var buf bytes.Buffer
+	if err := file.Render(&buf); err != nil {
+		t.Fatalf("Render() error = %v", err)
+	}
+	got := buf.String()
+	if !strings.Contains(got, `DeprecationMessage: "This data source is deprecated."`) {
+		t.Errorf("generated data source file missing data-source-level DeprecationMessage\n%s", got)
+	}
+}
+
 // TestDataSourceFile_DefaultComputed verifies that an attribute with neither
 // Required nor Optional nor Computed set defaults to Computed.
 func TestDataSourceFile_DefaultComputed(t *testing.T) {

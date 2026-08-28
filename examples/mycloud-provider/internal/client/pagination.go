@@ -2,6 +2,7 @@ package client
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"net/http"
 	"net/url"
@@ -126,13 +127,21 @@ func parseParams(rest string) []linkParam {
 	return params
 }
 
+// maxPages bounds ListAllPages so a misbehaving server that keeps returning a
+// next cursor or link cannot drive an unbounded request loop (M-9).
+const maxPages = 1000
+
 // ListAllPages repeatedly calls fetch with pagination parameters and collects all page bodies.
 // The next callback is invoked after each page; it may update params and should return false
-// when there are no more pages.
+// when there are no more pages. The loop is bounded by maxPages and stops early when a next
+// callback returns true without advancing the pagination parameters (loop-back detection), so
+// a server that echoes the same cursor cannot drive an infinite identical-request loop (M-9).
 func ListAllPages(ctx context.Context, params url.Values, fetch func(context.Context, url.Values) (*http.Response, error), next func(*http.Response, []byte, url.Values) bool) ([][]byte, error) {
 	var pages [][]byte
 	current := cloneValues(params)
-	for {
+	prev := cloneValues(params)
+	advanced := false
+	for page := 0; page < maxPages; page++ {
 		resp, err := fetch(ctx, current)
 		if err != nil {
 			return nil, err
@@ -146,7 +155,38 @@ func ListAllPages(ctx context.Context, params url.Values, fetch func(context.Con
 		if next == nil || !next(resp, body, current) {
 			return pages, nil
 		}
+		// Loop-back detection: a next callback that returns true without advancing
+		// the pagination parameters (e.g. the server echoed the same cursor) would
+		// otherwise issue an identical request forever. The guard only fires once
+		// the parameters have changed at least once, so link_header pagination
+		// (which advances via a response-embedded URL, not the parameters) is
+		// unaffected.
+		changed := !valuesEqual(current, prev)
+		if advanced && !changed {
+			return pages, nil
+		}
+		prev = cloneValues(current)
+		advanced = advanced || changed
 	}
+	return nil, fmt.Errorf("pagination exceeded %d pages; the server keeps returning a next page", maxPages)
+}
+
+func valuesEqual(a, b url.Values) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for key, av := range a {
+		bv, ok := b[key]
+		if !ok || len(av) != len(bv) {
+			return false
+		}
+		for i := range av {
+			if av[i] != bv[i] {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 func cloneValues(v url.Values) url.Values {

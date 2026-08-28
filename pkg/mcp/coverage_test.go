@@ -462,3 +462,123 @@ func TestHandleGenerate_VerifyCompiles(t *testing.T) {
 		t.Fatalf("expected verify_ok=true, got false; verify_output=%s diagnostics=%+v", out.VerifyOutput, out.Diagnostics)
 	}
 }
+
+// TestAddConsumed covers the empty-method/path skip and the key insertion of
+// addConsumed.
+func TestAddConsumed(t *testing.T) {
+	consumed := map[string]bool{}
+	addConsumed(consumed, "", "/pets")
+	addConsumed(consumed, "GET", "")
+	if len(consumed) != 0 {
+		t.Errorf("empty method/path must be skipped, got %+v", consumed)
+	}
+	addConsumed(consumed, "GET", "/pets")
+	if !consumed["GET /pets"] {
+		t.Errorf("expected GET /pets consumed, got %+v", consumed)
+	}
+}
+
+// TestTruncateForJSON covers the pass-through and truncation branches.
+func TestTruncateForJSON(t *testing.T) {
+	if got := truncateForJSON("short", 10); got != "short" {
+		t.Errorf("short string = %q, want unchanged", got)
+	}
+	if got := truncateForJSON("1234567890", 10); got != "1234567890" {
+		t.Errorf("exact-length string = %q, want unchanged", got)
+	}
+	if got := truncateForJSON("this is a long string", 7); got != "this is..." {
+		t.Errorf("truncated = %q, want %q", got, "this is...")
+	}
+}
+
+// TestHandleValidateSchemas_ErrorPaths drives the normalizeSpec, normalizeConfig,
+// and mergeConfigIntoSpec error branches of HandleValidateSchemas, each of which
+// must produce a valid=false result with diagnostics rather than an error.
+func TestHandleValidateSchemas_ErrorPaths(t *testing.T) {
+	// normalizeSpec rejects an unsupported spec type.
+	_, out, err := HandleValidateSchemas(context.Background(), nil, ValidateSchemasArgs{Spec: 42})
+	if err != nil {
+		t.Fatalf("HandleValidateSchemas error: %v", err)
+	}
+	if out.Valid || len(out.Diagnostics) == 0 {
+		t.Errorf("expected invalid result for unsupported spec type, got %+v", out)
+	}
+
+	// normalizeConfig fails when the config looks like a file ref that cannot load.
+	_, out, err = HandleValidateSchemas(context.Background(), nil, ValidateSchemasArgs{Spec: petStoreSpec, Config: "file:///nonexistent-eidos-config.yaml"})
+	if err != nil {
+		t.Fatalf("HandleValidateSchemas error: %v", err)
+	}
+	if out.Valid || len(out.Diagnostics) == 0 {
+		t.Errorf("expected invalid result for unresolvable config, got %+v", out)
+	}
+
+	// mergeConfigIntoSpec fails when the spec is not JSON/YAML and a config is set.
+	_, out, err = HandleValidateSchemas(context.Background(), nil, ValidateSchemasArgs{Spec: "not: [valid", Config: "provider:\n  name: x\n"})
+	if err != nil {
+		t.Fatalf("HandleValidateSchemas error: %v", err)
+	}
+	if out.Valid || len(out.Diagnostics) == 0 {
+		t.Errorf("expected invalid result for unmergeable spec, got %+v", out)
+	}
+}
+
+// TestHandleOverridePreview_ErrorPaths drives the same three error branches for
+// eidos/override-preview.
+func TestHandleOverridePreview_ErrorPaths(t *testing.T) {
+	// normalizeSpec rejects an unsupported spec type.
+	_, out, err := HandleOverridePreview(context.Background(), nil, OverridePreviewArgs{Spec: 42, Config: "provider:\n  name: x\n"})
+	if err != nil {
+		t.Fatalf("HandleOverridePreview error: %v", err)
+	}
+	if out.Valid || len(out.Diagnostics) == 0 {
+		t.Errorf("expected invalid result for unsupported spec type, got %+v", out)
+	}
+
+	// normalizeConfig fails when the config looks like a file ref that cannot load.
+	_, out, err = HandleOverridePreview(context.Background(), nil, OverridePreviewArgs{Spec: petStoreSpec, Config: "file:///nonexistent-eidos-config.yaml"})
+	if err != nil {
+		t.Fatalf("HandleOverridePreview error: %v", err)
+	}
+	if out.Valid || len(out.Diagnostics) == 0 {
+		t.Errorf("expected invalid result for unresolvable config, got %+v", out)
+	}
+
+	// mergeConfigIntoSpec fails when the spec is not JSON/YAML and a config is set.
+	_, out, err = HandleOverridePreview(context.Background(), nil, OverridePreviewArgs{Spec: "not: [valid", Config: "provider:\n  name: x\n"})
+	if err != nil {
+		t.Fatalf("HandleOverridePreview error: %v", err)
+	}
+	if out.Valid || len(out.Diagnostics) == 0 {
+		t.Errorf("expected invalid result for unmergeable spec, got %+v", out)
+	}
+}
+
+// TestSummarizeResources_UpdateAndWired covers the Update branch and the Wired
+// computation in summarizeResources.
+func TestSummarizeResources_UpdateAndWired(t *testing.T) {
+	rs := summarizeResources([]ir.ResourceIR{
+		{
+			Name: "pet", TypeName: "pet",
+			CRUDMapping: ir.CRUDMappingIR{
+				Create: ir.OperationMappingIR{Method: "POST", PathTemplate: "/pets"},
+				Read:   ir.OperationMappingIR{Method: "GET", PathTemplate: "/pets/{id}"},
+				Update: &ir.OperationMappingIR{Method: "PUT", PathTemplate: "/pets/{id}"},
+				Delete: ir.OperationMappingIR{Method: "DELETE", PathTemplate: "/pets/{id}"},
+			},
+		},
+		{
+			Name: "stub", TypeName: "stub",
+			CRUDMapping: ir.CRUDMappingIR{Create: ir.OperationMappingIR{Method: "POST", PathTemplate: "/stubs"}},
+		},
+	})
+	if len(rs) != 2 {
+		t.Fatalf("summarizeResources = %d, want 2", len(rs))
+	}
+	if rs[0].Update != "PUT /pets/{id}" || !rs[0].Wired {
+		t.Errorf("wired resource = %+v", rs[0])
+	}
+	if rs[1].Wired {
+		t.Errorf("stub resource must not be wired, got %+v", rs[1])
+	}
+}

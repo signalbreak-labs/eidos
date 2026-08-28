@@ -525,12 +525,17 @@ type Schema struct {
 	Deprecated            bool                `json:"deprecated,omitempty"`
 	Example               any                 `json:"example,omitempty"`
 	Examples              map[string]*Example `json:"examples,omitempty"`
-	XML                   *XML                `json:"xml,omitempty"`
-	ExternalDocs          *ExternalDocs       `json:"externalDocs,omitempty"`
-	Const                 any                 `json:"const,omitempty"`
-	ContentMediaType      string              `json:"contentMediaType,omitempty"`
-	ContentEncoding       string              `json:"contentEncoding,omitempty"`
-	ContentSchema         *Schema             `json:"contentSchema,omitempty"`
+	// ExamplesArray holds the OpenAPI 3.1 / JSON Schema 2020-12 form of the
+	// schema-level "examples" keyword: an array of raw values. The 3.0 form is a
+	// map of Example objects (Examples); the two forms are mutually exclusive per
+	// version, and both are preserved so a valid 3.1 spec is not dropped (L-1).
+	ExamplesArray    []any         `json:"examplesArray,omitempty"`
+	XML              *XML          `json:"xml,omitempty"`
+	ExternalDocs     *ExternalDocs `json:"externalDocs,omitempty"`
+	Const            any           `json:"const,omitempty"`
+	ContentMediaType string        `json:"contentMediaType,omitempty"`
+	ContentEncoding  string        `json:"contentEncoding,omitempty"`
+	ContentSchema    *Schema       `json:"contentSchema,omitempty"`
 	// Opaque is set by the parser when this schema (or a schema referenced by
 	// one of its $refs) participates in a circular reference. Downstream consumers
 	// should treat Opaque schemas as opaque reference boundaries rather than

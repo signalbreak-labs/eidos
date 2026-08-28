@@ -1,10 +1,12 @@
 package transformer
 
 import (
+	"fmt"
 	"sort"
 	"strings"
 	"unicode"
 
+	"github.com/signalbreak-labs/eidos/pkg/diagnostics"
 	"github.com/signalbreak-labs/eidos/pkg/ir"
 )
 
@@ -296,28 +298,54 @@ func ephemeralName(op Operation, path string) string {
 // password-format properties are Sensitive); a non-object response contributes
 // a single Computed `result` attribute.
 func ResultSchemaFromResponse(spec *SchemaSpec) ir.ObjectSchemaIR {
+	return ResultSchemaFromResponseWithDiagnostics(spec, nil)
+}
+
+// ResultSchemaFromResponseWithDiagnostics is ResultSchemaFromResponse that
+// appends fail-loud diagnostics to diags (a nil diags is allowed and simply
+// suppresses emission). It emits a Warning when two distinct response properties
+// sanitize to the same Terraform attribute name (e.g. "fooBar" and "foo_bar"),
+// dropping the later property so the schema never carries duplicate attributes
+// (H-3).
+func ResultSchemaFromResponseWithDiagnostics(spec *SchemaSpec, diags *diagnostics.Diagnostics) ir.ObjectSchemaIR {
 	if spec == nil {
 		return ir.ObjectSchemaIR{}
 	}
 	switch strings.ToLower(strings.TrimSpace(spec.Type)) {
 	case "object":
-		var attrs []ir.AttributeIR
-		for name, prop := range spec.Properties {
+		names := make([]string, 0, len(spec.Properties))
+		for name := range spec.Properties {
+			names = append(names, name)
+		}
+		sort.Strings(names)
+		attrs := make([]ir.AttributeIR, 0, len(names))
+		seen := make(map[string]string, len(names))
+		for _, name := range names {
+			snake := SanitizeAttributeName(name)
+			if prev, dup := seen[snake]; dup {
+				if diags != nil {
+					*diags = diags.Append(diagnostics.Diagnostic{
+						Severity: diagnostics.Warning,
+						Summary:  "duplicate attribute after name normalization",
+						Detail:   fmt.Sprintf("properties %q and %q both normalize to %q; dropping %q", prev, name, snake, name),
+					})
+				}
+				continue
+			}
+			seen[snake] = name
+			prop := spec.Properties[name]
 			schema := schemaIRFromSpec(prop)
 			if prop.WriteOnly || strings.EqualFold(prop.Format, "password") {
 				schema.Sensitive = true
 			}
 			attrs = append(attrs, ir.AttributeIR{
-				Name:        SanitizeAttributeName(name),
+				Name:        snake,
 				Schema:      schema,
 				Description: prop.Description,
 				Computed:    true,
 				Sensitive:   schema.Sensitive,
 			})
 		}
-		sort.Slice(attrs, func(i, j int) bool {
-			return attrs[i].Name < attrs[j].Name
-		})
 		return ir.ObjectSchemaIR{Attributes: attrs}
 	default:
 		return ir.ObjectSchemaIR{

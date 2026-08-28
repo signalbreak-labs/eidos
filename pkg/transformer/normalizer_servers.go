@@ -1,6 +1,9 @@
 package transformer
 
-import "github.com/signalbreak-labs/eidos/pkg/ir"
+import (
+	"github.com/signalbreak-labs/eidos/pkg/ir"
+	"github.com/signalbreak-labs/eidos/pkg/parser"
+)
 
 // Server is a version-agnostic OpenAPI server entry used before the document is
 // transformed into the Terraform-oriented IR.
@@ -43,6 +46,40 @@ func NormalizeOperationServers(global, pathItem, operation []Server) []ir.Server
 	out := make([]ir.ServerIR, 0, len(src))
 	for _, s := range src {
 		out = append(out, toServerIR(s))
+	}
+	return out
+}
+
+// parserServersToTransformer converts parser-level servers (whose variables are
+// pointer values and which carry source locations) into the transformer's
+// version-agnostic Server form. The nil-vs-empty distinction is preserved so
+// NormalizeOperationServers can honor an explicit empty override (M-15).
+func parserServersToTransformer(servers []parser.Server) []Server {
+	if servers == nil {
+		return nil
+	}
+	out := make([]Server, 0, len(servers))
+	for _, s := range servers {
+		sv := Server{
+			URL:         s.URL,
+			Description: s.Description,
+		}
+		if len(s.Variables) > 0 {
+			sv.Variables = make(map[string]ServerVariable, len(s.Variables))
+			for name, v := range s.Variables {
+				if v == nil {
+					continue
+				}
+				enum := make([]string, len(v.Enum))
+				copy(enum, v.Enum)
+				sv.Variables[name] = ServerVariable{
+					Default:     v.Default,
+					Enum:        enum,
+					Description: v.Description,
+				}
+			}
+		}
+		out = append(out, sv)
 	}
 	return out
 }

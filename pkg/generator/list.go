@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"go/ast"
 	"go/token"
-	"path/filepath"
+	"path"
 	"strings"
 
 	"github.com/signalbreak-labs/eidos/pkg/generator/astgen"
@@ -30,14 +30,14 @@ const listResourceSetBlockFallbackComment = "Set-nested blocks are not supported
 // (planListResourceWiring), the generated List method streams real instances
 // from the API instead of the honest scaffold diagnostic.
 func ListResourceFile(lr ir.ListResourceIR, clientImport string) File {
-	path := filepath.Join("internal", "provider", fmt.Sprintf("list_%s.go", naming.SnakeCase(lr.Name)))
+	relPath := path.Join("internal", "provider", fmt.Sprintf("list_%s.go", naming.SnakeCase(lr.Name)))
 	file, err := renderEntitySafely(func() (*ast.File, error) {
 		return generateListResourceFile(lr, clientImport), nil
 	})
 	if err != nil {
-		return ErrorFile(path, err)
+		return ErrorFile(relPath, err)
 	}
-	return GoCodeAST(path, file)
+	return GoCodeAST(relPath, file)
 }
 
 // ListResourceFiles returns the generated list resource files for every
@@ -456,15 +456,15 @@ func listResourceAttributeExpr(attr ir.AttributeIR, resourceName string) ast.Exp
 // can be reported with their full location. resourceName is included in the panic
 // message alongside the path.
 func listResourceAttributeExprWithPath(attr ir.AttributeIR, parentPath, resourceName string) ast.Expr {
-	path := fullAttrPath(parentPath, attr.Name)
-	expr := listResourceFrameworkAttributeExpr(attr, path, resourceName)
+	attrPath := fullAttrPath(parentPath, attr.Name)
+	expr := listResourceFrameworkAttributeExpr(attr, attrPath, resourceName)
 	if expr == nil {
 		// A nested attribute that cannot be represented (e.g. a nested
 		// collection) is dropped by the nested map builder; a top-level
 		// attribute should never be nil because the framework expr falls back
 		// to DynamicAttribute (G2).
 		if parentPath == "" {
-			panic(fmt.Sprintf("list resource %q attribute %q: schema has no recognizable type or nested shape", resourceName, path))
+			panic(fmt.Sprintf("list resource %q attribute %q: schema has no recognizable type or nested shape", resourceName, attrPath))
 		}
 		return nil
 	}

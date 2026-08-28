@@ -1,1017 +1,1031 @@
-[
-  {
-    "path": ".github/workflows/release.yml",
-    "reason": "GitHub Actions release workflow",
-    "body_hash": "0c17b10fc57196ff"
-  },
-  {
-    "path": ".goreleaser.yml",
-    "reason": "GoReleaser release configuration",
-    "body_hash": "19f66476cb393ebc"
-  },
-  {
-    "path": "GNUmakefile",
-    "reason": "build and test automation",
-    "body_hash": "771e0e9e2aefba94"
-  },
-  {
-    "path": "README.md",
-    "reason": "provider overview and usage guide",
-    "body_hash": "9d5ef0b6b6eb0199"
-  },
-  {
-    "path": "docs/actions/create_pull_request.md",
-    "reason": "documentation for action create_pull_request",
-    "body_hash": "213de6e7da1e485e"
-  },
-  {
-    "path": "docs/actions/create_task.md",
-    "reason": "documentation for action create_task",
-    "body_hash": "f90a425eaefcd038"
-  },
-  {
-    "path": "docs/actions/update_pull_request.md",
-    "reason": "documentation for action update_pull_request",
-    "body_hash": "84a90190210921e8"
-  },
-  {
-    "path": "docs/actions/update_task.md",
-    "reason": "documentation for action update_task",
-    "body_hash": "4ee6c05f31197c18"
-  },
-  {
-    "path": "docs/data-sources/get_branch.md",
-    "reason": "documentation for data source get_branch",
-    "body_hash": "1fb9b42da673d38f"
-  },
-  {
-    "path": "docs/data-sources/get_commit.md",
-    "reason": "documentation for data source get_commit",
-    "body_hash": "70561d85947ac3e5"
-  },
-  {
-    "path": "docs/data-sources/get_member.md",
-    "reason": "documentation for data source get_member",
-    "body_hash": "088bd7309286c6ef"
-  },
-  {
-    "path": "docs/data-sources/get_pull_request.md",
-    "reason": "documentation for data source get_pull_request",
-    "body_hash": "f49e9ead7cb0f159"
-  },
-  {
-    "path": "docs/data-sources/get_task.md",
-    "reason": "documentation for data source get_task",
-    "body_hash": "5a6ee03c5fb1f09d"
-  },
-  {
-    "path": "docs/data-sources/list_branches.md",
-    "reason": "documentation for data source list_branches",
-    "body_hash": "31b4367ee86590dd"
-  },
-  {
-    "path": "docs/data-sources/list_commits.md",
-    "reason": "documentation for data source list_commits",
-    "body_hash": "5cda138a36e360d5"
-  },
-  {
-    "path": "docs/data-sources/list_configs.md",
-    "reason": "documentation for data source list_configs",
-    "body_hash": "688d95ebcf024730"
-  },
-  {
-    "path": "docs/data-sources/list_instances.md",
-    "reason": "documentation for data source list_instances",
-    "body_hash": "1b0a9f3886dbdd2c"
-  },
-  {
-    "path": "docs/data-sources/list_members.md",
-    "reason": "documentation for data source list_members",
-    "body_hash": "f9c21688616c78e2"
-  },
-  {
-    "path": "docs/data-sources/list_networks.md",
-    "reason": "documentation for data source list_networks",
-    "body_hash": "11a047bb181c7f41"
-  },
-  {
-    "path": "docs/data-sources/list_projects_for_organization.md",
-    "reason": "documentation for data source list_projects_for_organization",
-    "body_hash": "6abe662ac4101d93"
-  },
-  {
-    "path": "docs/data-sources/list_pull_requests.md",
-    "reason": "documentation for data source list_pull_requests",
-    "body_hash": "ab365fe6a0fd39f0"
-  },
-  {
-    "path": "docs/data-sources/list_secrets.md",
-    "reason": "documentation for data source list_secrets",
-    "body_hash": "cc827754c75067b6"
-  },
-  {
-    "path": "docs/data-sources/list_stacks.md",
-    "reason": "documentation for data source list_stacks",
-    "body_hash": "3a20277369b68fe3"
-  },
-  {
-    "path": "docs/data-sources/list_tasks.md",
-    "reason": "documentation for data source list_tasks",
-    "body_hash": "3ee42a990501a6f9"
-  },
-  {
-    "path": "docs/data-sources/list_workspaces.md",
-    "reason": "documentation for data source list_workspaces",
-    "body_hash": "c7b8e9fc709320ba"
-  },
-  {
-    "path": "docs/index.md",
-    "reason": "provider overview and authentication guide",
-    "body_hash": "49bedd4604d81026"
-  },
-  {
-    "path": "docs/list-resources/list_branches.md",
-    "reason": "documentation for list resource list_branches",
-    "body_hash": "46a7755bbe10d2b4"
-  },
-  {
-    "path": "docs/list-resources/list_commits.md",
-    "reason": "documentation for list resource list_commits",
-    "body_hash": "29f6350bc209351b"
-  },
-  {
-    "path": "docs/list-resources/list_configs.md",
-    "reason": "documentation for list resource list_configs",
-    "body_hash": "e22136da5a3581a8"
-  },
-  {
-    "path": "docs/list-resources/list_instances.md",
-    "reason": "documentation for list resource list_instances",
-    "body_hash": "949504a965a8fad9"
-  },
-  {
-    "path": "docs/list-resources/list_members.md",
-    "reason": "documentation for list resource list_members",
-    "body_hash": "c29c79113318c5e4"
-  },
-  {
-    "path": "docs/list-resources/list_networks.md",
-    "reason": "documentation for list resource list_networks",
-    "body_hash": "45b0824216dd2efc"
-  },
-  {
-    "path": "docs/list-resources/list_projects_for_organization.md",
-    "reason": "documentation for list resource list_projects_for_organization",
-    "body_hash": "693511b9302bc1ed"
-  },
-  {
-    "path": "docs/list-resources/list_pull_requests.md",
-    "reason": "documentation for list resource list_pull_requests",
-    "body_hash": "f499741ff30dc3d7"
-  },
-  {
-    "path": "docs/list-resources/list_secrets.md",
-    "reason": "documentation for list resource list_secrets",
-    "body_hash": "39dbf928846a8ab6"
-  },
-  {
-    "path": "docs/list-resources/list_stacks.md",
-    "reason": "documentation for list resource list_stacks",
-    "body_hash": "4504d13bc41b8ae6"
-  },
-  {
-    "path": "docs/list-resources/list_tasks.md",
-    "reason": "documentation for list resource list_tasks",
-    "body_hash": "93bfc5b80c802ef9"
-  },
-  {
-    "path": "docs/list-resources/list_workspaces.md",
-    "reason": "documentation for list resource list_workspaces",
-    "body_hash": "5aba43f6c1fb3014"
-  },
-  {
-    "path": "docs/resources/config.md",
-    "reason": "documentation for resource config",
-    "body_hash": "a08d1166bd466cb4"
-  },
-  {
-    "path": "docs/resources/instance.md",
-    "reason": "documentation for resource instance",
-    "body_hash": "bf2d9b6a4be4b7c8"
-  },
-  {
-    "path": "docs/resources/network.md",
-    "reason": "documentation for resource network",
-    "body_hash": "901ca92ac1b45ec0"
-  },
-  {
-    "path": "docs/resources/project.md",
-    "reason": "documentation for resource project",
-    "body_hash": "aab38e7fbd509f15"
-  },
-  {
-    "path": "docs/resources/secret.md",
-    "reason": "documentation for resource secret",
-    "body_hash": "257257672c4c0da9"
-  },
-  {
-    "path": "docs/resources/stack.md",
-    "reason": "documentation for resource stack",
-    "body_hash": "2d8ff2eda114e92b"
-  },
-  {
-    "path": "docs/resources/workspace.md",
-    "reason": "documentation for resource workspace",
-    "body_hash": "f8d736703aad077d"
-  },
-  {
-    "path": "examples/actions/create_pull_request/action.tf",
-    "reason": "example for action create_pull_request",
-    "body_hash": "47566b8506fe4bbd"
-  },
-  {
-    "path": "examples/actions/create_task/action.tf",
-    "reason": "example for action create_task",
-    "body_hash": "69f9c7727fc89d14"
-  },
-  {
-    "path": "examples/actions/update_pull_request/action.tf",
-    "reason": "example for action update_pull_request",
-    "body_hash": "a456d9c48b963b42"
-  },
-  {
-    "path": "examples/actions/update_task/action.tf",
-    "reason": "example for action update_task",
-    "body_hash": "e3c9ea4ff63dd1c3"
-  },
-  {
-    "path": "examples/data-sources/get_branch/data-source.tf",
-    "reason": "example for data source get_branch",
-    "body_hash": "014bc2d19536de43"
-  },
-  {
-    "path": "examples/data-sources/get_commit/data-source.tf",
-    "reason": "example for data source get_commit",
-    "body_hash": "d24da42ac835124d"
-  },
-  {
-    "path": "examples/data-sources/get_member/data-source.tf",
-    "reason": "example for data source get_member",
-    "body_hash": "3b5c08eb0cde1c77"
-  },
-  {
-    "path": "examples/data-sources/get_pull_request/data-source.tf",
-    "reason": "example for data source get_pull_request",
-    "body_hash": "7484b709e613a4e6"
-  },
-  {
-    "path": "examples/data-sources/get_task/data-source.tf",
-    "reason": "example for data source get_task",
-    "body_hash": "ea0797df89780158"
-  },
-  {
-    "path": "examples/data-sources/list_branches/data-source.tf",
-    "reason": "example for data source list_branches",
-    "body_hash": "9f043c93346644fa"
-  },
-  {
-    "path": "examples/data-sources/list_commits/data-source.tf",
-    "reason": "example for data source list_commits",
-    "body_hash": "b91999b1eee833cc"
-  },
-  {
-    "path": "examples/data-sources/list_configs/data-source.tf",
-    "reason": "example for data source list_configs",
-    "body_hash": "dcae1633aea128ff"
-  },
-  {
-    "path": "examples/data-sources/list_instances/data-source.tf",
-    "reason": "example for data source list_instances",
-    "body_hash": "dabf93f07f4d4b48"
-  },
-  {
-    "path": "examples/data-sources/list_members/data-source.tf",
-    "reason": "example for data source list_members",
-    "body_hash": "61efb34a596b2151"
-  },
-  {
-    "path": "examples/data-sources/list_networks/data-source.tf",
-    "reason": "example for data source list_networks",
-    "body_hash": "8d33d14ebf859597"
-  },
-  {
-    "path": "examples/data-sources/list_projects_for_organization/data-source.tf",
-    "reason": "example for data source list_projects_for_organization",
-    "body_hash": "16c8dcea18b0718c"
-  },
-  {
-    "path": "examples/data-sources/list_pull_requests/data-source.tf",
-    "reason": "example for data source list_pull_requests",
-    "body_hash": "d091db61d3bd4158"
-  },
-  {
-    "path": "examples/data-sources/list_secrets/data-source.tf",
-    "reason": "example for data source list_secrets",
-    "body_hash": "a9ea79751d131a41"
-  },
-  {
-    "path": "examples/data-sources/list_stacks/data-source.tf",
-    "reason": "example for data source list_stacks",
-    "body_hash": "ffe863090a65c8a5"
-  },
-  {
-    "path": "examples/data-sources/list_tasks/data-source.tf",
-    "reason": "example for data source list_tasks",
-    "body_hash": "217e02d7aad40b2c"
-  },
-  {
-    "path": "examples/data-sources/list_workspaces/data-source.tf",
-    "reason": "example for data source list_workspaces",
-    "body_hash": "32ec7e4f14549d6c"
-  },
-  {
-    "path": "examples/resources/config/resource.tf",
-    "reason": "example for resource config",
-    "body_hash": "3908919a2aec584e"
-  },
-  {
-    "path": "examples/resources/instance/resource.tf",
-    "reason": "example for resource instance",
-    "body_hash": "8f3ae8cec11ae3ee"
-  },
-  {
-    "path": "examples/resources/network/resource.tf",
-    "reason": "example for resource network",
-    "body_hash": "530b46c75772fee2"
-  },
-  {
-    "path": "examples/resources/project/resource.tf",
-    "reason": "example for resource project",
-    "body_hash": "008f931471218a0b"
-  },
-  {
-    "path": "examples/resources/secret/resource.tf",
-    "reason": "example for resource secret",
-    "body_hash": "5133dacb44aab7b1"
-  },
-  {
-    "path": "examples/resources/stack/resource.tf",
-    "reason": "example for resource stack",
-    "body_hash": "ed317b068cb618d3"
-  },
-  {
-    "path": "examples/resources/workspace/resource.tf",
-    "reason": "example for resource workspace",
-    "body_hash": "d8abe4fa4561088a"
-  },
-  {
-    "path": "generator.yaml",
-    "reason": "generated generator configuration",
-    "body_hash": "0faeee1ac8d728fc"
-  },
-  {
-    "path": "go.mod",
-    "reason": "Go module definition",
-    "body_hash": "4f60d96a32643683"
-  },
-  {
-    "path": "internal/client/auth.go",
-    "reason": "authentication middleware",
-    "body_hash": "0beee19e2c55a414"
-  },
-  {
-    "path": "internal/client/auth_test.go",
-    "reason": "authentication middleware unit tests",
-    "body_hash": "e7953227ea13b9b9"
-  },
-  {
-    "path": "internal/client/client.go",
-    "reason": "generated HTTP client",
-    "body_hash": "c3cf6b871cbd6898"
-  },
-  {
-    "path": "internal/client/client_test.go",
-    "reason": "generated HTTP client unit tests",
-    "body_hash": "9bac472b0d2d50be"
-  },
-  {
-    "path": "internal/client/errors.go",
-    "reason": "typed API error helpers",
-    "body_hash": "7b69b0dda148a6d5"
-  },
-  {
-    "path": "internal/client/logging.go",
-    "reason": "request/response trace logging",
-    "body_hash": "9defaf534cc08195"
-  },
-  {
-    "path": "internal/client/logging_test.go",
-    "reason": "trace logging unit tests",
-    "body_hash": "3d1b897c8a09d762"
-  },
-  {
-    "path": "internal/client/models.go",
-    "reason": "request/response model structs",
-    "body_hash": "1efd23827e83c14f"
-  },
-  {
-    "path": "internal/client/pagination.go",
-    "reason": "pagination helpers",
-    "body_hash": "80e851435c7a25d6"
-  },
-  {
-    "path": "internal/client/retry.go",
-    "reason": "retry logic with exponential backoff",
-    "body_hash": "bf53c919903fb008"
-  },
-  {
-    "path": "internal/provider/action_create_pull_request.go",
-    "reason": "action mycloud_create_pull_request",
-    "body_hash": "db87711264999f83"
-  },
-  {
-    "path": "internal/provider/action_create_pull_request_remote_test.go",
-    "reason": "coverage tests for action create_pull_request remote helper",
-    "body_hash": "f2d0fd3cf7ab5948"
-  },
-  {
-    "path": "internal/provider/action_create_task.go",
-    "reason": "action mycloud_create_task",
-    "body_hash": "1a71424da26065b3"
-  },
-  {
-    "path": "internal/provider/action_create_task_remote_test.go",
-    "reason": "coverage tests for action create_task remote helper",
-    "body_hash": "87424f94af7c244a"
-  },
-  {
-    "path": "internal/provider/action_update_pull_request.go",
-    "reason": "action mycloud_update_pull_request",
-    "body_hash": "fe334cdc792dd8a0"
-  },
-  {
-    "path": "internal/provider/action_update_pull_request_remote_test.go",
-    "reason": "coverage tests for action update_pull_request remote helper",
-    "body_hash": "73176b020f5310cc"
-  },
-  {
-    "path": "internal/provider/action_update_task.go",
-    "reason": "action mycloud_update_task",
-    "body_hash": "9c72b1d04c39df66"
-  },
-  {
-    "path": "internal/provider/action_update_task_remote_test.go",
-    "reason": "coverage tests for action update_task remote helper",
-    "body_hash": "a7828b98d9072aca"
-  },
-  {
-    "path": "internal/provider/data_source_get_branch.go",
-    "reason": "data source mycloud_get_branch",
-    "body_hash": "a58f1aed5aa84253"
-  },
-  {
-    "path": "internal/provider/data_source_get_branch_remote_test.go",
-    "reason": "coverage tests for data source get_branch remote helpers",
-    "body_hash": "435d7b084ff33211"
-  },
-  {
-    "path": "internal/provider/data_source_get_branch_test.go",
-    "reason": "unit tests for data source get_branch",
-    "body_hash": "1355bab2d26edbd7"
-  },
-  {
-    "path": "internal/provider/data_source_get_commit.go",
-    "reason": "data source mycloud_get_commit",
-    "body_hash": "0fdfd5241020ee5c"
-  },
-  {
-    "path": "internal/provider/data_source_get_commit_remote_test.go",
-    "reason": "coverage tests for data source get_commit remote helpers",
-    "body_hash": "484be85682d731cc"
-  },
-  {
-    "path": "internal/provider/data_source_get_commit_test.go",
-    "reason": "unit tests for data source get_commit",
-    "body_hash": "b6732bdfba2ae28f"
-  },
-  {
-    "path": "internal/provider/data_source_get_member.go",
-    "reason": "data source mycloud_get_member",
-    "body_hash": "dde52bb2f2d84e50"
-  },
-  {
-    "path": "internal/provider/data_source_get_member_remote_test.go",
-    "reason": "coverage tests for data source get_member remote helpers",
-    "body_hash": "b04e67e7e7d0283b"
-  },
-  {
-    "path": "internal/provider/data_source_get_member_test.go",
-    "reason": "unit tests for data source get_member",
-    "body_hash": "765f81372af8b25f"
-  },
-  {
-    "path": "internal/provider/data_source_get_pull_request.go",
-    "reason": "data source mycloud_get_pull_request",
-    "body_hash": "e1782f6da83ab971"
-  },
-  {
-    "path": "internal/provider/data_source_get_pull_request_remote_test.go",
-    "reason": "coverage tests for data source get_pull_request remote helpers",
-    "body_hash": "d4c9466bf6f1b076"
-  },
-  {
-    "path": "internal/provider/data_source_get_pull_request_test.go",
-    "reason": "unit tests for data source get_pull_request",
-    "body_hash": "462d771be6099e77"
-  },
-  {
-    "path": "internal/provider/data_source_get_task.go",
-    "reason": "data source mycloud_get_task",
-    "body_hash": "a221f3860aef18c0"
-  },
-  {
-    "path": "internal/provider/data_source_get_task_remote_test.go",
-    "reason": "coverage tests for data source get_task remote helpers",
-    "body_hash": "0aca2abba9a5569c"
-  },
-  {
-    "path": "internal/provider/data_source_get_task_test.go",
-    "reason": "unit tests for data source get_task",
-    "body_hash": "39405048c4531cf7"
-  },
-  {
-    "path": "internal/provider/data_source_list_branches.go",
-    "reason": "data source mycloud_list_branches",
-    "body_hash": "f85a509c407e613b"
-  },
-  {
-    "path": "internal/provider/data_source_list_branches_remote_test.go",
-    "reason": "coverage tests for data source list_branches remote helpers",
-    "body_hash": "c165932dbc7d5899"
-  },
-  {
-    "path": "internal/provider/data_source_list_branches_test.go",
-    "reason": "unit tests for data source list_branches",
-    "body_hash": "aaffcd54b44be70f"
-  },
-  {
-    "path": "internal/provider/data_source_list_commits.go",
-    "reason": "data source mycloud_list_commits",
-    "body_hash": "38fcc6608fbf78bd"
-  },
-  {
-    "path": "internal/provider/data_source_list_commits_remote_test.go",
-    "reason": "coverage tests for data source list_commits remote helpers",
-    "body_hash": "e61c6bfc9e2caa09"
-  },
-  {
-    "path": "internal/provider/data_source_list_commits_test.go",
-    "reason": "unit tests for data source list_commits",
-    "body_hash": "17980ee32206806b"
-  },
-  {
-    "path": "internal/provider/data_source_list_configs.go",
-    "reason": "data source mycloud_list_configs",
-    "body_hash": "4b3e9eb1c7a1cc81"
-  },
-  {
-    "path": "internal/provider/data_source_list_configs_remote_test.go",
-    "reason": "coverage tests for data source list_configs remote helpers",
-    "body_hash": "8569fb6b235e8c74"
-  },
-  {
-    "path": "internal/provider/data_source_list_configs_test.go",
-    "reason": "unit tests for data source list_configs",
-    "body_hash": "480c5791add71afb"
-  },
-  {
-    "path": "internal/provider/data_source_list_instances.go",
-    "reason": "data source mycloud_list_instances",
-    "body_hash": "d59ea11678366b85"
-  },
-  {
-    "path": "internal/provider/data_source_list_instances_remote_test.go",
-    "reason": "coverage tests for data source list_instances remote helpers",
-    "body_hash": "20d7ad386961298f"
-  },
-  {
-    "path": "internal/provider/data_source_list_instances_test.go",
-    "reason": "unit tests for data source list_instances",
-    "body_hash": "c51ee18471021d0b"
-  },
-  {
-    "path": "internal/provider/data_source_list_members.go",
-    "reason": "data source mycloud_list_members",
-    "body_hash": "6b198f24d9e75f08"
-  },
-  {
-    "path": "internal/provider/data_source_list_members_remote_test.go",
-    "reason": "coverage tests for data source list_members remote helpers",
-    "body_hash": "7baf863e7d1bfc54"
-  },
-  {
-    "path": "internal/provider/data_source_list_members_test.go",
-    "reason": "unit tests for data source list_members",
-    "body_hash": "a8fe508cab7f001b"
-  },
-  {
-    "path": "internal/provider/data_source_list_networks.go",
-    "reason": "data source mycloud_list_networks",
-    "body_hash": "e238ebdadcb009df"
-  },
-  {
-    "path": "internal/provider/data_source_list_networks_remote_test.go",
-    "reason": "coverage tests for data source list_networks remote helpers",
-    "body_hash": "062e32227415ea8e"
-  },
-  {
-    "path": "internal/provider/data_source_list_networks_test.go",
-    "reason": "unit tests for data source list_networks",
-    "body_hash": "6830a8a78a6d17c3"
-  },
-  {
-    "path": "internal/provider/data_source_list_projects_for_organization.go",
-    "reason": "data source mycloud_list_projects_for_organization",
-    "body_hash": "60240c4035e692fe"
-  },
-  {
-    "path": "internal/provider/data_source_list_projects_for_organization_remote_test.go",
-    "reason": "coverage tests for data source list_projects_for_organization remote helpers",
-    "body_hash": "023651eae76ed811"
-  },
-  {
-    "path": "internal/provider/data_source_list_projects_for_organization_test.go",
-    "reason": "unit tests for data source list_projects_for_organization",
-    "body_hash": "cea620afd24e9a2b"
-  },
-  {
-    "path": "internal/provider/data_source_list_pull_requests.go",
-    "reason": "data source mycloud_list_pull_requests",
-    "body_hash": "dbc116715e25d570"
-  },
-  {
-    "path": "internal/provider/data_source_list_pull_requests_remote_test.go",
-    "reason": "coverage tests for data source list_pull_requests remote helpers",
-    "body_hash": "e17b32a6b846da44"
-  },
-  {
-    "path": "internal/provider/data_source_list_pull_requests_test.go",
-    "reason": "unit tests for data source list_pull_requests",
-    "body_hash": "9a65350ac6066085"
-  },
-  {
-    "path": "internal/provider/data_source_list_secrets.go",
-    "reason": "data source mycloud_list_secrets",
-    "body_hash": "ebdff3c65f17dc66"
-  },
-  {
-    "path": "internal/provider/data_source_list_secrets_remote_test.go",
-    "reason": "coverage tests for data source list_secrets remote helpers",
-    "body_hash": "d05b13e6afa8be26"
-  },
-  {
-    "path": "internal/provider/data_source_list_secrets_test.go",
-    "reason": "unit tests for data source list_secrets",
-    "body_hash": "4d6be571acb4b8eb"
-  },
-  {
-    "path": "internal/provider/data_source_list_stacks.go",
-    "reason": "data source mycloud_list_stacks",
-    "body_hash": "0e5b48808de9061f"
-  },
-  {
-    "path": "internal/provider/data_source_list_stacks_remote_test.go",
-    "reason": "coverage tests for data source list_stacks remote helpers",
-    "body_hash": "63f3551f76e460f0"
-  },
-  {
-    "path": "internal/provider/data_source_list_stacks_test.go",
-    "reason": "unit tests for data source list_stacks",
-    "body_hash": "5988c7fa7231d1eb"
-  },
-  {
-    "path": "internal/provider/data_source_list_tasks.go",
-    "reason": "data source mycloud_list_tasks",
-    "body_hash": "88061781579714f8"
-  },
-  {
-    "path": "internal/provider/data_source_list_tasks_remote_test.go",
-    "reason": "coverage tests for data source list_tasks remote helpers",
-    "body_hash": "d4deb66b35d7ed41"
-  },
-  {
-    "path": "internal/provider/data_source_list_tasks_test.go",
-    "reason": "unit tests for data source list_tasks",
-    "body_hash": "db0c4a7676feea9b"
-  },
-  {
-    "path": "internal/provider/data_source_list_workspaces.go",
-    "reason": "data source mycloud_list_workspaces",
-    "body_hash": "0c5e855eb1def9de"
-  },
-  {
-    "path": "internal/provider/data_source_list_workspaces_remote_test.go",
-    "reason": "coverage tests for data source list_workspaces remote helpers",
-    "body_hash": "81f7c58ae6b7fb27"
-  },
-  {
-    "path": "internal/provider/data_source_list_workspaces_test.go",
-    "reason": "unit tests for data source list_workspaces",
-    "body_hash": "255f7aded2b87447"
-  },
-  {
-    "path": "internal/provider/json_convert.go",
-    "reason": "JSON/model conversion helpers for wired CRUD bodies",
-    "body_hash": "8548ea6a909e4a8f"
-  },
-  {
-    "path": "internal/provider/list_list_branches.go",
-    "reason": "list resource mycloud_list_branches",
-    "body_hash": "c2197567b70808ff"
-  },
-  {
-    "path": "internal/provider/list_list_branches_remote_test.go",
-    "reason": "coverage tests for list resource list_branches remote helper",
-    "body_hash": "555655c4724b9c69"
-  },
-  {
-    "path": "internal/provider/list_list_commits.go",
-    "reason": "list resource mycloud_list_commits",
-    "body_hash": "ed31d645ccb46e89"
-  },
-  {
-    "path": "internal/provider/list_list_commits_remote_test.go",
-    "reason": "coverage tests for list resource list_commits remote helper",
-    "body_hash": "0a0e3b4b6b0b9c37"
-  },
-  {
-    "path": "internal/provider/list_list_configs.go",
-    "reason": "list resource mycloud_list_configs",
-    "body_hash": "f3fc0ce12333fa2b"
-  },
-  {
-    "path": "internal/provider/list_list_configs_remote_test.go",
-    "reason": "coverage tests for list resource list_configs remote helper",
-    "body_hash": "e719b0e183ad4b54"
-  },
-  {
-    "path": "internal/provider/list_list_instances.go",
-    "reason": "list resource mycloud_list_instances",
-    "body_hash": "5953e7f1a02efa19"
-  },
-  {
-    "path": "internal/provider/list_list_instances_remote_test.go",
-    "reason": "coverage tests for list resource list_instances remote helper",
-    "body_hash": "96fe20bac388ca9d"
-  },
-  {
-    "path": "internal/provider/list_list_members.go",
-    "reason": "list resource mycloud_list_members",
-    "body_hash": "3fc2ed911fa771a8"
-  },
-  {
-    "path": "internal/provider/list_list_members_remote_test.go",
-    "reason": "coverage tests for list resource list_members remote helper",
-    "body_hash": "c84fe3dfa94fbda8"
-  },
-  {
-    "path": "internal/provider/list_list_networks.go",
-    "reason": "list resource mycloud_list_networks",
-    "body_hash": "1eeceb384dbd56bd"
-  },
-  {
-    "path": "internal/provider/list_list_networks_remote_test.go",
-    "reason": "coverage tests for list resource list_networks remote helper",
-    "body_hash": "36fdd67399900ff8"
-  },
-  {
-    "path": "internal/provider/list_list_projects_for_organization.go",
-    "reason": "list resource mycloud_list_projects_for_organization",
-    "body_hash": "b2ab3e7155435100"
-  },
-  {
-    "path": "internal/provider/list_list_projects_for_organization_remote_test.go",
-    "reason": "coverage tests for list resource list_projects_for_organization remote helper",
-    "body_hash": "3fa33d16b4afd11b"
-  },
-  {
-    "path": "internal/provider/list_list_pull_requests.go",
-    "reason": "list resource mycloud_list_pull_requests",
-    "body_hash": "e57c04f92b8486a8"
-  },
-  {
-    "path": "internal/provider/list_list_pull_requests_remote_test.go",
-    "reason": "coverage tests for list resource list_pull_requests remote helper",
-    "body_hash": "d74732f748883d0e"
-  },
-  {
-    "path": "internal/provider/list_list_secrets.go",
-    "reason": "list resource mycloud_list_secrets",
-    "body_hash": "805500b8a40ab327"
-  },
-  {
-    "path": "internal/provider/list_list_secrets_remote_test.go",
-    "reason": "coverage tests for list resource list_secrets remote helper",
-    "body_hash": "f62d9523b055a3d2"
-  },
-  {
-    "path": "internal/provider/list_list_stacks.go",
-    "reason": "list resource mycloud_list_stacks",
-    "body_hash": "420824c1c5e0e4a5"
-  },
-  {
-    "path": "internal/provider/list_list_stacks_remote_test.go",
-    "reason": "coverage tests for list resource list_stacks remote helper",
-    "body_hash": "27e039cf287a2fc2"
-  },
-  {
-    "path": "internal/provider/list_list_tasks.go",
-    "reason": "list resource mycloud_list_tasks",
-    "body_hash": "0fc0608f2b12d952"
-  },
-  {
-    "path": "internal/provider/list_list_tasks_remote_test.go",
-    "reason": "coverage tests for list resource list_tasks remote helper",
-    "body_hash": "21348f4c762a10bf"
-  },
-  {
-    "path": "internal/provider/list_list_workspaces.go",
-    "reason": "list resource mycloud_list_workspaces",
-    "body_hash": "d448e23cecca73dc"
-  },
-  {
-    "path": "internal/provider/list_list_workspaces_remote_test.go",
-    "reason": "coverage tests for list resource list_workspaces remote helper",
-    "body_hash": "e680db0e7eef9060"
-  },
-  {
-    "path": "internal/provider/provider.go",
-    "reason": "provider schema and registration",
-    "body_hash": "65dffbbc675bfe87"
-  },
-  {
-    "path": "internal/provider/provider_test.go",
-    "reason": "provider-level unit tests",
-    "body_hash": "594daf3b2db5d06d"
-  },
-  {
-    "path": "internal/provider/resource_config.go",
-    "reason": "resource mycloud_config",
-    "body_hash": "c6fc3757f4644978"
-  },
-  {
-    "path": "internal/provider/resource_config_acceptance_test.go",
-    "reason": "acceptance tests for resource config",
-    "body_hash": "53f5ad83d185baea"
-  },
-  {
-    "path": "internal/provider/resource_config_remote_test.go",
-    "reason": "coverage tests for resource config remote helpers",
-    "body_hash": "3f67fef673c804ae"
-  },
-  {
-    "path": "internal/provider/resource_config_test.go",
-    "reason": "unit tests for resource config",
-    "body_hash": "cfedc28b9db4a7fd"
-  },
-  {
-    "path": "internal/provider/resource_instance.go",
-    "reason": "resource mycloud_instance",
-    "body_hash": "ba2f8bc656205932"
-  },
-  {
-    "path": "internal/provider/resource_instance_acceptance_test.go",
-    "reason": "acceptance tests for resource instance",
-    "body_hash": "17bde098cbc9b6b7"
-  },
-  {
-    "path": "internal/provider/resource_instance_remote_test.go",
-    "reason": "coverage tests for resource instance remote helpers",
-    "body_hash": "7289310803335bf8"
-  },
-  {
-    "path": "internal/provider/resource_instance_test.go",
-    "reason": "unit tests for resource instance",
-    "body_hash": "0e22de48b7eefce1"
-  },
-  {
-    "path": "internal/provider/resource_network.go",
-    "reason": "resource mycloud_network",
-    "body_hash": "c2701206ccba2451"
-  },
-  {
-    "path": "internal/provider/resource_network_acceptance_test.go",
-    "reason": "acceptance tests for resource network",
-    "body_hash": "bbb20dd038885079"
-  },
-  {
-    "path": "internal/provider/resource_network_remote_test.go",
-    "reason": "coverage tests for resource network remote helpers",
-    "body_hash": "29c1cd5610a45bb8"
-  },
-  {
-    "path": "internal/provider/resource_network_test.go",
-    "reason": "unit tests for resource network",
-    "body_hash": "85be35a295b16d89"
-  },
-  {
-    "path": "internal/provider/resource_project.go",
-    "reason": "resource mycloud_project",
-    "body_hash": "a0bd7aa22b4985f2"
-  },
-  {
-    "path": "internal/provider/resource_project_acceptance_test.go",
-    "reason": "acceptance tests for resource project",
-    "body_hash": "ade6c2deaeadba4f"
-  },
-  {
-    "path": "internal/provider/resource_project_remote_test.go",
-    "reason": "coverage tests for resource project remote helpers",
-    "body_hash": "fd581676d01f22c5"
-  },
-  {
-    "path": "internal/provider/resource_project_test.go",
-    "reason": "unit tests for resource project",
-    "body_hash": "2f209b1e5d8dc1b9"
-  },
-  {
-    "path": "internal/provider/resource_secret.go",
-    "reason": "resource mycloud_secret",
-    "body_hash": "3a28b432f724b24c"
-  },
-  {
-    "path": "internal/provider/resource_secret_acceptance_test.go",
-    "reason": "acceptance tests for resource secret",
-    "body_hash": "a304f435389f34df"
-  },
-  {
-    "path": "internal/provider/resource_secret_remote_test.go",
-    "reason": "coverage tests for resource secret remote helpers",
-    "body_hash": "151f6306d4e13e5e"
-  },
-  {
-    "path": "internal/provider/resource_secret_test.go",
-    "reason": "unit tests for resource secret",
-    "body_hash": "43582ffb7521a0f1"
-  },
-  {
-    "path": "internal/provider/resource_stack.go",
-    "reason": "resource mycloud_stack",
-    "body_hash": "375de20c5182f852"
-  },
-  {
-    "path": "internal/provider/resource_stack_acceptance_test.go",
-    "reason": "acceptance tests for resource stack",
-    "body_hash": "9edb3e83c0cd2518"
-  },
-  {
-    "path": "internal/provider/resource_stack_remote_test.go",
-    "reason": "coverage tests for resource stack remote helpers",
-    "body_hash": "2c4a45587e34c000"
-  },
-  {
-    "path": "internal/provider/resource_stack_test.go",
-    "reason": "unit tests for resource stack",
-    "body_hash": "7f7eb978423ebd1d"
-  },
-  {
-    "path": "internal/provider/resource_workspace.go",
-    "reason": "resource mycloud_workspace",
-    "body_hash": "62572778c64ae1f2"
-  },
-  {
-    "path": "internal/provider/resource_workspace_acceptance_test.go",
-    "reason": "acceptance tests for resource workspace",
-    "body_hash": "e2a7e2fb74302cdd"
-  },
-  {
-    "path": "internal/provider/resource_workspace_remote_test.go",
-    "reason": "coverage tests for resource workspace remote helpers",
-    "body_hash": "9894b860a71dd758"
-  },
-  {
-    "path": "internal/provider/resource_workspace_test.go",
-    "reason": "unit tests for resource workspace",
-    "body_hash": "9ee1a147de38cd41"
-  },
-  {
-    "path": "internal/provider/testing_helpers_test.go",
-    "reason": "shared httptest helpers for coverage tests",
-    "body_hash": "9e672d1fd10f2460"
-  },
-  {
-    "path": "internal/provider/validators.go",
-    "reason": "custom schema validators",
-    "body_hash": "94a192299dab9088"
-  },
-  {
-    "path": "main.go",
-    "reason": "provider server entrypoint",
-    "body_hash": "3f4120fbb7591f3c"
-  },
-  {
-    "path": "terraform-registry-manifest.json",
-    "reason": "Terraform Registry manifest",
-    "body_hash": "76ac85aa7f3a523b"
-  }
-]
+{
+  "files": [
+    {
+      "path": ".github/workflows/release.yml",
+      "reason": "GitHub Actions release workflow",
+      "body_hash": "0c17b10fc57196ff"
+    },
+    {
+      "path": ".goreleaser.yml",
+      "reason": "GoReleaser release configuration",
+      "body_hash": "19f66476cb393ebc"
+    },
+    {
+      "path": "GNUmakefile",
+      "reason": "build and test automation",
+      "body_hash": "771e0e9e2aefba94"
+    },
+    {
+      "path": "README.md",
+      "reason": "provider overview and usage guide",
+      "body_hash": "9d5ef0b6b6eb0199"
+    },
+    {
+      "path": "docs/actions/create_pull_request.md",
+      "reason": "documentation for action create_pull_request",
+      "body_hash": "213de6e7da1e485e"
+    },
+    {
+      "path": "docs/actions/create_task.md",
+      "reason": "documentation for action create_task",
+      "body_hash": "f90a425eaefcd038"
+    },
+    {
+      "path": "docs/actions/update_pull_request.md",
+      "reason": "documentation for action update_pull_request",
+      "body_hash": "84a90190210921e8"
+    },
+    {
+      "path": "docs/actions/update_task.md",
+      "reason": "documentation for action update_task",
+      "body_hash": "4ee6c05f31197c18"
+    },
+    {
+      "path": "docs/data-sources/get_branch.md",
+      "reason": "documentation for data source get_branch",
+      "body_hash": "1fb9b42da673d38f"
+    },
+    {
+      "path": "docs/data-sources/get_commit.md",
+      "reason": "documentation for data source get_commit",
+      "body_hash": "70561d85947ac3e5"
+    },
+    {
+      "path": "docs/data-sources/get_member.md",
+      "reason": "documentation for data source get_member",
+      "body_hash": "088bd7309286c6ef"
+    },
+    {
+      "path": "docs/data-sources/get_pull_request.md",
+      "reason": "documentation for data source get_pull_request",
+      "body_hash": "f49e9ead7cb0f159"
+    },
+    {
+      "path": "docs/data-sources/get_task.md",
+      "reason": "documentation for data source get_task",
+      "body_hash": "5a6ee03c5fb1f09d"
+    },
+    {
+      "path": "docs/data-sources/list_branches.md",
+      "reason": "documentation for data source list_branches",
+      "body_hash": "31b4367ee86590dd"
+    },
+    {
+      "path": "docs/data-sources/list_commits.md",
+      "reason": "documentation for data source list_commits",
+      "body_hash": "5cda138a36e360d5"
+    },
+    {
+      "path": "docs/data-sources/list_configs.md",
+      "reason": "documentation for data source list_configs",
+      "body_hash": "688d95ebcf024730"
+    },
+    {
+      "path": "docs/data-sources/list_instances.md",
+      "reason": "documentation for data source list_instances",
+      "body_hash": "1b0a9f3886dbdd2c"
+    },
+    {
+      "path": "docs/data-sources/list_members.md",
+      "reason": "documentation for data source list_members",
+      "body_hash": "f9c21688616c78e2"
+    },
+    {
+      "path": "docs/data-sources/list_networks.md",
+      "reason": "documentation for data source list_networks",
+      "body_hash": "11a047bb181c7f41"
+    },
+    {
+      "path": "docs/data-sources/list_projects_for_organization.md",
+      "reason": "documentation for data source list_projects_for_organization",
+      "body_hash": "6abe662ac4101d93"
+    },
+    {
+      "path": "docs/data-sources/list_pull_requests.md",
+      "reason": "documentation for data source list_pull_requests",
+      "body_hash": "ab365fe6a0fd39f0"
+    },
+    {
+      "path": "docs/data-sources/list_secrets.md",
+      "reason": "documentation for data source list_secrets",
+      "body_hash": "cc827754c75067b6"
+    },
+    {
+      "path": "docs/data-sources/list_stacks.md",
+      "reason": "documentation for data source list_stacks",
+      "body_hash": "3a20277369b68fe3"
+    },
+    {
+      "path": "docs/data-sources/list_tasks.md",
+      "reason": "documentation for data source list_tasks",
+      "body_hash": "3ee42a990501a6f9"
+    },
+    {
+      "path": "docs/data-sources/list_workspaces.md",
+      "reason": "documentation for data source list_workspaces",
+      "body_hash": "c7b8e9fc709320ba"
+    },
+    {
+      "path": "docs/index.md",
+      "reason": "provider overview and authentication guide",
+      "body_hash": "49bedd4604d81026"
+    },
+    {
+      "path": "docs/list-resources/list_branches.md",
+      "reason": "documentation for list resource list_branches",
+      "body_hash": "46a7755bbe10d2b4"
+    },
+    {
+      "path": "docs/list-resources/list_commits.md",
+      "reason": "documentation for list resource list_commits",
+      "body_hash": "29f6350bc209351b"
+    },
+    {
+      "path": "docs/list-resources/list_configs.md",
+      "reason": "documentation for list resource list_configs",
+      "body_hash": "e22136da5a3581a8"
+    },
+    {
+      "path": "docs/list-resources/list_instances.md",
+      "reason": "documentation for list resource list_instances",
+      "body_hash": "949504a965a8fad9"
+    },
+    {
+      "path": "docs/list-resources/list_members.md",
+      "reason": "documentation for list resource list_members",
+      "body_hash": "c29c79113318c5e4"
+    },
+    {
+      "path": "docs/list-resources/list_networks.md",
+      "reason": "documentation for list resource list_networks",
+      "body_hash": "45b0824216dd2efc"
+    },
+    {
+      "path": "docs/list-resources/list_projects_for_organization.md",
+      "reason": "documentation for list resource list_projects_for_organization",
+      "body_hash": "693511b9302bc1ed"
+    },
+    {
+      "path": "docs/list-resources/list_pull_requests.md",
+      "reason": "documentation for list resource list_pull_requests",
+      "body_hash": "f499741ff30dc3d7"
+    },
+    {
+      "path": "docs/list-resources/list_secrets.md",
+      "reason": "documentation for list resource list_secrets",
+      "body_hash": "39dbf928846a8ab6"
+    },
+    {
+      "path": "docs/list-resources/list_stacks.md",
+      "reason": "documentation for list resource list_stacks",
+      "body_hash": "4504d13bc41b8ae6"
+    },
+    {
+      "path": "docs/list-resources/list_tasks.md",
+      "reason": "documentation for list resource list_tasks",
+      "body_hash": "93bfc5b80c802ef9"
+    },
+    {
+      "path": "docs/list-resources/list_workspaces.md",
+      "reason": "documentation for list resource list_workspaces",
+      "body_hash": "5aba43f6c1fb3014"
+    },
+    {
+      "path": "docs/resources/config.md",
+      "reason": "documentation for resource config",
+      "body_hash": "a08d1166bd466cb4"
+    },
+    {
+      "path": "docs/resources/instance.md",
+      "reason": "documentation for resource instance",
+      "body_hash": "bf2d9b6a4be4b7c8"
+    },
+    {
+      "path": "docs/resources/network.md",
+      "reason": "documentation for resource network",
+      "body_hash": "901ca92ac1b45ec0"
+    },
+    {
+      "path": "docs/resources/project.md",
+      "reason": "documentation for resource project",
+      "body_hash": "aab38e7fbd509f15"
+    },
+    {
+      "path": "docs/resources/secret.md",
+      "reason": "documentation for resource secret",
+      "body_hash": "257257672c4c0da9"
+    },
+    {
+      "path": "docs/resources/stack.md",
+      "reason": "documentation for resource stack",
+      "body_hash": "2d8ff2eda114e92b"
+    },
+    {
+      "path": "docs/resources/workspace.md",
+      "reason": "documentation for resource workspace",
+      "body_hash": "f8d736703aad077d"
+    },
+    {
+      "path": "examples/actions/create_pull_request/action.tf",
+      "reason": "example for action create_pull_request",
+      "body_hash": "47566b8506fe4bbd"
+    },
+    {
+      "path": "examples/actions/create_task/action.tf",
+      "reason": "example for action create_task",
+      "body_hash": "69f9c7727fc89d14"
+    },
+    {
+      "path": "examples/actions/update_pull_request/action.tf",
+      "reason": "example for action update_pull_request",
+      "body_hash": "a456d9c48b963b42"
+    },
+    {
+      "path": "examples/actions/update_task/action.tf",
+      "reason": "example for action update_task",
+      "body_hash": "e3c9ea4ff63dd1c3"
+    },
+    {
+      "path": "examples/data-sources/get_branch/data-source.tf",
+      "reason": "example for data source get_branch",
+      "body_hash": "014bc2d19536de43"
+    },
+    {
+      "path": "examples/data-sources/get_commit/data-source.tf",
+      "reason": "example for data source get_commit",
+      "body_hash": "d24da42ac835124d"
+    },
+    {
+      "path": "examples/data-sources/get_member/data-source.tf",
+      "reason": "example for data source get_member",
+      "body_hash": "3b5c08eb0cde1c77"
+    },
+    {
+      "path": "examples/data-sources/get_pull_request/data-source.tf",
+      "reason": "example for data source get_pull_request",
+      "body_hash": "7484b709e613a4e6"
+    },
+    {
+      "path": "examples/data-sources/get_task/data-source.tf",
+      "reason": "example for data source get_task",
+      "body_hash": "ea0797df89780158"
+    },
+    {
+      "path": "examples/data-sources/list_branches/data-source.tf",
+      "reason": "example for data source list_branches",
+      "body_hash": "9f043c93346644fa"
+    },
+    {
+      "path": "examples/data-sources/list_commits/data-source.tf",
+      "reason": "example for data source list_commits",
+      "body_hash": "b91999b1eee833cc"
+    },
+    {
+      "path": "examples/data-sources/list_configs/data-source.tf",
+      "reason": "example for data source list_configs",
+      "body_hash": "dcae1633aea128ff"
+    },
+    {
+      "path": "examples/data-sources/list_instances/data-source.tf",
+      "reason": "example for data source list_instances",
+      "body_hash": "dabf93f07f4d4b48"
+    },
+    {
+      "path": "examples/data-sources/list_members/data-source.tf",
+      "reason": "example for data source list_members",
+      "body_hash": "61efb34a596b2151"
+    },
+    {
+      "path": "examples/data-sources/list_networks/data-source.tf",
+      "reason": "example for data source list_networks",
+      "body_hash": "8d33d14ebf859597"
+    },
+    {
+      "path": "examples/data-sources/list_projects_for_organization/data-source.tf",
+      "reason": "example for data source list_projects_for_organization",
+      "body_hash": "16c8dcea18b0718c"
+    },
+    {
+      "path": "examples/data-sources/list_pull_requests/data-source.tf",
+      "reason": "example for data source list_pull_requests",
+      "body_hash": "d091db61d3bd4158"
+    },
+    {
+      "path": "examples/data-sources/list_secrets/data-source.tf",
+      "reason": "example for data source list_secrets",
+      "body_hash": "a9ea79751d131a41"
+    },
+    {
+      "path": "examples/data-sources/list_stacks/data-source.tf",
+      "reason": "example for data source list_stacks",
+      "body_hash": "ffe863090a65c8a5"
+    },
+    {
+      "path": "examples/data-sources/list_tasks/data-source.tf",
+      "reason": "example for data source list_tasks",
+      "body_hash": "217e02d7aad40b2c"
+    },
+    {
+      "path": "examples/data-sources/list_workspaces/data-source.tf",
+      "reason": "example for data source list_workspaces",
+      "body_hash": "32ec7e4f14549d6c"
+    },
+    {
+      "path": "examples/resources/config/resource.tf",
+      "reason": "example for resource config",
+      "body_hash": "3908919a2aec584e"
+    },
+    {
+      "path": "examples/resources/instance/resource.tf",
+      "reason": "example for resource instance",
+      "body_hash": "8f3ae8cec11ae3ee"
+    },
+    {
+      "path": "examples/resources/network/resource.tf",
+      "reason": "example for resource network",
+      "body_hash": "530b46c75772fee2"
+    },
+    {
+      "path": "examples/resources/project/resource.tf",
+      "reason": "example for resource project",
+      "body_hash": "008f931471218a0b"
+    },
+    {
+      "path": "examples/resources/secret/resource.tf",
+      "reason": "example for resource secret",
+      "body_hash": "5133dacb44aab7b1"
+    },
+    {
+      "path": "examples/resources/stack/resource.tf",
+      "reason": "example for resource stack",
+      "body_hash": "ed317b068cb618d3"
+    },
+    {
+      "path": "examples/resources/workspace/resource.tf",
+      "reason": "example for resource workspace",
+      "body_hash": "d8abe4fa4561088a"
+    },
+    {
+      "path": "generator.yaml",
+      "reason": "generated generator configuration",
+      "body_hash": "72c9fd643034482e"
+    },
+    {
+      "path": "go.mod",
+      "reason": "Go module definition",
+      "body_hash": "c81b032562b44c50"
+    },
+    {
+      "path": "internal/client/auth.go",
+      "reason": "authentication middleware",
+      "body_hash": "0beee19e2c55a414"
+    },
+    {
+      "path": "internal/client/auth_test.go",
+      "reason": "authentication middleware unit tests",
+      "body_hash": "e7953227ea13b9b9"
+    },
+    {
+      "path": "internal/client/client.go",
+      "reason": "generated HTTP client",
+      "body_hash": "ed5752539d02e875"
+    },
+    {
+      "path": "internal/client/client_test.go",
+      "reason": "generated HTTP client unit tests",
+      "body_hash": "e2439b35ec2de052"
+    },
+    {
+      "path": "internal/client/errors.go",
+      "reason": "typed API error helpers",
+      "body_hash": "7b69b0dda148a6d5"
+    },
+    {
+      "path": "internal/client/logging.go",
+      "reason": "request/response trace logging",
+      "body_hash": "9defaf534cc08195"
+    },
+    {
+      "path": "internal/client/logging_test.go",
+      "reason": "trace logging unit tests",
+      "body_hash": "3d1b897c8a09d762"
+    },
+    {
+      "path": "internal/client/models.go",
+      "reason": "request/response model structs",
+      "body_hash": "1efd23827e83c14f"
+    },
+    {
+      "path": "internal/client/pagination.go",
+      "reason": "pagination helpers",
+      "body_hash": "7a1a499684b413ec"
+    },
+    {
+      "path": "internal/client/retry.go",
+      "reason": "retry logic with exponential backoff",
+      "body_hash": "bf53c919903fb008"
+    },
+    {
+      "path": "internal/provider/action_create_pull_request.go",
+      "reason": "action mycloud_create_pull_request",
+      "body_hash": "db87711264999f83"
+    },
+    {
+      "path": "internal/provider/action_create_pull_request_remote_test.go",
+      "reason": "coverage tests for action create_pull_request remote helper",
+      "body_hash": "f2d0fd3cf7ab5948"
+    },
+    {
+      "path": "internal/provider/action_create_task.go",
+      "reason": "action mycloud_create_task",
+      "body_hash": "1a71424da26065b3"
+    },
+    {
+      "path": "internal/provider/action_create_task_remote_test.go",
+      "reason": "coverage tests for action create_task remote helper",
+      "body_hash": "87424f94af7c244a"
+    },
+    {
+      "path": "internal/provider/action_update_pull_request.go",
+      "reason": "action mycloud_update_pull_request",
+      "body_hash": "fe334cdc792dd8a0"
+    },
+    {
+      "path": "internal/provider/action_update_pull_request_remote_test.go",
+      "reason": "coverage tests for action update_pull_request remote helper",
+      "body_hash": "73176b020f5310cc"
+    },
+    {
+      "path": "internal/provider/action_update_task.go",
+      "reason": "action mycloud_update_task",
+      "body_hash": "9c72b1d04c39df66"
+    },
+    {
+      "path": "internal/provider/action_update_task_remote_test.go",
+      "reason": "coverage tests for action update_task remote helper",
+      "body_hash": "a7828b98d9072aca"
+    },
+    {
+      "path": "internal/provider/data_source_get_branch.go",
+      "reason": "data source mycloud_get_branch",
+      "body_hash": "a58f1aed5aa84253"
+    },
+    {
+      "path": "internal/provider/data_source_get_branch_remote_test.go",
+      "reason": "coverage tests for data source get_branch remote helpers",
+      "body_hash": "435d7b084ff33211"
+    },
+    {
+      "path": "internal/provider/data_source_get_branch_test.go",
+      "reason": "unit tests for data source get_branch",
+      "body_hash": "1355bab2d26edbd7"
+    },
+    {
+      "path": "internal/provider/data_source_get_commit.go",
+      "reason": "data source mycloud_get_commit",
+      "body_hash": "0fdfd5241020ee5c"
+    },
+    {
+      "path": "internal/provider/data_source_get_commit_remote_test.go",
+      "reason": "coverage tests for data source get_commit remote helpers",
+      "body_hash": "484be85682d731cc"
+    },
+    {
+      "path": "internal/provider/data_source_get_commit_test.go",
+      "reason": "unit tests for data source get_commit",
+      "body_hash": "b6732bdfba2ae28f"
+    },
+    {
+      "path": "internal/provider/data_source_get_member.go",
+      "reason": "data source mycloud_get_member",
+      "body_hash": "dde52bb2f2d84e50"
+    },
+    {
+      "path": "internal/provider/data_source_get_member_remote_test.go",
+      "reason": "coverage tests for data source get_member remote helpers",
+      "body_hash": "b04e67e7e7d0283b"
+    },
+    {
+      "path": "internal/provider/data_source_get_member_test.go",
+      "reason": "unit tests for data source get_member",
+      "body_hash": "765f81372af8b25f"
+    },
+    {
+      "path": "internal/provider/data_source_get_pull_request.go",
+      "reason": "data source mycloud_get_pull_request",
+      "body_hash": "e1782f6da83ab971"
+    },
+    {
+      "path": "internal/provider/data_source_get_pull_request_remote_test.go",
+      "reason": "coverage tests for data source get_pull_request remote helpers",
+      "body_hash": "d4c9466bf6f1b076"
+    },
+    {
+      "path": "internal/provider/data_source_get_pull_request_test.go",
+      "reason": "unit tests for data source get_pull_request",
+      "body_hash": "462d771be6099e77"
+    },
+    {
+      "path": "internal/provider/data_source_get_task.go",
+      "reason": "data source mycloud_get_task",
+      "body_hash": "a221f3860aef18c0"
+    },
+    {
+      "path": "internal/provider/data_source_get_task_remote_test.go",
+      "reason": "coverage tests for data source get_task remote helpers",
+      "body_hash": "0aca2abba9a5569c"
+    },
+    {
+      "path": "internal/provider/data_source_get_task_test.go",
+      "reason": "unit tests for data source get_task",
+      "body_hash": "39405048c4531cf7"
+    },
+    {
+      "path": "internal/provider/data_source_list_branches.go",
+      "reason": "data source mycloud_list_branches",
+      "body_hash": "f85a509c407e613b"
+    },
+    {
+      "path": "internal/provider/data_source_list_branches_remote_test.go",
+      "reason": "coverage tests for data source list_branches remote helpers",
+      "body_hash": "c165932dbc7d5899"
+    },
+    {
+      "path": "internal/provider/data_source_list_branches_test.go",
+      "reason": "unit tests for data source list_branches",
+      "body_hash": "aaffcd54b44be70f"
+    },
+    {
+      "path": "internal/provider/data_source_list_commits.go",
+      "reason": "data source mycloud_list_commits",
+      "body_hash": "38fcc6608fbf78bd"
+    },
+    {
+      "path": "internal/provider/data_source_list_commits_remote_test.go",
+      "reason": "coverage tests for data source list_commits remote helpers",
+      "body_hash": "e61c6bfc9e2caa09"
+    },
+    {
+      "path": "internal/provider/data_source_list_commits_test.go",
+      "reason": "unit tests for data source list_commits",
+      "body_hash": "17980ee32206806b"
+    },
+    {
+      "path": "internal/provider/data_source_list_configs.go",
+      "reason": "data source mycloud_list_configs",
+      "body_hash": "4b3e9eb1c7a1cc81"
+    },
+    {
+      "path": "internal/provider/data_source_list_configs_remote_test.go",
+      "reason": "coverage tests for data source list_configs remote helpers",
+      "body_hash": "8569fb6b235e8c74"
+    },
+    {
+      "path": "internal/provider/data_source_list_configs_test.go",
+      "reason": "unit tests for data source list_configs",
+      "body_hash": "480c5791add71afb"
+    },
+    {
+      "path": "internal/provider/data_source_list_instances.go",
+      "reason": "data source mycloud_list_instances",
+      "body_hash": "d59ea11678366b85"
+    },
+    {
+      "path": "internal/provider/data_source_list_instances_remote_test.go",
+      "reason": "coverage tests for data source list_instances remote helpers",
+      "body_hash": "20d7ad386961298f"
+    },
+    {
+      "path": "internal/provider/data_source_list_instances_test.go",
+      "reason": "unit tests for data source list_instances",
+      "body_hash": "c51ee18471021d0b"
+    },
+    {
+      "path": "internal/provider/data_source_list_members.go",
+      "reason": "data source mycloud_list_members",
+      "body_hash": "6b198f24d9e75f08"
+    },
+    {
+      "path": "internal/provider/data_source_list_members_remote_test.go",
+      "reason": "coverage tests for data source list_members remote helpers",
+      "body_hash": "7baf863e7d1bfc54"
+    },
+    {
+      "path": "internal/provider/data_source_list_members_test.go",
+      "reason": "unit tests for data source list_members",
+      "body_hash": "a8fe508cab7f001b"
+    },
+    {
+      "path": "internal/provider/data_source_list_networks.go",
+      "reason": "data source mycloud_list_networks",
+      "body_hash": "e238ebdadcb009df"
+    },
+    {
+      "path": "internal/provider/data_source_list_networks_remote_test.go",
+      "reason": "coverage tests for data source list_networks remote helpers",
+      "body_hash": "062e32227415ea8e"
+    },
+    {
+      "path": "internal/provider/data_source_list_networks_test.go",
+      "reason": "unit tests for data source list_networks",
+      "body_hash": "6830a8a78a6d17c3"
+    },
+    {
+      "path": "internal/provider/data_source_list_projects_for_organization.go",
+      "reason": "data source mycloud_list_projects_for_organization",
+      "body_hash": "60240c4035e692fe"
+    },
+    {
+      "path": "internal/provider/data_source_list_projects_for_organization_remote_test.go",
+      "reason": "coverage tests for data source list_projects_for_organization remote helpers",
+      "body_hash": "023651eae76ed811"
+    },
+    {
+      "path": "internal/provider/data_source_list_projects_for_organization_test.go",
+      "reason": "unit tests for data source list_projects_for_organization",
+      "body_hash": "cea620afd24e9a2b"
+    },
+    {
+      "path": "internal/provider/data_source_list_pull_requests.go",
+      "reason": "data source mycloud_list_pull_requests",
+      "body_hash": "dbc116715e25d570"
+    },
+    {
+      "path": "internal/provider/data_source_list_pull_requests_remote_test.go",
+      "reason": "coverage tests for data source list_pull_requests remote helpers",
+      "body_hash": "e17b32a6b846da44"
+    },
+    {
+      "path": "internal/provider/data_source_list_pull_requests_test.go",
+      "reason": "unit tests for data source list_pull_requests",
+      "body_hash": "9a65350ac6066085"
+    },
+    {
+      "path": "internal/provider/data_source_list_secrets.go",
+      "reason": "data source mycloud_list_secrets",
+      "body_hash": "ebdff3c65f17dc66"
+    },
+    {
+      "path": "internal/provider/data_source_list_secrets_remote_test.go",
+      "reason": "coverage tests for data source list_secrets remote helpers",
+      "body_hash": "d05b13e6afa8be26"
+    },
+    {
+      "path": "internal/provider/data_source_list_secrets_test.go",
+      "reason": "unit tests for data source list_secrets",
+      "body_hash": "4d6be571acb4b8eb"
+    },
+    {
+      "path": "internal/provider/data_source_list_stacks.go",
+      "reason": "data source mycloud_list_stacks",
+      "body_hash": "0e5b48808de9061f"
+    },
+    {
+      "path": "internal/provider/data_source_list_stacks_remote_test.go",
+      "reason": "coverage tests for data source list_stacks remote helpers",
+      "body_hash": "63f3551f76e460f0"
+    },
+    {
+      "path": "internal/provider/data_source_list_stacks_test.go",
+      "reason": "unit tests for data source list_stacks",
+      "body_hash": "5988c7fa7231d1eb"
+    },
+    {
+      "path": "internal/provider/data_source_list_tasks.go",
+      "reason": "data source mycloud_list_tasks",
+      "body_hash": "88061781579714f8"
+    },
+    {
+      "path": "internal/provider/data_source_list_tasks_remote_test.go",
+      "reason": "coverage tests for data source list_tasks remote helpers",
+      "body_hash": "d4deb66b35d7ed41"
+    },
+    {
+      "path": "internal/provider/data_source_list_tasks_test.go",
+      "reason": "unit tests for data source list_tasks",
+      "body_hash": "db0c4a7676feea9b"
+    },
+    {
+      "path": "internal/provider/data_source_list_workspaces.go",
+      "reason": "data source mycloud_list_workspaces",
+      "body_hash": "0c5e855eb1def9de"
+    },
+    {
+      "path": "internal/provider/data_source_list_workspaces_remote_test.go",
+      "reason": "coverage tests for data source list_workspaces remote helpers",
+      "body_hash": "81f7c58ae6b7fb27"
+    },
+    {
+      "path": "internal/provider/data_source_list_workspaces_test.go",
+      "reason": "unit tests for data source list_workspaces",
+      "body_hash": "255f7aded2b87447"
+    },
+    {
+      "path": "internal/provider/json_convert.go",
+      "reason": "JSON/model conversion helpers for wired CRUD bodies",
+      "body_hash": "8548ea6a909e4a8f"
+    },
+    {
+      "path": "internal/provider/list_list_branches.go",
+      "reason": "list resource mycloud_list_branches",
+      "body_hash": "c2197567b70808ff"
+    },
+    {
+      "path": "internal/provider/list_list_branches_remote_test.go",
+      "reason": "coverage tests for list resource list_branches remote helper",
+      "body_hash": "555655c4724b9c69"
+    },
+    {
+      "path": "internal/provider/list_list_commits.go",
+      "reason": "list resource mycloud_list_commits",
+      "body_hash": "ed31d645ccb46e89"
+    },
+    {
+      "path": "internal/provider/list_list_commits_remote_test.go",
+      "reason": "coverage tests for list resource list_commits remote helper",
+      "body_hash": "0a0e3b4b6b0b9c37"
+    },
+    {
+      "path": "internal/provider/list_list_configs.go",
+      "reason": "list resource mycloud_list_configs",
+      "body_hash": "f3fc0ce12333fa2b"
+    },
+    {
+      "path": "internal/provider/list_list_configs_remote_test.go",
+      "reason": "coverage tests for list resource list_configs remote helper",
+      "body_hash": "e719b0e183ad4b54"
+    },
+    {
+      "path": "internal/provider/list_list_instances.go",
+      "reason": "list resource mycloud_list_instances",
+      "body_hash": "5953e7f1a02efa19"
+    },
+    {
+      "path": "internal/provider/list_list_instances_remote_test.go",
+      "reason": "coverage tests for list resource list_instances remote helper",
+      "body_hash": "96fe20bac388ca9d"
+    },
+    {
+      "path": "internal/provider/list_list_members.go",
+      "reason": "list resource mycloud_list_members",
+      "body_hash": "3fc2ed911fa771a8"
+    },
+    {
+      "path": "internal/provider/list_list_members_remote_test.go",
+      "reason": "coverage tests for list resource list_members remote helper",
+      "body_hash": "c84fe3dfa94fbda8"
+    },
+    {
+      "path": "internal/provider/list_list_networks.go",
+      "reason": "list resource mycloud_list_networks",
+      "body_hash": "1eeceb384dbd56bd"
+    },
+    {
+      "path": "internal/provider/list_list_networks_remote_test.go",
+      "reason": "coverage tests for list resource list_networks remote helper",
+      "body_hash": "36fdd67399900ff8"
+    },
+    {
+      "path": "internal/provider/list_list_projects_for_organization.go",
+      "reason": "list resource mycloud_list_projects_for_organization",
+      "body_hash": "b2ab3e7155435100"
+    },
+    {
+      "path": "internal/provider/list_list_projects_for_organization_remote_test.go",
+      "reason": "coverage tests for list resource list_projects_for_organization remote helper",
+      "body_hash": "3fa33d16b4afd11b"
+    },
+    {
+      "path": "internal/provider/list_list_pull_requests.go",
+      "reason": "list resource mycloud_list_pull_requests",
+      "body_hash": "e57c04f92b8486a8"
+    },
+    {
+      "path": "internal/provider/list_list_pull_requests_remote_test.go",
+      "reason": "coverage tests for list resource list_pull_requests remote helper",
+      "body_hash": "d74732f748883d0e"
+    },
+    {
+      "path": "internal/provider/list_list_secrets.go",
+      "reason": "list resource mycloud_list_secrets",
+      "body_hash": "805500b8a40ab327"
+    },
+    {
+      "path": "internal/provider/list_list_secrets_remote_test.go",
+      "reason": "coverage tests for list resource list_secrets remote helper",
+      "body_hash": "f62d9523b055a3d2"
+    },
+    {
+      "path": "internal/provider/list_list_stacks.go",
+      "reason": "list resource mycloud_list_stacks",
+      "body_hash": "420824c1c5e0e4a5"
+    },
+    {
+      "path": "internal/provider/list_list_stacks_remote_test.go",
+      "reason": "coverage tests for list resource list_stacks remote helper",
+      "body_hash": "27e039cf287a2fc2"
+    },
+    {
+      "path": "internal/provider/list_list_tasks.go",
+      "reason": "list resource mycloud_list_tasks",
+      "body_hash": "0fc0608f2b12d952"
+    },
+    {
+      "path": "internal/provider/list_list_tasks_remote_test.go",
+      "reason": "coverage tests for list resource list_tasks remote helper",
+      "body_hash": "21348f4c762a10bf"
+    },
+    {
+      "path": "internal/provider/list_list_workspaces.go",
+      "reason": "list resource mycloud_list_workspaces",
+      "body_hash": "d448e23cecca73dc"
+    },
+    {
+      "path": "internal/provider/list_list_workspaces_remote_test.go",
+      "reason": "coverage tests for list resource list_workspaces remote helper",
+      "body_hash": "e680db0e7eef9060"
+    },
+    {
+      "path": "internal/provider/provider.go",
+      "reason": "provider schema and registration",
+      "body_hash": "65dffbbc675bfe87"
+    },
+    {
+      "path": "internal/provider/provider_test.go",
+      "reason": "provider-level unit tests",
+      "body_hash": "594daf3b2db5d06d"
+    },
+    {
+      "path": "internal/provider/resource_config.go",
+      "reason": "resource mycloud_config",
+      "body_hash": "385544ed907e09ca"
+    },
+    {
+      "path": "internal/provider/resource_config_acceptance_test.go",
+      "reason": "acceptance tests for resource config",
+      "body_hash": "53f5ad83d185baea"
+    },
+    {
+      "path": "internal/provider/resource_config_remote_test.go",
+      "reason": "coverage tests for resource config remote helpers",
+      "body_hash": "3f67fef673c804ae"
+    },
+    {
+      "path": "internal/provider/resource_config_test.go",
+      "reason": "unit tests for resource config",
+      "body_hash": "cfedc28b9db4a7fd"
+    },
+    {
+      "path": "internal/provider/resource_instance.go",
+      "reason": "resource mycloud_instance",
+      "body_hash": "a2f09db7fa0c8cc6"
+    },
+    {
+      "path": "internal/provider/resource_instance_acceptance_test.go",
+      "reason": "acceptance tests for resource instance",
+      "body_hash": "17bde098cbc9b6b7"
+    },
+    {
+      "path": "internal/provider/resource_instance_remote_test.go",
+      "reason": "coverage tests for resource instance remote helpers",
+      "body_hash": "7289310803335bf8"
+    },
+    {
+      "path": "internal/provider/resource_instance_test.go",
+      "reason": "unit tests for resource instance",
+      "body_hash": "0e22de48b7eefce1"
+    },
+    {
+      "path": "internal/provider/resource_network.go",
+      "reason": "resource mycloud_network",
+      "body_hash": "deb1e290b06d44f5"
+    },
+    {
+      "path": "internal/provider/resource_network_acceptance_test.go",
+      "reason": "acceptance tests for resource network",
+      "body_hash": "bbb20dd038885079"
+    },
+    {
+      "path": "internal/provider/resource_network_remote_test.go",
+      "reason": "coverage tests for resource network remote helpers",
+      "body_hash": "29c1cd5610a45bb8"
+    },
+    {
+      "path": "internal/provider/resource_network_test.go",
+      "reason": "unit tests for resource network",
+      "body_hash": "85be35a295b16d89"
+    },
+    {
+      "path": "internal/provider/resource_project.go",
+      "reason": "resource mycloud_project",
+      "body_hash": "a0bd7aa22b4985f2"
+    },
+    {
+      "path": "internal/provider/resource_project_acceptance_test.go",
+      "reason": "acceptance tests for resource project",
+      "body_hash": "ade6c2deaeadba4f"
+    },
+    {
+      "path": "internal/provider/resource_project_remote_test.go",
+      "reason": "coverage tests for resource project remote helpers",
+      "body_hash": "fd581676d01f22c5"
+    },
+    {
+      "path": "internal/provider/resource_project_test.go",
+      "reason": "unit tests for resource project",
+      "body_hash": "2f209b1e5d8dc1b9"
+    },
+    {
+      "path": "internal/provider/resource_secret.go",
+      "reason": "resource mycloud_secret",
+      "body_hash": "a0414ff7c6618b26"
+    },
+    {
+      "path": "internal/provider/resource_secret_acceptance_test.go",
+      "reason": "acceptance tests for resource secret",
+      "body_hash": "a304f435389f34df"
+    },
+    {
+      "path": "internal/provider/resource_secret_remote_test.go",
+      "reason": "coverage tests for resource secret remote helpers",
+      "body_hash": "151f6306d4e13e5e"
+    },
+    {
+      "path": "internal/provider/resource_secret_test.go",
+      "reason": "unit tests for resource secret",
+      "body_hash": "43582ffb7521a0f1"
+    },
+    {
+      "path": "internal/provider/resource_stack.go",
+      "reason": "resource mycloud_stack",
+      "body_hash": "52a5e955d6bfa170"
+    },
+    {
+      "path": "internal/provider/resource_stack_acceptance_test.go",
+      "reason": "acceptance tests for resource stack",
+      "body_hash": "9edb3e83c0cd2518"
+    },
+    {
+      "path": "internal/provider/resource_stack_remote_test.go",
+      "reason": "coverage tests for resource stack remote helpers",
+      "body_hash": "2c4a45587e34c000"
+    },
+    {
+      "path": "internal/provider/resource_stack_test.go",
+      "reason": "unit tests for resource stack",
+      "body_hash": "7f7eb978423ebd1d"
+    },
+    {
+      "path": "internal/provider/resource_workspace.go",
+      "reason": "resource mycloud_workspace",
+      "body_hash": "465e65e82633ba44"
+    },
+    {
+      "path": "internal/provider/resource_workspace_acceptance_test.go",
+      "reason": "acceptance tests for resource workspace",
+      "body_hash": "e2a7e2fb74302cdd"
+    },
+    {
+      "path": "internal/provider/resource_workspace_remote_test.go",
+      "reason": "coverage tests for resource workspace remote helpers",
+      "body_hash": "9894b860a71dd758"
+    },
+    {
+      "path": "internal/provider/resource_workspace_test.go",
+      "reason": "unit tests for resource workspace",
+      "body_hash": "9ee1a147de38cd41"
+    },
+    {
+      "path": "internal/provider/testing_helpers_test.go",
+      "reason": "shared httptest helpers for coverage tests",
+      "body_hash": "9e672d1fd10f2460"
+    },
+    {
+      "path": "internal/provider/validators.go",
+      "reason": "custom schema validators",
+      "body_hash": "94a192299dab9088"
+    },
+    {
+      "path": "main.go",
+      "reason": "provider server entrypoint",
+      "body_hash": "3f4120fbb7591f3c"
+    },
+    {
+      "path": "terraform-registry-manifest.json",
+      "reason": "Terraform Registry manifest",
+      "body_hash": "76ac85aa7f3a523b"
+    }
+  ],
+  "warnings": [
+    "request-body property collides with a path parameter name",
+    "request-body property collides with a path parameter name",
+    "request-body property collides with a path parameter name",
+    "request-body property collides with a path parameter name",
+    "request-body property collides with a path parameter name",
+    "request-body property collides with a path parameter name",
+    "request-body property collides with a path parameter name",
+    "request-body property collides with a path parameter name",
+    "request-body property collides with a path parameter name",
+    "request-body property collides with a path parameter name"
+  ]
+}

@@ -2,7 +2,7 @@ package generator
 
 import (
 	"fmt"
-	"path/filepath"
+	"path"
 
 	"github.com/signalbreak-labs/eidos/pkg/generator/internal/naming"
 	"github.com/signalbreak-labs/eidos/pkg/generator/internal/schema"
@@ -15,8 +15,8 @@ import (
 // matches the placeholder value produced by the generated provider's stub
 // Create implementation.
 func TerraformTestFile(pir ir.ProviderIR, r ir.ResourceIR, _ BuildConfig) File {
-	path := fmt.Sprintf("tests/%s.tftest.hcl", naming.SnakeCase(r.Name))
-	return staticFile(path, generateTerraformTestHCL(pir, r))
+	relPath := fmt.Sprintf("tests/%s.tftest.hcl", naming.SnakeCase(r.Name))
+	return staticFile(relPath, generateTerraformTestHCL(pir, r))
 }
 
 // TerraformTestModuleFile returns the generated tests/modules/<name>/main.tf
@@ -25,8 +25,8 @@ func TerraformTestFile(pir ir.ProviderIR, r ir.ResourceIR, _ BuildConfig) File {
 // the resource's required primitive attributes, and emits the resource under
 // test along with an output for its identifier.
 func TerraformTestModuleFile(pir ir.ProviderIR, r ir.ResourceIR, cfg BuildConfig) File {
-	path := filepath.Join("tests", "modules", naming.SnakeCase(r.Name), "main.tf")
-	return staticFile(path, generateTerraformTestModuleHCL(pir, r, cfg))
+	relPath := path.Join("tests", "modules", naming.SnakeCase(r.Name), "main.tf")
+	return staticFile(relPath, generateTerraformTestModuleHCL(pir, r, cfg))
 }
 
 // TerraformTestFiles returns the complete set of generated Terraform native

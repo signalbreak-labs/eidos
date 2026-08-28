@@ -10,10 +10,10 @@ For using the CLI, see [`docs/usage.md`](usage.md).
 
 ## Toolchain and build
 
-- `go.mod` declares `go 1.26.0` and `toolchain go1.26.5`. Do not manually change
+- `go.mod` declares `go 1.26.0` and `toolchain go1.26.6`. Do not manually change
   the `toolchain` line unless you intend to change the CI toolchain.
 - CI reads the Go version from `go.mod` (`go-version-file: go.mod`), so build/test
-  jobs resolve to Go 1.26.5 via the toolchain directive.
+  jobs resolve to Go 1.26.6 via the toolchain directive.
 - `golangci-lint` is intentionally pinned to Go 1.26 by `.golangci.yml`
   (`run.go: "1.26"`), separate from the module file.
 - With the default `GOTOOLCHAIN=auto`, `go mod tidy` respects the toolchain

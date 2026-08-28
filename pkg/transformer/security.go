@@ -5,6 +5,8 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/signalbreak-labs/eidos/pkg/config"
+	"github.com/signalbreak-labs/eidos/pkg/diagnostics"
 	"github.com/signalbreak-labs/eidos/pkg/ir"
 )
 
@@ -266,4 +268,184 @@ func sortedAttrs(attrs map[string]ir.AttributeIR) []ir.AttributeIR {
 		result = append(result, attrs[name])
 	}
 	return result
+}
+
+// ApplyAuthOverrides applies generator.yaml `auth:` entries to the normalized
+// security schemes. The auth section is the practitioner-facing override for
+// the auto-derived auth configuration (M-5): header_name overrides the apiKey
+// header name, token_url overrides the OAuth2 token endpoint, discovery_url
+// overrides the OIDC discovery URL, flow selects the OAuth2 flow, and the
+// env-var hints (env_var, client_id_env, client_secret_env) are carried on the
+// scheme so the config round-trip preserves user edits instead of recomputing
+// them from the provider prefix.
+//
+// Overrides are matched by scheme type (apiKey, basic, bearer, oauth2); when
+// the spec declares several schemes of a type, the first in the supplied order
+// receives the override. An override that matches no scheme, or that names an
+// OAuth2 flow the scheme does not declare, is surfaced as a Warning rather than
+// silently dropped (fail-loud). The input slice is not mutated; a new slice is
+// returned.
+func ApplyAuthOverrides(schemes []ir.SecuritySchemeIR, auth []config.AuthConfig, diags *diagnostics.Diagnostics) []ir.SecuritySchemeIR {
+	if len(auth) == 0 {
+		return schemes
+	}
+	out := make([]ir.SecuritySchemeIR, len(schemes))
+	copy(out, schemes)
+	for _, ac := range auth {
+		idx := findSchemeByAuthConfig(out, ac)
+		if idx < 0 {
+			if diags != nil {
+				*diags = append(*diags, diagnostics.Diagnostic{
+					Severity: diagnostics.Warning,
+					Summary:  "auth override did not match a security scheme",
+					Detail: fmt.Sprintf(
+						"generator.yaml `auth:` entry with scheme %q does not match any declared security scheme; the override is ignored.",
+						ac.Scheme,
+					),
+				})
+			}
+			continue
+		}
+		if ac.Flow != "" && out[idx].Type == ir.SecuritySchemeOAuth2 && !declaresOAuth2Flow(&out[idx], ac.Flow) {
+			if diags != nil {
+				*diags = append(*diags, diagnostics.Diagnostic{
+					Severity: diagnostics.Warning,
+					Summary:  "auth override names an undeclared OAuth2 flow",
+					Detail: fmt.Sprintf(
+						"generator.yaml `auth:` entry selects flow %q for scheme %q, which the spec does not declare; the generated provider falls back to its default flow priority.",
+						ac.Flow, out[idx].Name,
+					),
+				})
+			}
+		}
+		applyAuthOverride(&out[idx], ac)
+	}
+	return out
+}
+
+// findSchemeByAuthConfig returns the index of the first security scheme that an
+// auth entry targets, or -1 when none matches. Matching is by scheme type; an
+// oauth2 entry with flow "openIdConnect" targets the OpenID Connect scheme
+// (mirroring convertSecurityScheme's representation of OIDC as oauth2).
+func findSchemeByAuthConfig(schemes []ir.SecuritySchemeIR, ac config.AuthConfig) int {
+	for i, s := range schemes {
+		switch ac.Scheme {
+		case "apiKey":
+			if s.Type == ir.SecuritySchemeAPIKey {
+				return i
+			}
+		case "basic":
+			if s.Type == ir.SecuritySchemeHTTP && strings.EqualFold(s.Scheme, "basic") {
+				return i
+			}
+		case "bearer":
+			if s.Type == ir.SecuritySchemeHTTP && strings.EqualFold(s.Scheme, "bearer") {
+				return i
+			}
+		case "oauth2":
+			if ac.Flow == "openIdConnect" {
+				if s.Type == ir.SecuritySchemeOpenIDConnect {
+					return i
+				}
+			} else if s.Type == ir.SecuritySchemeOAuth2 {
+				return i
+			}
+		}
+	}
+	return -1
+}
+
+// applyAuthOverride mutates a single scheme with the runtime-affecting fields
+// of an auth entry. The env-var hints are carried on the scheme so the config
+// round-trip preserves them (M-5).
+func applyAuthOverride(scheme *ir.SecuritySchemeIR, ac config.AuthConfig) {
+	switch scheme.Type {
+	case ir.SecuritySchemeAPIKey:
+		if ac.HeaderName != "" {
+			scheme.NameField = ac.HeaderName
+		}
+		if ac.EnvVar != "" {
+			scheme.EnvVar = ac.EnvVar
+		}
+	case ir.SecuritySchemeHTTP:
+		if ac.EnvVar != "" {
+			scheme.EnvVar = ac.EnvVar
+		}
+	case ir.SecuritySchemeOAuth2:
+		if ac.EnvVar != "" {
+			scheme.EnvVar = ac.EnvVar
+		}
+		if ac.ClientIDEnv != "" {
+			scheme.ClientIDEnv = ac.ClientIDEnv
+		}
+		if ac.ClientSecretEnv != "" {
+			scheme.ClientSecretEnv = ac.ClientSecretEnv
+		}
+		if ac.Flow != "" {
+			scheme.SelectedFlow = ac.Flow
+		}
+		if ac.TokenURL != "" {
+			if flow := activeOAuth2Flow(scheme, ac.Flow); flow != nil {
+				flow.TokenURL = ac.TokenURL
+			}
+		}
+	case ir.SecuritySchemeOpenIDConnect:
+		if ac.DiscoveryURL != "" {
+			scheme.OpenIDConnectURL = ac.DiscoveryURL
+		}
+		if ac.ClientIDEnv != "" {
+			scheme.ClientIDEnv = ac.ClientIDEnv
+		}
+		if ac.EnvVar != "" {
+			scheme.EnvVar = ac.EnvVar
+		}
+	}
+}
+
+// activeOAuth2Flow returns the OAuth2 flow the generated provider will use for
+// a scheme: the flow named by flowName when the scheme declares it, otherwise
+// the priority-order first declared flow (client_credentials, password,
+// authorization_code — matching the generated provider's oauth2Stmts). Returns
+// nil when no flow is usable.
+func activeOAuth2Flow(scheme *ir.SecuritySchemeIR, flowName string) *ir.OAuthFlowIR {
+	if scheme.Flows == nil {
+		return nil
+	}
+	switch flowName {
+	case "client_credentials":
+		return scheme.Flows.ClientCredentials
+	case "password":
+		return scheme.Flows.Password
+	case "authorization_code":
+		return scheme.Flows.AuthorizationCode
+	case "implicit":
+		return scheme.Flows.Implicit
+	}
+	switch {
+	case scheme.Flows.ClientCredentials != nil:
+		return scheme.Flows.ClientCredentials
+	case scheme.Flows.Password != nil:
+		return scheme.Flows.Password
+	case scheme.Flows.AuthorizationCode != nil:
+		return scheme.Flows.AuthorizationCode
+	}
+	return nil
+}
+
+// declaresOAuth2Flow reports whether the scheme declares the named OAuth2 flow.
+func declaresOAuth2Flow(scheme *ir.SecuritySchemeIR, flowName string) bool {
+	if scheme.Flows == nil {
+		return false
+	}
+	switch flowName {
+	case "client_credentials":
+		return scheme.Flows.ClientCredentials != nil
+	case "password":
+		return scheme.Flows.Password != nil
+	case "authorization_code":
+		return scheme.Flows.AuthorizationCode != nil
+	case "implicit":
+		return scheme.Flows.Implicit != nil
+	}
+	return false
 }

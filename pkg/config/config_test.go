@@ -120,6 +120,14 @@ logging:
     - Authorization
     - X-API-Key
 
+client:
+  base_url_template: https://api.mycloud.io/v1
+  user_agent: mycloud-terraform-provider/1.0.0
+  timeout: 45s
+  retry_max: 4
+  retry_wait_min: 500ms
+  retry_wait_max: 20s
+
 auth:
   - scheme: apiKey
     header_name: X-API-Key
@@ -236,6 +244,23 @@ use_put_as_create: false
 
 	if cfg.Logging == nil || !cfg.Logging.Enabled || cfg.Logging.FilePath != "./provider.log" {
 		t.Errorf("unexpected logging: %+v", cfg.Logging)
+	}
+	if cfg.Client == nil {
+		t.Fatal("client config should be parsed")
+	}
+	if cfg.Client.BaseURLTemplate != "https://api.mycloud.io/v1" ||
+		cfg.Client.UserAgent != "mycloud-terraform-provider/1.0.0" ||
+		cfg.Client.RetryMax != 4 {
+		t.Errorf("unexpected client: %+v", cfg.Client)
+	}
+	if cfg.Client.Timeout == nil || cfg.Client.Timeout.Duration() != 45*time.Second {
+		t.Errorf("client.timeout = %v, want 45s", cfg.Client.Timeout)
+	}
+	if cfg.Client.RetryWaitMin == nil || cfg.Client.RetryWaitMin.Duration() != 500*time.Millisecond {
+		t.Errorf("client.retry_wait_min = %v, want 500ms", cfg.Client.RetryWaitMin)
+	}
+	if cfg.Client.RetryWaitMax == nil || cfg.Client.RetryWaitMax.Duration() != 20*time.Second {
+		t.Errorf("client.retry_wait_max = %v, want 20s", cfg.Client.RetryWaitMax)
 	}
 	if len(cfg.Auth) != 2 {
 		t.Fatalf("auth count = %d, want 2", len(cfg.Auth))
@@ -1963,4 +1988,54 @@ use_put_as_create: false
 			t.Errorf("round-trip use_put_as_create should stay false, got %v", got.UsePutAsCreate)
 		}
 	})
+}
+
+func TestLoad_ClientConfig(t *testing.T) {
+	yamlInput := `
+provider:
+  name: mycloud
+  version: "0.1.0"
+client:
+  base_url_template: https://api.example.com/v2
+  user_agent: custom-agent
+  timeout: 90s
+  retry_max: 7
+  retry_wait_min: 2s
+  retry_wait_max: 1m
+`
+	cfg, err := LoadBytes([]byte(yamlInput))
+	if err != nil {
+		t.Fatalf("LoadBytes failed: %v", err)
+	}
+	if cfg.Client == nil {
+		t.Fatal("client config should be parsed")
+	}
+	if cfg.Client.BaseURLTemplate != "https://api.example.com/v2" {
+		t.Errorf("base_url_template = %q", cfg.Client.BaseURLTemplate)
+	}
+	if cfg.Client.UserAgent != "custom-agent" {
+		t.Errorf("user_agent = %q", cfg.Client.UserAgent)
+	}
+	if cfg.Client.Timeout == nil || cfg.Client.Timeout.Duration() != 90*time.Second {
+		t.Errorf("timeout = %v, want 90s", cfg.Client.Timeout)
+	}
+	if cfg.Client.RetryMax != 7 {
+		t.Errorf("retry_max = %d, want 7", cfg.Client.RetryMax)
+	}
+	if cfg.Client.RetryWaitMin == nil || cfg.Client.RetryWaitMin.Duration() != 2*time.Second {
+		t.Errorf("retry_wait_min = %v, want 2s", cfg.Client.RetryWaitMin)
+	}
+	if cfg.Client.RetryWaitMax == nil || cfg.Client.RetryWaitMax.Duration() != time.Minute {
+		t.Errorf("retry_wait_max = %v, want 1m", cfg.Client.RetryWaitMax)
+	}
+}
+
+func TestLoad_ClientConfigAbsent(t *testing.T) {
+	cfg, err := LoadBytes([]byte("provider:\n  name: mycloud\n  version: \"0.1.0\"\n"))
+	if err != nil {
+		t.Fatalf("LoadBytes failed: %v", err)
+	}
+	if cfg.Client != nil {
+		t.Fatalf("client config should be nil when absent, got %+v", cfg.Client)
+	}
 }

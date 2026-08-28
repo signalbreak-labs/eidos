@@ -4,6 +4,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/signalbreak-labs/eidos/pkg/config"
+	"github.com/signalbreak-labs/eidos/pkg/diagnostics"
 	"github.com/signalbreak-labs/eidos/pkg/ir"
 )
 
@@ -420,4 +422,160 @@ func slicesEqual(a, b []attrSignature) bool {
 		}
 	}
 	return true
+}
+
+// TestApplyAuthOverrides locks in the M-5 fix: generator.yaml `auth:` entries
+// are consumed by the transform pipeline and override the auto-derived security
+// scheme configuration. Before the fix the auth section was validated and
+// round-tripped but never read, so header_name, token_url, discovery_url, and
+// flow had no effect on the generated provider.
+func TestApplyAuthOverrides(t *testing.T) {
+	apiKey := ir.SecuritySchemeIR{
+		Name:      "api_key",
+		Type:      ir.SecuritySchemeAPIKey,
+		In:        "header",
+		NameField: "X-API-Key",
+	}
+	oauth2 := ir.SecuritySchemeIR{
+		Name: "oauth2",
+		Type: ir.SecuritySchemeOAuth2,
+		Flows: &ir.OAuthFlowsIR{
+			ClientCredentials: &ir.OAuthFlowIR{TokenURL: "https://spec.example/token"},
+			Password:          &ir.OAuthFlowIR{TokenURL: "https://spec.example/password"},
+		},
+	}
+	oidc := ir.SecuritySchemeIR{
+		Name:             "oidc",
+		Type:             ir.SecuritySchemeOpenIDConnect,
+		OpenIDConnectURL: "https://spec.example/.well-known/openid-configuration",
+	}
+
+	t.Run("apiKey header_name and env_var", func(t *testing.T) {
+		var diags diagnostics.Diagnostics
+		got := ApplyAuthOverrides([]ir.SecuritySchemeIR{apiKey}, []config.AuthConfig{
+			{Scheme: "apiKey", HeaderName: "X-Custom-Key", EnvVar: "MY_CUSTOM_KEY"},
+		}, &diags)
+		if len(got) != 1 {
+			t.Fatalf("got %d schemes, want 1", len(got))
+		}
+		if got[0].NameField != "X-Custom-Key" {
+			t.Errorf("NameField = %q, want %q (header_name override)", got[0].NameField, "X-Custom-Key")
+		}
+		if got[0].EnvVar != "MY_CUSTOM_KEY" {
+			t.Errorf("EnvVar = %q, want %q (env_var preserved)", got[0].EnvVar, "MY_CUSTOM_KEY")
+		}
+		if len(diags) != 0 {
+			t.Errorf("unexpected diagnostics: %v", diags)
+		}
+	})
+
+	t.Run("oauth2 token_url and flow selection", func(t *testing.T) {
+		var diags diagnostics.Diagnostics
+		got := ApplyAuthOverrides([]ir.SecuritySchemeIR{oauth2}, []config.AuthConfig{
+			{Scheme: "oauth2", Flow: "password", TokenURL: "https://override.example/token", ClientIDEnv: "MY_CLIENT_ID", ClientSecretEnv: "MY_CLIENT_SECRET"},
+		}, &diags)
+		if len(got) != 1 {
+			t.Fatalf("got %d schemes, want 1", len(got))
+		}
+		if got[0].SelectedFlow != "password" {
+			t.Errorf("SelectedFlow = %q, want %q", got[0].SelectedFlow, "password")
+		}
+		if got[0].Flows.Password.TokenURL != "https://override.example/token" {
+			t.Errorf("password flow TokenURL = %q, want %q (token_url override)", got[0].Flows.Password.TokenURL, "https://override.example/token")
+		}
+		if got[0].Flows.ClientCredentials.TokenURL != "https://spec.example/token" {
+			t.Errorf("client_credentials flow TokenURL = %q, want spec value unchanged", got[0].Flows.ClientCredentials.TokenURL)
+		}
+		if got[0].ClientIDEnv != "MY_CLIENT_ID" || got[0].ClientSecretEnv != "MY_CLIENT_SECRET" {
+			t.Errorf("env hints = %q/%q, want MY_CLIENT_ID/MY_CLIENT_SECRET", got[0].ClientIDEnv, got[0].ClientSecretEnv)
+		}
+		if len(diags) != 0 {
+			t.Errorf("unexpected diagnostics: %v", diags)
+		}
+	})
+
+	t.Run("oauth2 token_url without flow targets priority flow", func(t *testing.T) {
+		var diags diagnostics.Diagnostics
+		got := ApplyAuthOverrides([]ir.SecuritySchemeIR{oauth2}, []config.AuthConfig{
+			{Scheme: "oauth2", TokenURL: "https://override.example/token"},
+		}, &diags)
+		if got[0].Flows.ClientCredentials.TokenURL != "https://override.example/token" {
+			t.Errorf("client_credentials flow TokenURL = %q, want override (priority flow)", got[0].Flows.ClientCredentials.TokenURL)
+		}
+		if len(diags) != 0 {
+			t.Errorf("unexpected diagnostics: %v", diags)
+		}
+	})
+
+	t.Run("oidc discovery_url override", func(t *testing.T) {
+		var diags diagnostics.Diagnostics
+		got := ApplyAuthOverrides([]ir.SecuritySchemeIR{oidc}, []config.AuthConfig{
+			{Scheme: "oauth2", Flow: "openIdConnect", DiscoveryURL: "https://override.example/discovery"},
+		}, &diags)
+		if got[0].OpenIDConnectURL != "https://override.example/discovery" {
+			t.Errorf("OpenIDConnectURL = %q, want %q (discovery_url override)", got[0].OpenIDConnectURL, "https://override.example/discovery")
+		}
+		if len(diags) != 0 {
+			t.Errorf("unexpected diagnostics: %v", diags)
+		}
+	})
+
+	t.Run("unmatched scheme warns", func(t *testing.T) {
+		var diags diagnostics.Diagnostics
+		got := ApplyAuthOverrides([]ir.SecuritySchemeIR{apiKey}, []config.AuthConfig{
+			{Scheme: "bearer", EnvVar: "MY_TOKEN"},
+		}, &diags)
+		if len(got) != 1 {
+			t.Fatalf("got %d schemes, want 1", len(got))
+		}
+		if got[0].EnvVar != "" {
+			t.Errorf("EnvVar = %q, want empty (override must not apply)", got[0].EnvVar)
+		}
+		if len(diags) != 1 || diags[0].Severity != diagnostics.Warning {
+			t.Fatalf("want 1 warning for unmatched override, got %v", diags)
+		}
+	})
+
+	t.Run("undeclared flow warns and falls back", func(t *testing.T) {
+		var diags diagnostics.Diagnostics
+		got := ApplyAuthOverrides([]ir.SecuritySchemeIR{oauth2}, []config.AuthConfig{
+			{Scheme: "oauth2", Flow: "authorization_code", TokenURL: "https://override.example/token"},
+		}, &diags)
+		if got[0].SelectedFlow != "authorization_code" {
+			t.Errorf("SelectedFlow = %q, want %q", got[0].SelectedFlow, "authorization_code")
+		}
+		// The token_url override targets the priority flow (client_credentials)
+		// because the named flow is not declared.
+		if got[0].Flows.ClientCredentials.TokenURL != "https://override.example/token" {
+			t.Errorf("client_credentials flow TokenURL = %q, want override on priority flow", got[0].Flows.ClientCredentials.TokenURL)
+		}
+		if len(diags) != 1 || diags[0].Severity != diagnostics.Warning {
+			t.Fatalf("want 1 warning for undeclared flow, got %v", diags)
+		}
+	})
+
+	t.Run("empty auth is a no-op", func(t *testing.T) {
+		var diags diagnostics.Diagnostics
+		got := ApplyAuthOverrides([]ir.SecuritySchemeIR{apiKey}, nil, &diags)
+		if len(got) != 1 || got[0].NameField != "X-API-Key" {
+			t.Errorf("empty auth must not mutate schemes, got %+v", got)
+		}
+		if len(diags) != 0 {
+			t.Errorf("unexpected diagnostics: %v", diags)
+		}
+	})
+
+	t.Run("input slice is not mutated", func(t *testing.T) {
+		var diags diagnostics.Diagnostics
+		orig := []ir.SecuritySchemeIR{apiKey}
+		got := ApplyAuthOverrides(orig, []config.AuthConfig{
+			{Scheme: "apiKey", HeaderName: "X-Custom-Key"},
+		}, &diags)
+		if orig[0].NameField != "X-API-Key" {
+			t.Errorf("input slice mutated: NameField = %q, want %q", orig[0].NameField, "X-API-Key")
+		}
+		if got[0].NameField != "X-Custom-Key" {
+			t.Errorf("returned slice NameField = %q, want %q", got[0].NameField, "X-Custom-Key")
+		}
+	})
 }

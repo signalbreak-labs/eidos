@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -327,7 +328,7 @@ func TestGenerateConfigTool_Schema(t *testing.T) {
 }
 
 func TestNormalizeSpec_UnsupportedType(t *testing.T) {
-	_, err := normalizeSpec(context.Background(), 12345)
+	_, err := normalizeSpec(context.Background(), 12345, nil)
 	if err == nil {
 		t.Fatal("expected error for unsupported spec type")
 	}
@@ -355,7 +356,7 @@ paths: {}
 			case "json.RawMessage":
 				in = json.RawMessage(spec)
 			}
-			got, err := normalizeSpec(context.Background(), in)
+			got, err := normalizeSpec(context.Background(), in, nil)
 			if err != nil {
 				t.Fatalf("normalizeSpec(%s) error: %v", name, err)
 			}
@@ -368,12 +369,136 @@ paths: {}
 
 // TestNormalizeSpec_Nil asserts the required-field guard rejects a missing spec.
 func TestNormalizeSpec_Nil(t *testing.T) {
-	_, err := normalizeSpec(context.Background(), nil)
+	_, err := normalizeSpec(context.Background(), nil, nil)
 	if err == nil {
 		t.Fatal("expected error for nil spec")
 	}
 	if !strings.Contains(err.Error(), "spec is required") {
 		t.Errorf("expected 'spec is required' error, got: %v", err)
+	}
+}
+
+// TestNormalizeSpec_ObjectSpecPreservesIntegerPrecision covers L7: an
+// object-shaped spec argument is decoded by the MCP SDK into map[string]any
+// with float64 numbers, silently rounding integers beyond 2^53. normalizeSpec
+// must recover the original bytes from the raw wire arguments so the
+// precision-preserving parse path (decodeSpecMap) sees the exact integer.
+func TestNormalizeSpec_ObjectSpecPreservesIntegerPrecision(t *testing.T) {
+	const rawArgs = `{"spec":{"openapi":"3.0.0","info":{"title":"t","version":"1"},"paths":{},"components":{"schemas":{"Thing":{"type":"object","properties":{"n":{"type":"integer","maximum":9223372036854775807}}}}}}}`
+	// Simulate the SDK: decode the raw arguments into map[string]any, which
+	// turns the maximum into a rounded float64.
+	var args struct {
+		Spec any `json:"spec"`
+	}
+	if err := json.Unmarshal([]byte(rawArgs), &args); err != nil {
+		t.Fatal(err)
+	}
+	specMap, ok := args.Spec.(map[string]any)
+	if !ok {
+		t.Fatalf("expected map[string]any, got %T", args.Spec)
+	}
+	// Sanity-check the premise: the float64 decode already rounded the integer.
+	if b, err := json.Marshal(specMap); err != nil {
+		t.Fatal(err)
+	} else if bytes.Contains(b, []byte("9223372036854775807")) {
+		t.Fatal("premise broken: float64 decode preserved the integer")
+	}
+
+	got, err := normalizeSpec(context.Background(), specMap, json.RawMessage(rawArgs))
+	if err != nil {
+		t.Fatalf("normalizeSpec object spec: %v", err)
+	}
+	if !bytes.Contains(got, []byte("9223372036854775807")) {
+		t.Errorf("integer precision lost in object spec:\ngot: %s", got)
+	}
+	if bytes.Contains(got, []byte("9223372036854776000")) {
+		t.Errorf("object spec still carries the rounded float64 value:\ngot: %s", got)
+	}
+}
+
+// TestNormalizeSpec_ObjectSpecFallsBackWithoutRawArgs covers the fallback path
+// of the L7 fix: when the raw wire arguments are unavailable (direct handler
+// calls in tests), normalizeSpec marshals the decoded map instead of failing.
+func TestNormalizeSpec_ObjectSpecFallsBackWithoutRawArgs(t *testing.T) {
+	specMap := map[string]any{
+		"openapi": "3.0.0",
+		"info":    map[string]any{"title": "t", "version": "1"},
+		"paths":   map[string]any{},
+	}
+	got, err := normalizeSpec(context.Background(), specMap, nil)
+	if err != nil {
+		t.Fatalf("normalizeSpec object spec fallback: %v", err)
+	}
+	if !bytes.Contains(got, []byte(`"openapi":"3.0.0"`)) {
+		t.Errorf("fallback marshal produced unexpected bytes: %s", got)
+	}
+}
+
+// TestSpecFromRawArguments covers the raw-argument extraction helper directly:
+// it returns the spec bytes only for a JSON-object spec, and ok=false for
+// absent arguments, a non-object spec, or malformed JSON.
+func TestSpecFromRawArguments(t *testing.T) {
+	t.Run("object spec", func(t *testing.T) {
+		raw, ok := specFromRawArguments(json.RawMessage(`{"spec":{"openapi":"3.0.0"}}`))
+		if !ok {
+			t.Fatal("expected ok for object spec")
+		}
+		if string(raw) != `{"openapi":"3.0.0"}` {
+			t.Errorf("unexpected raw spec: %s", raw)
+		}
+	})
+	t.Run("string spec", func(t *testing.T) {
+		if _, ok := specFromRawArguments(json.RawMessage(`{"spec":"openapi: 3.0.0"}`)); ok {
+			t.Fatal("expected ok=false for string spec")
+		}
+	})
+	t.Run("absent arguments", func(t *testing.T) {
+		if _, ok := specFromRawArguments(nil); ok {
+			t.Fatal("expected ok=false for nil arguments")
+		}
+	})
+	t.Run("missing spec field", func(t *testing.T) {
+		if _, ok := specFromRawArguments(json.RawMessage(`{"format":"yaml"}`)); ok {
+			t.Fatal("expected ok=false when spec field is absent")
+		}
+	})
+	t.Run("malformed JSON", func(t *testing.T) {
+		if _, ok := specFromRawArguments(json.RawMessage(`{not json`)); ok {
+			t.Fatal("expected ok=false for malformed JSON")
+		}
+	})
+}
+
+// TestHandleGenerateConfig_ObjectSpecWithRawArguments proves the L7 wiring
+// end-to-end: a real CallToolRequest carrying the raw wire arguments reaches
+// normalizeSpec, which re-extracts the spec bytes from them instead of
+// marshaling the SDK-decoded float64 map. The handler must still produce a
+// valid config (the precision itself is asserted at the normalizeSpec level,
+// since the generated config does not carry schema constraints).
+func TestHandleGenerateConfig_ObjectSpecWithRawArguments(t *testing.T) {
+	rawArgs := json.RawMessage(`{"spec":{"openapi":"3.0.0","info":{"title":"Pet Store","version":"1.0.0"},"paths":{"/pets":{"get":{"operationId":"listPets","responses":{"200":{"description":"ok"}}}}}}}`)
+	var args GenerateConfigArgs
+	if err := json.Unmarshal(rawArgs, &args); err != nil {
+		t.Fatal(err)
+	}
+	req := &mcp.CallToolRequest{
+		Params: &mcp.CallToolParamsRaw{Arguments: rawArgs},
+	}
+	result, _, err := HandleGenerateConfig(context.Background(), req, args)
+	if err != nil {
+		t.Fatalf("HandleGenerateConfig failed: %v", err)
+	}
+	r := parseResult(t, result)
+	if strings.TrimSpace(r.Config) == "" {
+		t.Fatal("expected generated config")
+	}
+	if !strings.Contains(r.Config, "name: pet-store") {
+		t.Errorf("expected provider name derived from spec title, got:\n%s", r.Config)
+	}
+	for _, d := range r.Diagnostics {
+		if d.Severity == "error" {
+			t.Errorf("unexpected error diagnostic: %+v", d)
+		}
 	}
 }
 
@@ -1009,5 +1134,123 @@ func TestGenerateArgs_UnmarshalJSON_RoundTripsFields(t *testing.T) {
 	}
 	if a.Spec != "s" || a.Config != "c" || a.Output != "o" || !a.Verify || !a.DryRun {
 		t.Errorf("fields not round-tripped: %+v", a)
+	}
+}
+
+// TestMergeConfigIntoSpec_YAMLSpecPreservesTimestamp guards L-6: a YAML spec
+// whose scalar looks like a timestamp (e.g. an example or default value) must
+// survive the config-merge round-trip as its original string, not be re-typed
+// to time.Time and re-serialized as RFC3339.
+func TestMergeConfigIntoSpec_YAMLSpecPreservesTimestamp(t *testing.T) {
+	spec := []byte(`openapi: 3.0.0
+info:
+  title: X
+  version: 1.0.0
+paths: {}
+components:
+  schemas:
+    Thing:
+      type: object
+      properties:
+        created:
+          type: string
+          example: 2024-01-01
+`)
+	out, err := mergeConfigIntoSpec(spec, "provider:\n  name: x\n  version: 1.0.0\n")
+	if err != nil {
+		t.Fatalf("mergeConfigIntoSpec: %v", err)
+	}
+	if !bytes.Contains(out, []byte(`"2024-01-01"`)) {
+		t.Errorf("timestamp scalar mutated by config merge: %s", string(out))
+	}
+	if bytes.Contains(out, []byte(`2024-01-01T00:00:00Z`)) {
+		t.Errorf("timestamp scalar re-serialized as RFC3339: %s", string(out))
+	}
+}
+
+// TestYamlToMap_PreservesScalarTyping guards L-6 and N-50 at the decode layer:
+// integers stay int64 (precision preserved), timestamps stay their original
+// string, booleans stay bool, and nested mappings/sequences survive.
+func TestYamlToMap_PreservesScalarTyping(t *testing.T) {
+	data := []byte(`a: 5
+b: 2024-01-01
+c: true
+d: 3.14
+e: hello
+f: 9223372036854775807
+g:
+  - 1
+  - 2
+`)
+	m, err := yamlToMap(data)
+	if err != nil {
+		t.Fatalf("yamlToMap: %v", err)
+	}
+	if got, ok := m["a"].(int); !ok || got != 5 {
+		t.Errorf("a = %#v (%T), want int 5", m["a"], m["a"])
+	}
+	if got, ok := m["b"].(string); !ok || got != "2024-01-01" {
+		t.Errorf("b = %#v (%T), want string \"2024-01-01\"", m["b"], m["b"])
+	}
+	if got, ok := m["c"].(bool); !ok || !got {
+		t.Errorf("c = %#v (%T), want bool true", m["c"], m["c"])
+	}
+	if got, ok := m["d"].(float64); !ok || got != 3.14 {
+		t.Errorf("d = %#v (%T), want float64 3.14", m["d"], m["d"])
+	}
+	if got, ok := m["e"].(string); !ok || got != "hello" {
+		t.Errorf("e = %#v (%T), want string hello", m["e"], m["e"])
+	}
+	if got, ok := m["f"].(int); !ok || got != 9223372036854775807 {
+		t.Errorf("f = %#v (%T), want int 9223372036854775807", m["f"], m["f"])
+	}
+	seq, ok := m["g"].([]any)
+	if !ok || len(seq) != 2 {
+		t.Fatalf("g = %#v (%T), want []any of length 2", m["g"], m["g"])
+	}
+	if seq[0] != 1 || seq[1] != 2 {
+		t.Errorf("g = %#v, want [1 2]", seq)
+	}
+}
+
+// TestYamlToMap_RejectsNonMapping guards the yamlToMap contract: a YAML
+// document that is not a mapping (e.g. a bare sequence) is rejected rather than
+// silently coerced.
+func TestYamlToMap_RejectsNonMapping(t *testing.T) {
+	if _, err := yamlToMap([]byte("- a\n- b\n")); err == nil {
+		t.Fatal("yamlToMap of a sequence should fail")
+	}
+}
+
+// TestErrorResultHelpers verifies the error/panic result builders return
+// non-nil empty slices so the SDK's output-schema validation passes.
+func TestErrorResultHelpers(t *testing.T) {
+	err := errors.New("boom")
+
+	gr := generateErrorResult(err)
+	if gr.Valid {
+		t.Error("generateErrorResult must report Valid=false")
+	}
+	if len(gr.Diagnostics) != 1 || gr.Diagnostics[0].Summary != "boom" {
+		t.Errorf("generateErrorResult diagnostics wrong: %+v", gr.Diagnostics)
+	}
+	if gr.Resources == nil || gr.DataSources == nil || gr.Actions == nil || gr.Files == nil || gr.StaleFiles == nil {
+		t.Error("generateErrorResult must return non-nil empty slices")
+	}
+
+	vr := validateSchemasErrorResult(err)
+	if vr.Valid {
+		t.Error("validateSchemasErrorResult must report Valid=false")
+	}
+	if vr.Issues == nil {
+		t.Error("validateSchemasErrorResult must return non-nil Issues")
+	}
+
+	or := overridePreviewErrorResult(err)
+	if or.Valid {
+		t.Error("overridePreviewErrorResult must report Valid=false")
+	}
+	if or.Resources == nil || or.Overrides == nil {
+		t.Error("overridePreviewErrorResult must return non-nil empty slices")
 	}
 }

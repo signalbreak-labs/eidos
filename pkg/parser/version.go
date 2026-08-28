@@ -221,7 +221,11 @@ func nodeLoc(n Node) SourceLocation {
 }
 
 func findMapEntry(m *MapNode, key string) *MapEntry {
-	for i := range m.Entries {
+	// Iterate in reverse so a duplicated key resolves to the last occurrence,
+	// matching the converters' last-wins map assignment (H-2). Previously this
+	// returned the first occurrence while conversion kept the last, so $ref
+	// resolution and the converted Spec could disagree about one document.
+	for i := len(m.Entries) - 1; i >= 0; i-- {
 		if m.Entries[i].Key != nil && m.Entries[i].Key.Value == key {
 			return &m.Entries[i]
 		}

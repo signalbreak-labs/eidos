@@ -3,6 +3,7 @@ package transformer
 import (
 	"testing"
 
+	"github.com/signalbreak-labs/eidos/pkg/diagnostics"
 	"github.com/signalbreak-labs/eidos/pkg/ir"
 )
 
@@ -445,6 +446,74 @@ func TestDataSourceSchema_UniqueItemsIsSet(t *testing.T) {
 	}
 }
 
+// TestDataSourceSchema_DeprecatedParameter verifies M-10: a parameter whose
+// spec marks it deprecated surfaces as a deprecated input attribute so the flag
+// reaches the generated schema.
+func TestDataSourceSchema_DeprecatedParameter(t *testing.T) {
+	op := Operation{
+		Method: MethodGet,
+		Path:   "/pets",
+		Parameters: []Parameter{
+			{Name: "limit", In: "query", Type: "integer", Deprecated: true},
+			{Name: "status", In: "query", Type: "string"},
+		},
+		ResponseSchema: &SchemaSpec{Type: "array", Items: &SchemaSpec{Type: "string"}},
+	}
+	schema := DataSourceSchema(op, nil)
+
+	var limit, status *ir.AttributeIR
+	for i := range schema.Attributes {
+		switch schema.Attributes[i].Name {
+		case "limit":
+			limit = &schema.Attributes[i]
+		case "status":
+			status = &schema.Attributes[i]
+		}
+	}
+	if limit == nil {
+		t.Fatalf("expected a limit attribute, got %+v", schema.Attributes)
+	}
+	if !limit.Deprecated {
+		t.Errorf("expected limit attribute to be Deprecated")
+	}
+	if limit.DeprecationMessage == "" {
+		t.Errorf("expected limit attribute to carry a DeprecationMessage")
+	}
+	if status == nil {
+		t.Fatalf("expected a status attribute, got %+v", schema.Attributes)
+	}
+	if status.Deprecated {
+		t.Errorf("expected status attribute to not be Deprecated")
+	}
+}
+
+// TestListResourceConfigSchema_DeprecatedParameter verifies M-10: a deprecated
+// parameter surfaces as a deprecated filter attribute on a list resource.
+func TestListResourceConfigSchema_DeprecatedParameter(t *testing.T) {
+	op := Operation{
+		Method: MethodGet,
+		Path:   "/pets",
+		Parameters: []Parameter{
+			{Name: "limit", In: "query", Type: "integer", Deprecated: true},
+		},
+		ResponseSchema: &SchemaSpec{Type: "array", Items: &SchemaSpec{Type: "string"}},
+	}
+	schema := ListResourceConfigSchema(op, nil)
+	if len(schema.Attributes) != 1 {
+		t.Fatalf("expected 1 attribute, got %+v", schema.Attributes)
+	}
+	attr := schema.Attributes[0]
+	if attr.Name != "limit" {
+		t.Fatalf("attribute name = %q, want limit", attr.Name)
+	}
+	if !attr.Deprecated {
+		t.Errorf("expected limit attribute to be Deprecated")
+	}
+	if attr.DeprecationMessage == "" {
+		t.Errorf("expected limit attribute to carry a DeprecationMessage")
+	}
+}
+
 func TestSchemaIRFromSpecRecursive_AdditionalPropertiesMap(t *testing.T) {
 	spec := SchemaSpec{AdditionalProperties: &SchemaSpec{Type: "string"}}
 	got := schemaIRFromSpecRecursive(spec)
@@ -835,6 +904,103 @@ func TestManagedResourceDescriptionFallsBackToRequestBody(t *testing.T) {
 	}
 	if attr.Description != "Display name of the pet." {
 		t.Errorf("description = %q, want the request body's text", attr.Description)
+	}
+}
+
+// TestManagedResourceSchemaDedupsSnakeCaseCollisions verifies that two distinct
+// response properties that sanitize to the same Terraform attribute name
+// ("fooBar" and "foo_bar") do not both survive as duplicate attributes: the
+// lexicographically smaller original name wins and a Warning is emitted for the
+// dropped property (H-3).
+func TestManagedResourceSchemaDedupsSnakeCaseCollisions(t *testing.T) {
+	var diags diagnostics.Diagnostics
+	obj, _ := ManagedResourceSchemaWithDiagnostics(ResourceCRUD{
+		Name:           "collision",
+		CollectionPath: "/collisions",
+		InstancePath:   "/collisions/{id}",
+		Read: &Operation{
+			Method: MethodGet,
+			Path:   "/collisions/{id}",
+			ResponseSchema: &SchemaSpec{
+				Type: "object",
+				Properties: map[string]SchemaSpec{
+					"fooBar":  {Type: "string"},
+					"foo_bar": {Type: "string"},
+					"id":      {Type: "string"},
+				},
+			},
+		},
+		ID: IDInfo{Kind: IDSimple, ParameterNames: []string{"id"}, AttributeName: "id", ImportFormat: "%s"},
+	}, &diags)
+
+	// Exactly one foo_bar attribute survives.
+	count := 0
+	for _, a := range obj.Attributes {
+		if a.Name == "foo_bar" {
+			count++
+		}
+	}
+	if count != 1 {
+		t.Errorf("foo_bar attribute count = %d, want 1 (duplicate dropped): %+v", count, obj.Attributes)
+	}
+	// The winner is the lexicographically smaller original name ("fooBar").
+	if a, ok := findAttr(obj.Attributes, "foo_bar"); !ok || a.WireName != "fooBar" {
+		t.Errorf("surviving foo_bar WireName = %q, want %q", a.WireName, "fooBar")
+	}
+	// A Warning names the dropped property.
+	if !hasWarning(diags, "duplicate attribute after name normalization") {
+		t.Errorf("expected a duplicate-attribute Warning, got %v", diags)
+	}
+}
+
+// TestObjectSchemaFromSpecDedupsSnakeCaseCollisions verifies the list-resource
+// identity/resource schema builder dedups snake_case collisions with a Warning
+// (H-3).
+func TestObjectSchemaFromSpecDedupsSnakeCaseCollisions(t *testing.T) {
+	var diags diagnostics.Diagnostics
+	obj := ObjectSchemaFromSpecWithDiagnostics(&SchemaSpec{
+		Type: "object",
+		Properties: map[string]SchemaSpec{
+			"fooBar":  {Type: "string"},
+			"foo_bar": {Type: "string"},
+		},
+	}, &diags)
+	count := 0
+	for _, a := range obj.Attributes {
+		if a.Name == "foo_bar" {
+			count++
+		}
+	}
+	if count != 1 {
+		t.Errorf("foo_bar attribute count = %d, want 1: %+v", count, obj.Attributes)
+	}
+	if !hasWarning(diags, "duplicate attribute after name normalization") {
+		t.Errorf("expected a duplicate-attribute Warning, got %v", diags)
+	}
+}
+
+// TestResultSchemaFromResponseDedupsSnakeCaseCollisions verifies the ephemeral
+// result-schema builder dedups snake_case collisions with a Warning (H-3).
+func TestResultSchemaFromResponseDedupsSnakeCaseCollisions(t *testing.T) {
+	var diags diagnostics.Diagnostics
+	obj := ResultSchemaFromResponseWithDiagnostics(&SchemaSpec{
+		Type: "object",
+		Properties: map[string]SchemaSpec{
+			"fooBar":  {Type: "string"},
+			"foo_bar": {Type: "string"},
+		},
+	}, &diags)
+	count := 0
+	for _, a := range obj.Attributes {
+		if a.Name == "foo_bar" {
+			count++
+		}
+	}
+	if count != 1 {
+		t.Errorf("foo_bar attribute count = %d, want 1: %+v", count, obj.Attributes)
+	}
+	if !hasWarning(diags, "duplicate attribute after name normalization") {
+		t.Errorf("expected a duplicate-attribute Warning, got %v", diags)
 	}
 }
 

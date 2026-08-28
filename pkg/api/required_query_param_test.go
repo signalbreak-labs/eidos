@@ -238,7 +238,7 @@ func TestListResource_EnvelopedCollectionKeepsRequiredQueryParam(t *testing.T) {
 		for _, a := range lo.ConfigSchema {
 			if a.Name == "cluster_id" {
 				found = true
-				if a.Optional {
+				if a.Optional != nil && *a.Optional {
 					t.Errorf("generate-config listed cluster_id as optional, want required")
 				}
 			}

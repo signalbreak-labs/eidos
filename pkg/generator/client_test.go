@@ -267,3 +267,66 @@ func generateClientModule(t *testing.T, providerIR ir.ProviderIR) string {
 
 	return tmp
 }
+
+// TestClientConfigFromIR_Defaults asserts a zero-value ClientIR falls back to
+// the generator's client defaults (L-5): the spec's first server URL, the
+// default user agent, 30s timeout, 3 retries, and 1s/30s backoff.
+func TestClientConfigFromIR_Defaults(t *testing.T) {
+	p := ir.ProviderIR{
+		Servers: []ir.ServerIR{{URL: "https://api.example.com"}},
+	}
+	cfg := clientConfigFromIR(p)
+	if cfg.BaseURL != `"https://api.example.com"` {
+		t.Errorf("BaseURL = %s, want spec server URL", cfg.BaseURL)
+	}
+	if cfg.UserAgent != `"eidos-generated-client"` {
+		t.Errorf("UserAgent = %s, want default", cfg.UserAgent)
+	}
+	if cfg.Timeout != "30 * time.Second" {
+		t.Errorf("Timeout = %s, want 30s default", cfg.Timeout)
+	}
+	if cfg.RetryMax != 3 {
+		t.Errorf("RetryMax = %d, want 3", cfg.RetryMax)
+	}
+	if cfg.RetryWaitMin != "1 * time.Second" {
+		t.Errorf("RetryWaitMin = %s, want 1s default", cfg.RetryWaitMin)
+	}
+	if cfg.RetryWaitMax != "30 * time.Second" {
+		t.Errorf("RetryWaitMax = %s, want 30s default", cfg.RetryWaitMax)
+	}
+}
+
+// TestClientConfigFromIR_Overrides asserts a populated ClientIR overrides the
+// generator's client defaults (L-5).
+func TestClientConfigFromIR_Overrides(t *testing.T) {
+	p := ir.ProviderIR{
+		Servers: []ir.ServerIR{{URL: "https://api.example.com"}},
+		ClientIR: ir.ClientIR{
+			BaseURLTemplate: "https://api.example.com/v2",
+			UserAgent:       "custom-agent",
+			Timeout:         90 * time.Second,
+			RetryMax:        7,
+			RetryWaitMin:    2 * time.Second,
+			RetryWaitMax:    time.Minute,
+		},
+	}
+	cfg := clientConfigFromIR(p)
+	if cfg.BaseURL != `"https://api.example.com/v2"` {
+		t.Errorf("BaseURL = %s, want override", cfg.BaseURL)
+	}
+	if cfg.UserAgent != `"custom-agent"` {
+		t.Errorf("UserAgent = %s, want override", cfg.UserAgent)
+	}
+	if cfg.Timeout != "90 * time.Second" {
+		t.Errorf("Timeout = %s, want 90s override", cfg.Timeout)
+	}
+	if cfg.RetryMax != 7 {
+		t.Errorf("RetryMax = %d, want 7", cfg.RetryMax)
+	}
+	if cfg.RetryWaitMin != "2 * time.Second" {
+		t.Errorf("RetryWaitMin = %s, want 2s override", cfg.RetryWaitMin)
+	}
+	if cfg.RetryWaitMax != "1 * time.Minute" {
+		t.Errorf("RetryWaitMax = %s, want 1m override", cfg.RetryWaitMax)
+	}
+}

@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"go/ast"
 	"go/token"
-	"path/filepath"
+	"path"
 	"strings"
 
 	"github.com/signalbreak-labs/eidos/pkg/generator/astgen"
@@ -27,14 +27,14 @@ var ErrUnknownDatasourceBlockNesting = errors.New("unknown data source block nes
 // DataSourceIR. clientImport is the import path of the generated internal/client
 // package, used when the data source Read is wired to the API client.
 func DataSourceFile(ds ir.DataSourceIR, clientImport string) File {
-	path := filepath.Join("internal", "provider", fmt.Sprintf("data_source_%s.go", naming.SnakeCase(ds.Name)))
+	relPath := path.Join("internal", "provider", fmt.Sprintf("data_source_%s.go", naming.SnakeCase(ds.Name)))
 	file, err := renderEntitySafely(func() (*ast.File, error) {
 		return generateDataSourceFile(ds, clientImport), nil
 	})
 	if err != nil {
-		return ErrorFile(path, err)
+		return ErrorFile(relPath, err)
 	}
-	return GoCodeAST(path, file)
+	return GoCodeAST(relPath, file)
 }
 
 // DataSourceFiles returns the generated data source files for every DataSourceIR
@@ -320,6 +320,12 @@ func dataSourceSchemaValues(ds ir.DataSourceIR) []ast.Expr {
 		elems = append(elems, astgen.KeyValue("MarkdownDescription", v))
 	}
 
+	// A data source whose source operation is deprecated carries a deprecation
+	// message on the schema so practitioners see it in plan output (M-10).
+	if v := litOrOmit(ds.DeprecationMessage); v != nil {
+		elems = append(elems, astgen.KeyValue("DeprecationMessage", v))
+	}
+
 	attrs := ds.Schema.Attributes
 	blocks := ds.Schema.Blocks
 
@@ -366,15 +372,15 @@ func datasourceAttributeExpr(attr ir.AttributeIR) ast.Expr {
 // Attribute, tracking the dotted parent path so that unsupported nested attributes
 // can be reported with their full location.
 func datasourceAttributeExprWithPath(attr ir.AttributeIR, parentPath string) ast.Expr {
-	path := fullAttrPath(parentPath, attr.Name)
-	expr := dataSourceFrameworkAttributeExpr(attr, path)
+	attrPath := fullAttrPath(parentPath, attr.Name)
+	expr := dataSourceFrameworkAttributeExpr(attr, attrPath)
 	if expr == nil {
 		// A nested attribute that cannot be represented (e.g. a nested
 		// collection) is dropped by the nested map builder; a top-level
 		// attribute should never be nil because the framework expr falls back
 		// to DynamicAttribute (G2).
 		if parentPath == "" {
-			panic(fmt.Sprintf("unsupported data source attribute %q: schema has no recognizable type or nested shape", path))
+			panic(fmt.Sprintf("unsupported data source attribute %q: schema has no recognizable type or nested shape", attrPath))
 		}
 		return nil
 	}
@@ -544,8 +550,8 @@ func dataSourcePrimitiveAttributeExpr(attr ir.AttributeIR, attrPath string) ast.
 // the block's nested attribute maps so panics can report the full dotted location.
 func datasourceBlockExpr(block ir.BlockIR, parentPath string) ast.Expr {
 	var kind string
-	path := fullAttrPath(parentPath, block.Name)
-	attrs := dataSourceNestedAttributesMap(block.Schema, path)
+	attrPath := fullAttrPath(parentPath, block.Name)
+	attrs := dataSourceNestedAttributesMap(block.Schema, attrPath)
 
 	var elems []ast.Expr
 	switch block.NestingMode {

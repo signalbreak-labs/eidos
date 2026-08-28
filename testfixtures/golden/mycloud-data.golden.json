@@ -1,182 +1,184 @@
-[
-  {
-    "path": ".github/workflows/release.yml",
-    "reason": "GitHub Actions release workflow",
-    "body_hash": "d90419c64897c7d2"
-  },
-  {
-    "path": ".goreleaser.yml",
-    "reason": "GoReleaser release configuration",
-    "body_hash": "d14b45a704b36b35"
-  },
-  {
-    "path": "GNUmakefile",
-    "reason": "build and test automation",
-    "body_hash": "771e0e9e2aefba94"
-  },
-  {
-    "path": "README.md",
-    "reason": "provider overview and usage guide",
-    "body_hash": "99df2e2aa156c1c9"
-  },
-  {
-    "path": "docs/actions/search_records.md",
-    "reason": "documentation for action search_records",
-    "body_hash": "0f609491bc0cb21c"
-  },
-  {
-    "path": "docs/data-sources/list_data_sets.md",
-    "reason": "documentation for data source list_data_sets",
-    "body_hash": "da3781a074318a4a"
-  },
-  {
-    "path": "docs/data-sources/list_fields.md",
-    "reason": "documentation for data source list_fields",
-    "body_hash": "7ffe66084558f58c"
-  },
-  {
-    "path": "docs/index.md",
-    "reason": "provider overview and authentication guide",
-    "body_hash": "1cf8750b8ef0c080"
-  },
-  {
-    "path": "examples/actions/search_records/action.tf",
-    "reason": "example for action search_records",
-    "body_hash": "7211a20a07acea56"
-  },
-  {
-    "path": "examples/data-sources/list_data_sets/data-source.tf",
-    "reason": "example for data source list_data_sets",
-    "body_hash": "5aec430b6f1f9897"
-  },
-  {
-    "path": "examples/data-sources/list_fields/data-source.tf",
-    "reason": "example for data source list_fields",
-    "body_hash": "911cc006d9cd3b40"
-  },
-  {
-    "path": "generator.yaml",
-    "reason": "generated generator configuration",
-    "body_hash": "99cb8ba210b13643"
-  },
-  {
-    "path": "go.mod",
-    "reason": "Go module definition",
-    "body_hash": "9d80dc361e94eb4d"
-  },
-  {
-    "path": "internal/client/client.go",
-    "reason": "generated HTTP client",
-    "body_hash": "c3cf6b871cbd6898"
-  },
-  {
-    "path": "internal/client/client_test.go",
-    "reason": "generated HTTP client unit tests",
-    "body_hash": "9bac472b0d2d50be"
-  },
-  {
-    "path": "internal/client/errors.go",
-    "reason": "typed API error helpers",
-    "body_hash": "7b69b0dda148a6d5"
-  },
-  {
-    "path": "internal/client/logging.go",
-    "reason": "request/response trace logging",
-    "body_hash": "9defaf534cc08195"
-  },
-  {
-    "path": "internal/client/logging_test.go",
-    "reason": "trace logging unit tests",
-    "body_hash": "3d1b897c8a09d762"
-  },
-  {
-    "path": "internal/client/models.go",
-    "reason": "request/response model structs",
-    "body_hash": "1efd23827e83c14f"
-  },
-  {
-    "path": "internal/client/pagination.go",
-    "reason": "pagination helpers",
-    "body_hash": "80e851435c7a25d6"
-  },
-  {
-    "path": "internal/client/retry.go",
-    "reason": "retry logic with exponential backoff",
-    "body_hash": "bf53c919903fb008"
-  },
-  {
-    "path": "internal/provider/action_search_records.go",
-    "reason": "action mycloud-data_search_records",
-    "body_hash": "4a04247f7c13947b"
-  },
-  {
-    "path": "internal/provider/action_search_records_remote_test.go",
-    "reason": "coverage tests for action search_records remote helper",
-    "body_hash": "aafb847da0c1e4cf"
-  },
-  {
-    "path": "internal/provider/data_source_list_data_sets.go",
-    "reason": "data source mycloud-data_list_data_sets",
-    "body_hash": "56898a8b24dbfaf3"
-  },
-  {
-    "path": "internal/provider/data_source_list_data_sets_remote_test.go",
-    "reason": "coverage tests for data source list_data_sets remote helpers",
-    "body_hash": "fecc9ceb13aeb6bc"
-  },
-  {
-    "path": "internal/provider/data_source_list_data_sets_test.go",
-    "reason": "unit tests for data source list_data_sets",
-    "body_hash": "9aebfb2ab0643a3b"
-  },
-  {
-    "path": "internal/provider/data_source_list_fields.go",
-    "reason": "data source mycloud-data_list_fields",
-    "body_hash": "cfe4d4742c8a3e3d"
-  },
-  {
-    "path": "internal/provider/data_source_list_fields_remote_test.go",
-    "reason": "coverage tests for data source list_fields remote helpers",
-    "body_hash": "db4da615c7ea668d"
-  },
-  {
-    "path": "internal/provider/data_source_list_fields_test.go",
-    "reason": "unit tests for data source list_fields",
-    "body_hash": "4d48cb9bfcb590cd"
-  },
-  {
-    "path": "internal/provider/json_convert.go",
-    "reason": "JSON/model conversion helpers for wired CRUD bodies",
-    "body_hash": "318c3108ab02575e"
-  },
-  {
-    "path": "internal/provider/provider.go",
-    "reason": "provider schema and registration",
-    "body_hash": "3e6db224d6914630"
-  },
-  {
-    "path": "internal/provider/provider_test.go",
-    "reason": "provider-level unit tests",
-    "body_hash": "9b491c85e8de5331"
-  },
-  {
-    "path": "internal/provider/testing_helpers_test.go",
-    "reason": "shared httptest helpers for coverage tests",
-    "body_hash": "3e26d1902300d06e"
-  },
-  {
-    "path": "internal/provider/validators.go",
-    "reason": "custom schema validators",
-    "body_hash": "94a192299dab9088"
-  },
-  {
-    "path": "main.go",
-    "reason": "provider server entrypoint",
-    "body_hash": "21a5ada7cb56b1b4"
-  },
-  {
-    "path": "terraform-registry-manifest.json",
-    "reason": "Terraform Registry manifest",
-    "body_hash": "76ac85aa7f3a523b"
-  }
-]
+{
+  "files": [
+    {
+      "path": ".github/workflows/release.yml",
+      "reason": "GitHub Actions release workflow",
+      "body_hash": "d90419c64897c7d2"
+    },
+    {
+      "path": ".goreleaser.yml",
+      "reason": "GoReleaser release configuration",
+      "body_hash": "d14b45a704b36b35"
+    },
+    {
+      "path": "GNUmakefile",
+      "reason": "build and test automation",
+      "body_hash": "771e0e9e2aefba94"
+    },
+    {
+      "path": "README.md",
+      "reason": "provider overview and usage guide",
+      "body_hash": "99df2e2aa156c1c9"
+    },
+    {
+      "path": "docs/actions/search_records.md",
+      "reason": "documentation for action search_records",
+      "body_hash": "0f609491bc0cb21c"
+    },
+    {
+      "path": "docs/data-sources/list_data_sets.md",
+      "reason": "documentation for data source list_data_sets",
+      "body_hash": "da3781a074318a4a"
+    },
+    {
+      "path": "docs/data-sources/list_fields.md",
+      "reason": "documentation for data source list_fields",
+      "body_hash": "7ffe66084558f58c"
+    },
+    {
+      "path": "docs/index.md",
+      "reason": "provider overview and authentication guide",
+      "body_hash": "1cf8750b8ef0c080"
+    },
+    {
+      "path": "examples/actions/search_records/action.tf",
+      "reason": "example for action search_records",
+      "body_hash": "7211a20a07acea56"
+    },
+    {
+      "path": "examples/data-sources/list_data_sets/data-source.tf",
+      "reason": "example for data source list_data_sets",
+      "body_hash": "5aec430b6f1f9897"
+    },
+    {
+      "path": "examples/data-sources/list_fields/data-source.tf",
+      "reason": "example for data source list_fields",
+      "body_hash": "911cc006d9cd3b40"
+    },
+    {
+      "path": "generator.yaml",
+      "reason": "generated generator configuration",
+      "body_hash": "99cb8ba210b13643"
+    },
+    {
+      "path": "go.mod",
+      "reason": "Go module definition",
+      "body_hash": "a975c8992d92a7ca"
+    },
+    {
+      "path": "internal/client/client.go",
+      "reason": "generated HTTP client",
+      "body_hash": "ed5752539d02e875"
+    },
+    {
+      "path": "internal/client/client_test.go",
+      "reason": "generated HTTP client unit tests",
+      "body_hash": "e2439b35ec2de052"
+    },
+    {
+      "path": "internal/client/errors.go",
+      "reason": "typed API error helpers",
+      "body_hash": "7b69b0dda148a6d5"
+    },
+    {
+      "path": "internal/client/logging.go",
+      "reason": "request/response trace logging",
+      "body_hash": "9defaf534cc08195"
+    },
+    {
+      "path": "internal/client/logging_test.go",
+      "reason": "trace logging unit tests",
+      "body_hash": "3d1b897c8a09d762"
+    },
+    {
+      "path": "internal/client/models.go",
+      "reason": "request/response model structs",
+      "body_hash": "1efd23827e83c14f"
+    },
+    {
+      "path": "internal/client/pagination.go",
+      "reason": "pagination helpers",
+      "body_hash": "7a1a499684b413ec"
+    },
+    {
+      "path": "internal/client/retry.go",
+      "reason": "retry logic with exponential backoff",
+      "body_hash": "bf53c919903fb008"
+    },
+    {
+      "path": "internal/provider/action_search_records.go",
+      "reason": "action mycloud-data_search_records",
+      "body_hash": "4a04247f7c13947b"
+    },
+    {
+      "path": "internal/provider/action_search_records_remote_test.go",
+      "reason": "coverage tests for action search_records remote helper",
+      "body_hash": "aafb847da0c1e4cf"
+    },
+    {
+      "path": "internal/provider/data_source_list_data_sets.go",
+      "reason": "data source mycloud-data_list_data_sets",
+      "body_hash": "56898a8b24dbfaf3"
+    },
+    {
+      "path": "internal/provider/data_source_list_data_sets_remote_test.go",
+      "reason": "coverage tests for data source list_data_sets remote helpers",
+      "body_hash": "fecc9ceb13aeb6bc"
+    },
+    {
+      "path": "internal/provider/data_source_list_data_sets_test.go",
+      "reason": "unit tests for data source list_data_sets",
+      "body_hash": "9aebfb2ab0643a3b"
+    },
+    {
+      "path": "internal/provider/data_source_list_fields.go",
+      "reason": "data source mycloud-data_list_fields",
+      "body_hash": "cfe4d4742c8a3e3d"
+    },
+    {
+      "path": "internal/provider/data_source_list_fields_remote_test.go",
+      "reason": "coverage tests for data source list_fields remote helpers",
+      "body_hash": "db4da615c7ea668d"
+    },
+    {
+      "path": "internal/provider/data_source_list_fields_test.go",
+      "reason": "unit tests for data source list_fields",
+      "body_hash": "4d48cb9bfcb590cd"
+    },
+    {
+      "path": "internal/provider/json_convert.go",
+      "reason": "JSON/model conversion helpers for wired CRUD bodies",
+      "body_hash": "318c3108ab02575e"
+    },
+    {
+      "path": "internal/provider/provider.go",
+      "reason": "provider schema and registration",
+      "body_hash": "3e6db224d6914630"
+    },
+    {
+      "path": "internal/provider/provider_test.go",
+      "reason": "provider-level unit tests",
+      "body_hash": "9b491c85e8de5331"
+    },
+    {
+      "path": "internal/provider/testing_helpers_test.go",
+      "reason": "shared httptest helpers for coverage tests",
+      "body_hash": "3e26d1902300d06e"
+    },
+    {
+      "path": "internal/provider/validators.go",
+      "reason": "custom schema validators",
+      "body_hash": "94a192299dab9088"
+    },
+    {
+      "path": "main.go",
+      "reason": "provider server entrypoint",
+      "body_hash": "21a5ada7cb56b1b4"
+    },
+    {
+      "path": "terraform-registry-manifest.json",
+      "reason": "Terraform Registry manifest",
+      "body_hash": "76ac85aa7f3a523b"
+    }
+  ]
+}

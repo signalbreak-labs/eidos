@@ -2,6 +2,7 @@ package parser
 
 import (
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -334,6 +335,109 @@ func TestUnknownAlias(t *testing.T) {
 	if _, err := LoadFile("bad-alias.yaml", data); err == nil {
 		t.Fatal("expected error for unknown alias")
 	} else if !strings.Contains(err.Error(), "unknown YAML alias *missing") {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+// TestFlowAliasResolves verifies that a YAML alias inside a flow collection
+// ("*name" as a flow sequence item or flow mapping value) resolves against the
+// anchor table instead of becoming the literal string "*name" (L-2).
+func TestFlowAliasResolves(t *testing.T) {
+	data := []byte(`shared: &shared
+  type: string
+  description: reused
+oneOf: [*shared]
+props: { x: *shared }
+`)
+	root, err := LoadFile("flow-alias.yaml", data)
+	if err != nil {
+		t.Fatalf("LoadFile: %v", err)
+	}
+	rootMap := root.(*MapNode)
+
+	// oneOf: [*shared] — the alias is a flow sequence item and must resolve to
+	// the anchored map, not the literal string "*shared".
+	oneOf := seqOf(t, root, "oneOf")
+	if len(oneOf.Items) != 1 {
+		t.Fatalf("oneOf has %d items, want 1", len(oneOf.Items))
+	}
+	item, ok := oneOf.Items[0].(*MapNode)
+	if !ok {
+		t.Fatalf("oneOf[0] is %T, want *MapNode (alias not resolved)", oneOf.Items[0])
+	}
+	if got := findKey(item, "type").(*ScalarNode).Value; got != "string" {
+		t.Errorf("oneOf[0].type = %v, want string", got)
+	}
+
+	// props: { x: *shared } — the alias is a flow mapping value.
+	props := findKey(rootMap, "props").(*MapNode)
+	x, ok := findKey(props, "x").(*MapNode)
+	if !ok {
+		t.Fatalf("props.x is %T, want *MapNode (alias not resolved)", findKey(props, "x"))
+	}
+	if got := findKey(x, "description").(*ScalarNode).Value; got != "reused" {
+		t.Errorf("props.x.description = %v, want reused", got)
+	}
+
+	// The alias is a deep copy, not the anchored node itself.
+	if item == findKey(rootMap, "shared").(*MapNode) {
+		t.Error("flow alias shares the anchored node; want an independent copy")
+	}
+}
+
+// TestFlowAliasUnknownFailsLoud verifies an unresolvable alias inside a flow
+// collection fails loud rather than degrading to the literal string (L-2).
+func TestFlowAliasUnknownFailsLoud(t *testing.T) {
+	data := []byte("oneOf: [*missing]\n")
+	if _, err := LoadFile("flow-bad-alias.yaml", data); err == nil {
+		t.Fatal("expected error for unknown flow alias")
+	} else if !strings.Contains(err.Error(), "unknown YAML alias *missing") {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+// TestAliasExpansionBombRejected verifies that a nested-alias document that
+// would amplify exponentially during lexing is rejected by the alias-expansion
+// guardrails rather than exhausting memory (H-1). Each level aliases the
+// previous level ten times, so the deepest clone would be 10^levels items; the
+// cumulative expansion-size cap fires before the blowup materializes.
+func TestAliasExpansionBombRejected(t *testing.T) {
+	var sb strings.Builder
+	sb.WriteString("base: &base\n")
+	for i := 0; i < 10; i++ {
+		fmt.Fprintf(&sb, "  - x%d\n", i)
+	}
+	prev := "base"
+	for lvl := 0; lvl < 6; lvl++ {
+		name := fmt.Sprintf("lvl%d", lvl)
+		fmt.Fprintf(&sb, "%s: &%s\n", name, name)
+		for j := 0; j < 10; j++ {
+			fmt.Fprintf(&sb, "  - *%s\n", prev)
+		}
+		prev = name
+	}
+	_, err := LoadFile("bomb.yaml", []byte(sb.String()))
+	if err == nil {
+		t.Fatal("expected alias expansion limit error, got nil")
+	}
+	if !strings.Contains(err.Error(), "alias expansion limit exceeded") {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+// TestAliasExpansionCountLimitRejected verifies the alias-count cap fires for a
+// document with many distinct alias resolutions even when each clone is small.
+func TestAliasExpansionCountLimitRejected(t *testing.T) {
+	var sb strings.Builder
+	sb.WriteString("base: &base\n  - x\n")
+	for i := 0; i < maxAliasExpansions+1; i++ {
+		fmt.Fprintf(&sb, "k%d: *base\n", i)
+	}
+	_, err := LoadFile("bomb-count.yaml", []byte(sb.String()))
+	if err == nil {
+		t.Fatal("expected alias expansion limit error, got nil")
+	}
+	if !strings.Contains(err.Error(), "alias expansion limit exceeded") {
 		t.Errorf("unexpected error: %v", err)
 	}
 }
