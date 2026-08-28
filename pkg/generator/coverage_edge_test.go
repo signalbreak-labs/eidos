@@ -133,7 +133,7 @@ func TestTerraformTestVariableValue(t *testing.T) {
 		// Map with a non-primitive element also falls through to [].
 		{"map-of-object", strAttr(&ir.CollectionType{Kind: ir.Map, ElementType: ir.SchemaIR{Attributes: []ir.AttributeIR{{Name: "x"}}}}), "[]"},
 		{"primitive-string", ir.AttributeIR{Schema: ir.SchemaIR{Type: ir.TypeString}}, `"example"`},
-		{"primitive-int", ir.AttributeIR{Schema: ir.SchemaIR{Type: ir.TypeInt}}, "1"},
+		{"primitive-int", ir.AttributeIR{Schema: ir.SchemaIR{Type: ir.TypeInt}}, "0"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

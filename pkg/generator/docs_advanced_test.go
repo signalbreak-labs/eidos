@@ -74,7 +74,7 @@ func TestEphemeralResourceDocsFile_Render(t *testing.T) {
 		"Ephemeral resources are only available within the context of a single Terraform operation",
 		"## Example Usage",
 		`ephemeral "mycloud_temporary_credential" "example" {`,
-		"duration = 1",
+		"duration = 0",
 		"## Schema",
 		"### Arguments",
 		"* `duration` (Number, required)",
@@ -294,7 +294,7 @@ func TestFunctionArgumentPlaceholder(t *testing.T) {
 			name:   "dynamic",
 			schema: ir.SchemaIR{Type: ir.TypeDynamic},
 			label:  "value",
-			want:   "null",
+			want:   `"example"`,
 		},
 		{
 			name: "list of strings",
@@ -316,7 +316,7 @@ func TestFunctionArgumentPlaceholder(t *testing.T) {
 				},
 			},
 			label: "owners",
-			want:  `[ { name = "<name>", age = 1 } ]`,
+			want:  `[ { name = "<name>", age = 0 } ]`,
 		},
 		{
 			name: "map of strings",
@@ -338,13 +338,13 @@ func TestFunctionArgumentPlaceholder(t *testing.T) {
 				},
 			},
 			label: "owners",
-			want:  `{ "key" = { name = "<name>", age = 1 } }`,
+			want:  `{ "key" = { name = "<name>", age = 0 } }`,
 		},
 		{
 			name:   "object",
 			schema: objectSchema,
 			label:  "owner",
-			want:   `{ name = "<name>", age = 1 }`,
+			want:   `{ name = "<name>", age = 0 }`,
 		},
 	}
 

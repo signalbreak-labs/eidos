@@ -28,7 +28,7 @@
     {
       "path": "docs/resources/alarm.md",
       "reason": "documentation for resource alarm",
-      "body_hash": "1852cab7d1af19e2"
+      "body_hash": "470903d142b97d6e"
     },
     {
       "path": "examples/resources/alarm/resource.tf",

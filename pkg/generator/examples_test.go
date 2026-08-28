@@ -24,7 +24,7 @@ func TestResourceExampleFile_Render(t *testing.T) {
 		`resource "mycloud_pet" "example" {`,
 		"name = \"example\"",
 		"tag  = \"example\"",
-		"age  = 1",
+		"age  = 0",
 		"tags = [ \"example\" ]",
 		"owner = {",
 		"email = \"example\"",
@@ -148,7 +148,7 @@ func TestEphemeralResourceExampleFile_Render(t *testing.T) {
 	wantSubstrings := []string{
 		`ephemeral "mycloud_token" "example" {`,
 		"user_id = \"example\"",
-		"ttl     = 1",
+		"ttl     = 0",
 		"}",
 	}
 	for _, want := range wantSubstrings {
@@ -385,20 +385,20 @@ func TestWriteHCLCollectionAttribute_MapKeyFromName(t *testing.T) {
 // collection whose element type is a oneOf/anyOf union degrades gracefully
 // instead of panicking. A union element normalizes to a dynamic element
 // (DynamicUnionElement), so the collection degrades to a DynamicAttribute and
-// the example writer emits a scalar null placeholder (not a collection literal,
-// which would parse as a Tuple and mismatch the response at apply — G18). This
-// is the H-5 regression: previously writeHCLCollectionAttribute panicked for
-// `array` with `items: {oneOf: ...}`, and the ExampleFiles call path had no
-// recover, crashing the whole CLI run.
+// the example writer emits a populated placeholder matching the collection shape
+// (a list/set literal or a map literal with a single "example" element) rather
+// than a bare null. This is the H-5 regression: previously
+// writeHCLCollectionAttribute panicked for `array` with `items: {oneOf: ...}`,
+// and the ExampleFiles call path had no recover, crashing the whole CLI run.
 func TestWriteHCLCollectionAttribute_UnionElementGraceful(t *testing.T) {
 	cases := []struct {
 		name string
 		kind ir.CollectionKind
 		want string
 	}{
-		{name: "list", kind: ir.List, want: "bad = null"},
-		{name: "set", kind: ir.Set, want: "bad = null"},
-		{name: "map", kind: ir.Map, want: "bad = null"},
+		{name: "list", kind: ir.List, want: `bad = [ "example" ]`},
+		{name: "set", kind: ir.Set, want: `bad = [ "example" ]`},
+		{name: "map", kind: ir.Map, want: `bad = { "key" = "example" }`},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -544,8 +544,8 @@ func TestWriteHCLDiscriminatedUnionAligned(t *testing.T) {
 		// run's max width with a single space; the shorter lives row pads to
 		// align the `=` signs at column 12 (fmt-clean).
 		`animal_type = "cat"`,
-		"bark_volume = 1",
-		"lives       = 1",
+		"bark_volume = 0",
+		"lives       = 0",
 		"}",
 	} {
 		if !strings.Contains(got, want) {

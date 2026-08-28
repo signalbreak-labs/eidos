@@ -428,7 +428,7 @@ func functionArgumentPlaceholder(s ir.SchemaIR, label string) string {
 		return objectArgumentPlaceholder(s, label)
 	}
 	if s.Type == ir.TypeDynamic {
-		return "null"
+		return `"example"`
 	}
 	if s.Type == ir.TypeString {
 		return fmt.Sprintf(`"<%s>"`, label)

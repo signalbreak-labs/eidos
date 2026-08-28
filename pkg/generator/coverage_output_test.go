@@ -95,7 +95,7 @@ func TestWriteTerraformTestCollectionAttribute(t *testing.T) {
 			`tags = [ "example" ]`},
 		{"set-of-int",
 			ir.AttributeIR{Name: "ids", Schema: ir.SchemaIR{Collection: &ir.CollectionType{Kind: ir.Set, ElementType: schemaType(ir.TypeInt)}}},
-			`ids = [ 1 ]`},
+			`ids = [ 0 ]`},
 		{"map-of-bool",
 			ir.AttributeIR{Name: "flags", Schema: ir.SchemaIR{Collection: &ir.CollectionType{Kind: ir.Map, ElementType: schemaType(ir.TypeBool)}}},
 			`flags = {`},

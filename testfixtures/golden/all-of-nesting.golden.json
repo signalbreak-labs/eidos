@@ -23,7 +23,7 @@
     {
       "path": "docs/actions/create_shipment.md",
       "reason": "documentation for action create_shipment",
-      "body_hash": "83cb6eff40106d9a"
+      "body_hash": "ee9a9880f9853e57"
     },
     {
       "path": "docs/data-sources/get_shipment.md",
@@ -38,7 +38,7 @@
     {
       "path": "examples/actions/create_shipment/action.tf",
       "reason": "example for action create_shipment",
-      "body_hash": "09d433c6b588ad93"
+      "body_hash": "acf18165294c67a0"
     },
     {
       "path": "examples/data-sources/get_shipment/data-source.tf",
