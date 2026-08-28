@@ -518,3 +518,57 @@ func TestPinnerConcurrency(t *testing.T) {
 	}
 	wg.Wait()
 }
+
+// TestResolveAndRecord verifies resolveAndRecord pins a hostname's resolved
+// addresses (the allowPrivate escape hatch path) and skips literal IPs.
+func TestResolveAndRecord(t *testing.T) {
+	p := &pinner{dialer: &net.Dialer{Timeout: DefaultTimeout}}
+
+	// A literal IP is not resolved or recorded.
+	p.resolveAndRecord(context.Background(), "127.0.0.1")
+	p.mu.Lock()
+	_, ok := p.ips["127.0.0.1"]
+	p.mu.Unlock()
+	if ok {
+		t.Error("literal IP must not be recorded")
+	}
+
+	// A hostname is resolved and recorded.
+	ips, err := lookupIP(context.Background(), "localhost")
+	if err != nil {
+		t.Skipf("localhost resolution unavailable: %v", err)
+	}
+	p.resolveAndRecord(context.Background(), "localhost")
+	p.mu.Lock()
+	recorded, ok := p.ips["localhost"]
+	p.mu.Unlock()
+	if !ok {
+		t.Fatal("localhost must be recorded after resolveAndRecord")
+	}
+	if len(recorded) != len(ips) {
+		t.Errorf("recorded %d IPs, want %d", len(recorded), len(ips))
+	}
+}
+
+// TestExpandHome covers the ~/ expansion and pass-through branches of
+// expandHome.
+func TestExpandHome(t *testing.T) {
+	// No ~/ prefix: returned unchanged.
+	if got := expandHome("/etc/hosts"); got != "/etc/hosts" {
+		t.Errorf("expandHome(/etc/hosts) = %q", got)
+	}
+	// ~/ prefix: expanded to the home directory.
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Fatalf("os.UserHomeDir() error = %v", err)
+	}
+	got := expandHome("~/spec.yaml")
+	want := filepath.Join(home, "spec.yaml")
+	if got != want {
+		t.Errorf("expandHome(~/spec.yaml) = %q, want %q", got, want)
+	}
+	// Bare ~ (no slash) is left alone.
+	if got := expandHome("~"); got != "~" {
+		t.Errorf("expandHome(~) = %q, want ~", got)
+	}
+}

@@ -2,7 +2,11 @@ package generator
 
 import (
 	"bytes"
+	"go/format"
+	"go/token"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -128,9 +132,19 @@ func TestPlanOperation_RequiredQueryParamDisablesWiring(t *testing.T) {
 // strconv — never strings.ReplaceAll, which only path substitution uses. A
 // wired resource whose operations carry parameters but no path placeholders
 // must not set needsStrings (or the generated provider imports strings unused
-// and fails to compile).
+// and fails to compile). The resource uses a non-string identifier so the only
+// potential strings usage would come from the query params: a string ID alone
+// sets needsStrings via the M-8 Location-header fallback (strings.TrimRight /
+// strings.LastIndex), which is orthogonal to this assertion.
 func TestPlanResourceWiring_QueryParamsNoPathNoStrings(t *testing.T) {
 	r := sampleResourceIR()
+	// Override the string id with an int id so the M-8 Location fallback does
+	// not contribute a strings dependency.
+	for i := range r.Schema.Attributes {
+		if r.Schema.Attributes[i].Name == "id" {
+			r.Schema.Attributes[i].Schema = ir.SchemaIR{Type: ir.TypeInt}
+		}
+	}
 	query := []ir.ParamIR{
 		{Name: "tag", In: "query", Required: false, Schema: ir.SchemaIR{Type: ir.TypeString}},
 	}
@@ -348,7 +362,9 @@ func TestPlanOperation_StaticSegmentPlusIDFallback(t *testing.T) {
 
 // TestWiredCreateBody_LocationIDFallback asserts the wired Create body falls
 // back to the Location header when the response body leaves the string
-// identifier unset, and surfaces a clear error when neither is present.
+// identifier unset, and surfaces a clear error when neither is present. The
+// fallback extracts the trailing path segment from the Location value (M-8):
+// per RFC 7231 the header is an absolute URL or absolute path, not a bare ID.
 func TestWiredCreateBody_LocationIDFallback(t *testing.T) {
 	r := sampleResourceIR() // id is a string Computed attribute
 
@@ -363,12 +379,85 @@ func TestWiredCreateBody_LocationIDFallback(t *testing.T) {
 		`if plan.Id.IsNull() || plan.Id.IsUnknown() {`,
 		`loc := httpResp.Header.Get("Location")`,
 		`if loc != "" {`,
+		`loc = strings.TrimRight(loc, "/")`,
+		`i := strings.LastIndex(loc, "/")`,
+		`if i >= 0 {`,
+		`loc = loc[i+1:]`,
 		`plan.Id = types.StringValue(loc)`,
 		`The create response did not contain an identifier and no Location header was returned`,
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("generated create body missing %q\n--- body ---\n%s", want, got)
 		}
+	}
+}
+
+// TestWiredCreateBody_LocationIDExtraction_CompilesAndRuns is the M-8
+// value-semantics check: it generates a wired resource module, writes a test
+// that runs the generated createRemote against a mock HTTP server returning a
+// Location header, and asserts the plan ID is the trailing path segment — not
+// the raw header value. Before the fix the ID was the entire Location URL.
+func TestWiredCreateBody_LocationIDExtraction_CompilesAndRuns(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping network-bound compile test in -short mode")
+	}
+
+	p := sampleProviderWithResourceIR()
+	tmp := generateResourceModule(t, p)
+
+	testPath := filepath.Join(tmp, "internal", "provider", "location_id_test.go")
+	if err := os.MkdirAll(filepath.Dir(testPath), 0o750); err != nil {
+		t.Fatalf("create provider test dir: %v", err)
+	}
+	content := `package provider
+
+import (
+	"context"
+	"net/http"
+	"net/http/httptest"
+	"testing"
+
+	"github.com/hashicorp/terraform-plugin-framework/resource"
+	"github.com/mycloud/terraform-provider-mycloud/internal/client"
+)
+
+func TestLocationIDExtraction(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Location", "https://api.example.com/pets/123")
+		w.WriteHeader(http.StatusCreated)
+	}))
+	defer srv.Close()
+
+	c := client.New(client.WithBaseURL(srv.URL))
+	r := &PetResource{client: c}
+	plan := &PetResourceModel{}
+	resp := &resource.CreateResponse{}
+	r.createRemote(context.Background(), plan, resp)
+	if resp.Diagnostics.HasError() {
+		t.Fatalf("unexpected diagnostics: %v", resp.Diagnostics)
+	}
+	if got := plan.Id.ValueString(); got != "123" {
+		t.Fatalf("Id = %q, want %q (trailing path segment, not the raw Location header)", got, "123")
+	}
+}
+`
+	if err := os.WriteFile(testPath, []byte(content), 0o640); err != nil {
+		t.Fatalf("write location id test: %v", err)
+	}
+
+	ctx, cancel := contextWithTimeout(t, 5*time.Minute)
+	defer cancel()
+
+	tidyCmd := exec.CommandContext(ctx, "go", "mod", "tidy")
+	tidyCmd.Dir = tmp
+	if out, err := tidyCmd.CombinedOutput(); err != nil {
+		t.Fatalf("go mod tidy failed: %v\n%s", err, out)
+	}
+
+	testCmd := exec.CommandContext(ctx, "go", "test", "./internal/provider/", "-run", "TestLocationIDExtraction")
+	testCmd.Dir = tmp
+	if out, err := testCmd.CombinedOutput(); err != nil {
+		t.Fatalf("go test ./internal/provider/ failed: %v\n%s", err, out)
 	}
 }
 
@@ -813,5 +902,175 @@ func TestWiredCreateBody_PutAsCreateComposite(t *testing.T) {
 	}
 	if strings.Contains(got, `is not wired to a remote API endpoint`) {
 		t.Errorf("composite PUT-as-create must be wired, not scaffolded\n--- body ---\n%s", got)
+	}
+}
+
+// timeoutsResourceIR returns a fully wired resource with per-operation timeouts
+// configured, exercising the M-14 timeouts block, model field, and CRUD wiring.
+func timeoutsResourceIR() ir.ResourceIR {
+	r := sampleResourceIR()
+	create := 20 * time.Minute
+	read := 10 * time.Minute
+	update := 20 * time.Minute
+	delete := 10 * time.Minute
+	r.Timeouts = &ir.TimeoutConfigIR{
+		Create: &create,
+		Read:   &read,
+		Update: &update,
+		Delete: &delete,
+	}
+	return r
+}
+
+// TestResourceTimeouts_Render asserts the generated resource file carries the
+// timeouts schema block, the timeouts.Value model field, the framework-timeouts
+// and time imports, and per-operation context timeout wiring in each wired CRUD
+// method (M-14).
+func TestResourceTimeouts_Render(t *testing.T) {
+	r := timeoutsResourceIR()
+
+	file := ResourceFile(r, testClientImport)
+	var buf bytes.Buffer
+	if err := file.Render(&buf); err != nil {
+		t.Fatalf("Render() error = %v", err)
+	}
+	got := buf.String()
+
+	for _, want := range []string{
+		// Schema: the timeouts block exposes exactly the configured operations.
+		`"timeouts": timeouts.Block(ctx, timeouts.Opts{`,
+		`Create: true`,
+		`Read: true`,
+		`Update: true`,
+		`Delete: true`,
+		// Model: the timeouts.Value field round-trips the block.
+		`Timeouts timeouts.Value`,
+		`tfsdk:"timeouts"`,
+		// Imports.
+		`"github.com/hashicorp/terraform-plugin-framework-timeouts/resource/timeouts"`,
+		`"time"`,
+		// Create wiring: default from generator.yaml, parse diagnostics surfaced,
+		// HTTP exchange bounded.
+		`timeout, diags := plan.Timeouts.Create(ctx, 20*time.Minute)`,
+		`resp.Diagnostics.Append(diags...)`,
+		`ctx, cancel := context.WithTimeout(ctx, timeout)`,
+		`defer cancel()`,
+		// Read wiring.
+		`timeout, diags := state.Timeouts.Read(ctx, 10*time.Minute)`,
+		// Update wiring.
+		`timeout, diags := plan.Timeouts.Update(ctx, 20*time.Minute)`,
+		// Delete wiring.
+		`timeout, diags := state.Timeouts.Delete(ctx, 10*time.Minute)`,
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("generated resource missing %q\n--- body ---\n%s", want, got)
+		}
+	}
+}
+
+// TestResourceNoTimeouts_OmitsBlock asserts a resource without configured
+// timeouts emits no timeouts block, model field, or wiring, so the common case
+// is unchanged (M-14).
+func TestResourceNoTimeouts_OmitsBlock(t *testing.T) {
+	r := sampleResourceIR()
+
+	file := ResourceFile(r, testClientImport)
+	var buf bytes.Buffer
+	if err := file.Render(&buf); err != nil {
+		t.Fatalf("Render() error = %v", err)
+	}
+	got := buf.String()
+
+	for _, forbidden := range []string{
+		`"timeouts":`,
+		`timeouts.Value`,
+		`terraform-plugin-framework-timeouts`,
+		`context.WithTimeout`,
+	} {
+		if strings.Contains(got, forbidden) {
+			t.Errorf("resource without timeouts must not emit %q\n--- body ---\n%s", forbidden, got)
+		}
+	}
+}
+
+// TestResourceTimeoutWiringNeedsTime covers the time-import gating: a wired
+// resource with any configured op needs time, a scaffolded resource never does,
+// and a wired resource whose only configured op is an unwired update does not.
+func TestResourceTimeoutWiringNeedsTime(t *testing.T) {
+	create := time.Minute
+	update := time.Minute
+
+	cases := []struct {
+		name   string
+		r      ir.ResourceIR
+		wiring resourceWiringPlan
+		want   bool
+	}{
+		{"no timeouts", ir.ResourceIR{}, resourceWiringPlan{wired: true, update: true}, false},
+		{"scaffolded with timeouts", ir.ResourceIR{Timeouts: &ir.TimeoutConfigIR{Create: &create}}, resourceWiringPlan{wired: false}, false},
+		{"wired create", ir.ResourceIR{Timeouts: &ir.TimeoutConfigIR{Create: &create}}, resourceWiringPlan{wired: true, update: true}, true},
+		{"wired update only", ir.ResourceIR{Timeouts: &ir.TimeoutConfigIR{Update: &update}}, resourceWiringPlan{wired: true, update: true}, true},
+		{"unwired update only", ir.ResourceIR{Timeouts: &ir.TimeoutConfigIR{Update: &update}}, resourceWiringPlan{wired: true, update: false}, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := resourceTimeoutWiringNeedsTime(tc.r, tc.wiring); got != tc.want {
+				t.Errorf("resourceTimeoutWiringNeedsTime() = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestGoDurationAST asserts goDurationAST renders the same expressions as
+// goDurationExpr, so the resource and client files cannot drift (M-14).
+func TestGoDurationAST(t *testing.T) {
+	for _, d := range []time.Duration{
+		0,
+		30 * time.Second,
+		10 * time.Minute,
+		2 * time.Hour,
+		1500 * time.Millisecond,
+		time.Duration(123456789),
+	} {
+		expr := goDurationAST(d)
+		var buf bytes.Buffer
+		if err := format.Node(&buf, token.NewFileSet(), expr); err != nil {
+			t.Fatalf("format.Node(%v) error = %v", d, err)
+		}
+		if got, want := buf.String(), goDurationExpr(d); got != want {
+			t.Errorf("goDurationAST(%v) = %q, want %q", d, got, want)
+		}
+	}
+}
+
+// TestResourceTimeouts_Compiles generates a full provider module with a
+// timeouts-configured resource and compiles it, proving the emitted timeouts
+// block, model field, and CRUD wiring are valid against the pinned
+// terraform-plugin-framework-timeouts API (M-14).
+func TestResourceTimeouts_Compiles(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping network-bound compile test in -short mode")
+	}
+
+	p := sampleProviderWithResourceIR()
+	p.Resources = []ir.ResourceIR{timeoutsResourceIR()}
+
+	tmp := generateResourceModule(t, p)
+
+	ctx, cancel := contextWithTimeout(t, 5*time.Minute)
+	defer cancel()
+
+	tidyCmd := exec.CommandContext(ctx, "go", "mod", "tidy")
+	tidyCmd.Dir = tmp
+	if out, err := tidyCmd.CombinedOutput(); err != nil {
+		t.Fatalf("go mod tidy failed: %v\n%s", err, out)
+	}
+
+	// go test -run '^$' compiles every package's test binary (including the
+	// emitted *_test.go files) and runs no tests.
+	compileCmd := exec.CommandContext(ctx, "go", "test", "-run", "^$", "./...")
+	compileCmd.Dir = tmp
+	if out, err := compileCmd.CombinedOutput(); err != nil {
+		t.Fatalf("go test -run '^$' ./... failed for timeouts resource: %v\n%s", err, out)
 	}
 }

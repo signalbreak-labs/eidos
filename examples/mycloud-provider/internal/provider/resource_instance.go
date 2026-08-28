@@ -120,6 +120,11 @@ func (r *InstanceResource) createRemote(ctx context.Context, plan *InstanceResou
 	if plan.Id.IsNull() || plan.Id.IsUnknown() {
 		loc := httpResp.Header.Get("Location")
 		if loc != "" {
+			loc = strings.TrimRight(loc, "/")
+			i := strings.LastIndex(loc, "/")
+			if i >= 0 {
+				loc = loc[i+1:]
+			}
 			plan.Id = types.StringValue(loc)
 		} else {
 			resp.Diagnostics.AddError("Error creating mycloud_instance", "The create response did not contain an identifier and no Location header was returned, so the resource cannot be tracked in state.")

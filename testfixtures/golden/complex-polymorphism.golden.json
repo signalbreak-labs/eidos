@@ -1,187 +1,195 @@
-[
-  {
-    "path": ".github/workflows/release.yml",
-    "reason": "GitHub Actions release workflow",
-    "body_hash": "99f0c0375c39c26f"
-  },
-  {
-    "path": ".goreleaser.yml",
-    "reason": "GoReleaser release configuration",
-    "body_hash": "bf8932f04be571be"
-  },
-  {
-    "path": "GNUmakefile",
-    "reason": "build and test automation",
-    "body_hash": "771e0e9e2aefba94"
-  },
-  {
-    "path": "README.md",
-    "reason": "provider overview and usage guide",
-    "body_hash": "c2098388f87451d7"
-  },
-  {
-    "path": "docs/actions/create_polymorphic_pet.md",
-    "reason": "documentation for action create_polymorphic_pet",
-    "body_hash": "74e2aa243bf6b8d1"
-  },
-  {
-    "path": "docs/data-sources/get_polymorphic_pet.md",
-    "reason": "documentation for data source get_polymorphic_pet",
-    "body_hash": "de1f4fcf340a6661"
-  },
-  {
-    "path": "docs/data-sources/list_animals.md",
-    "reason": "documentation for data source list_animals",
-    "body_hash": "acfe928928ff59f1"
-  },
-  {
-    "path": "docs/index.md",
-    "reason": "provider overview and authentication guide",
-    "body_hash": "4f5c1982a9322a7f"
-  },
-  {
-    "path": "examples/actions/create_polymorphic_pet/action.tf",
-    "reason": "example for action create_polymorphic_pet",
-    "body_hash": "5b39fd57c12ddbb5"
-  },
-  {
-    "path": "examples/data-sources/get_polymorphic_pet/data-source.tf",
-    "reason": "example for data source get_polymorphic_pet",
-    "body_hash": "3652d0dd367a9eaa"
-  },
-  {
-    "path": "examples/data-sources/list_animals/data-source.tf",
-    "reason": "example for data source list_animals",
-    "body_hash": "ad55f66887014fab"
-  },
-  {
-    "path": "generator.yaml",
-    "reason": "generated generator configuration",
-    "body_hash": "181276d2bd537b89"
-  },
-  {
-    "path": "go.mod",
-    "reason": "Go module definition",
-    "body_hash": "6e860c63a33ea3bd"
-  },
-  {
-    "path": "internal/client/auth.go",
-    "reason": "authentication middleware",
-    "body_hash": "0beee19e2c55a414"
-  },
-  {
-    "path": "internal/client/auth_test.go",
-    "reason": "authentication middleware unit tests",
-    "body_hash": "e7953227ea13b9b9"
-  },
-  {
-    "path": "internal/client/client.go",
-    "reason": "generated HTTP client",
-    "body_hash": "a37c74d3b5e33306"
-  },
-  {
-    "path": "internal/client/client_test.go",
-    "reason": "generated HTTP client unit tests",
-    "body_hash": "0fb890fb4f1b0e58"
-  },
-  {
-    "path": "internal/client/errors.go",
-    "reason": "typed API error helpers",
-    "body_hash": "7b69b0dda148a6d5"
-  },
-  {
-    "path": "internal/client/logging.go",
-    "reason": "request/response trace logging",
-    "body_hash": "9defaf534cc08195"
-  },
-  {
-    "path": "internal/client/logging_test.go",
-    "reason": "trace logging unit tests",
-    "body_hash": "3d1b897c8a09d762"
-  },
-  {
-    "path": "internal/client/models.go",
-    "reason": "request/response model structs",
-    "body_hash": "1efd23827e83c14f"
-  },
-  {
-    "path": "internal/client/pagination.go",
-    "reason": "pagination helpers",
-    "body_hash": "80e851435c7a25d6"
-  },
-  {
-    "path": "internal/client/retry.go",
-    "reason": "retry logic with exponential backoff",
-    "body_hash": "bf53c919903fb008"
-  },
-  {
-    "path": "internal/provider/action_create_polymorphic_pet.go",
-    "reason": "action complex-polymorphism-api_create_polymorphic_pet",
-    "body_hash": "8070277e5bf8a9b2"
-  },
-  {
-    "path": "internal/provider/data_source_get_polymorphic_pet.go",
-    "reason": "data source complex-polymorphism-api_get_polymorphic_pet",
-    "body_hash": "45a6a7f71e2f7cd1"
-  },
-  {
-    "path": "internal/provider/data_source_get_polymorphic_pet_remote_test.go",
-    "reason": "coverage tests for data source get_polymorphic_pet remote helpers",
-    "body_hash": "695a94a29f35242b"
-  },
-  {
-    "path": "internal/provider/data_source_get_polymorphic_pet_test.go",
-    "reason": "unit tests for data source get_polymorphic_pet",
-    "body_hash": "dbb232060fb45cc1"
-  },
-  {
-    "path": "internal/provider/data_source_list_animals.go",
-    "reason": "data source complex-polymorphism-api_list_animals",
-    "body_hash": "44b61270c67ddcbd"
-  },
-  {
-    "path": "internal/provider/data_source_list_animals_remote_test.go",
-    "reason": "coverage tests for data source list_animals remote helpers",
-    "body_hash": "4ff2b57fc92a9d32"
-  },
-  {
-    "path": "internal/provider/data_source_list_animals_test.go",
-    "reason": "unit tests for data source list_animals",
-    "body_hash": "ce0a32a13f5bf903"
-  },
-  {
-    "path": "internal/provider/json_convert.go",
-    "reason": "JSON/model conversion helpers for wired CRUD bodies",
-    "body_hash": "d55741424fc66d24"
-  },
-  {
-    "path": "internal/provider/provider.go",
-    "reason": "provider schema and registration",
-    "body_hash": "a5bd36d5e13db4c5"
-  },
-  {
-    "path": "internal/provider/provider_test.go",
-    "reason": "provider-level unit tests",
-    "body_hash": "2f7f2a66dbb9d1af"
-  },
-  {
-    "path": "internal/provider/testing_helpers_test.go",
-    "reason": "shared httptest helpers for coverage tests",
-    "body_hash": "7048b5f7842bef2e"
-  },
-  {
-    "path": "internal/provider/validators.go",
-    "reason": "custom schema validators",
-    "body_hash": "05809b4c121df503"
-  },
-  {
-    "path": "main.go",
-    "reason": "provider server entrypoint",
-    "body_hash": "28ab931b5e5aa85e"
-  },
-  {
-    "path": "terraform-registry-manifest.json",
-    "reason": "Terraform Registry manifest",
-    "body_hash": "76ac85aa7f3a523b"
-  }
-]
+{
+  "files": [
+    {
+      "path": ".github/workflows/release.yml",
+      "reason": "GitHub Actions release workflow",
+      "body_hash": "99f0c0375c39c26f"
+    },
+    {
+      "path": ".goreleaser.yml",
+      "reason": "GoReleaser release configuration",
+      "body_hash": "bf8932f04be571be"
+    },
+    {
+      "path": "GNUmakefile",
+      "reason": "build and test automation",
+      "body_hash": "771e0e9e2aefba94"
+    },
+    {
+      "path": "README.md",
+      "reason": "provider overview and usage guide",
+      "body_hash": "c2098388f87451d7"
+    },
+    {
+      "path": "docs/actions/create_polymorphic_pet.md",
+      "reason": "documentation for action create_polymorphic_pet",
+      "body_hash": "74e2aa243bf6b8d1"
+    },
+    {
+      "path": "docs/data-sources/get_polymorphic_pet.md",
+      "reason": "documentation for data source get_polymorphic_pet",
+      "body_hash": "de1f4fcf340a6661"
+    },
+    {
+      "path": "docs/data-sources/list_animals.md",
+      "reason": "documentation for data source list_animals",
+      "body_hash": "acfe928928ff59f1"
+    },
+    {
+      "path": "docs/index.md",
+      "reason": "provider overview and authentication guide",
+      "body_hash": "4f5c1982a9322a7f"
+    },
+    {
+      "path": "examples/actions/create_polymorphic_pet/action.tf",
+      "reason": "example for action create_polymorphic_pet",
+      "body_hash": "5b39fd57c12ddbb5"
+    },
+    {
+      "path": "examples/data-sources/get_polymorphic_pet/data-source.tf",
+      "reason": "example for data source get_polymorphic_pet",
+      "body_hash": "3652d0dd367a9eaa"
+    },
+    {
+      "path": "examples/data-sources/list_animals/data-source.tf",
+      "reason": "example for data source list_animals",
+      "body_hash": "ad55f66887014fab"
+    },
+    {
+      "path": "generator.yaml",
+      "reason": "generated generator configuration",
+      "body_hash": "181276d2bd537b89"
+    },
+    {
+      "path": "go.mod",
+      "reason": "Go module definition",
+      "body_hash": "13a2b8adedd0049a"
+    },
+    {
+      "path": "internal/client/auth.go",
+      "reason": "authentication middleware",
+      "body_hash": "0beee19e2c55a414"
+    },
+    {
+      "path": "internal/client/auth_test.go",
+      "reason": "authentication middleware unit tests",
+      "body_hash": "e7953227ea13b9b9"
+    },
+    {
+      "path": "internal/client/client.go",
+      "reason": "generated HTTP client",
+      "body_hash": "8d49aecbcffa7f8d"
+    },
+    {
+      "path": "internal/client/client_test.go",
+      "reason": "generated HTTP client unit tests",
+      "body_hash": "269234701b828124"
+    },
+    {
+      "path": "internal/client/errors.go",
+      "reason": "typed API error helpers",
+      "body_hash": "7b69b0dda148a6d5"
+    },
+    {
+      "path": "internal/client/logging.go",
+      "reason": "request/response trace logging",
+      "body_hash": "9defaf534cc08195"
+    },
+    {
+      "path": "internal/client/logging_test.go",
+      "reason": "trace logging unit tests",
+      "body_hash": "3d1b897c8a09d762"
+    },
+    {
+      "path": "internal/client/models.go",
+      "reason": "request/response model structs",
+      "body_hash": "1efd23827e83c14f"
+    },
+    {
+      "path": "internal/client/pagination.go",
+      "reason": "pagination helpers",
+      "body_hash": "7a1a499684b413ec"
+    },
+    {
+      "path": "internal/client/retry.go",
+      "reason": "retry logic with exponential backoff",
+      "body_hash": "bf53c919903fb008"
+    },
+    {
+      "path": "internal/provider/action_create_polymorphic_pet.go",
+      "reason": "action complex-polymorphism-api_create_polymorphic_pet",
+      "body_hash": "8070277e5bf8a9b2"
+    },
+    {
+      "path": "internal/provider/data_source_get_polymorphic_pet.go",
+      "reason": "data source complex-polymorphism-api_get_polymorphic_pet",
+      "body_hash": "45a6a7f71e2f7cd1"
+    },
+    {
+      "path": "internal/provider/data_source_get_polymorphic_pet_remote_test.go",
+      "reason": "coverage tests for data source get_polymorphic_pet remote helpers",
+      "body_hash": "695a94a29f35242b"
+    },
+    {
+      "path": "internal/provider/data_source_get_polymorphic_pet_test.go",
+      "reason": "unit tests for data source get_polymorphic_pet",
+      "body_hash": "dbb232060fb45cc1"
+    },
+    {
+      "path": "internal/provider/data_source_list_animals.go",
+      "reason": "data source complex-polymorphism-api_list_animals",
+      "body_hash": "44b61270c67ddcbd"
+    },
+    {
+      "path": "internal/provider/data_source_list_animals_remote_test.go",
+      "reason": "coverage tests for data source list_animals remote helpers",
+      "body_hash": "4ff2b57fc92a9d32"
+    },
+    {
+      "path": "internal/provider/data_source_list_animals_test.go",
+      "reason": "unit tests for data source list_animals",
+      "body_hash": "ce0a32a13f5bf903"
+    },
+    {
+      "path": "internal/provider/json_convert.go",
+      "reason": "JSON/model conversion helpers for wired CRUD bodies",
+      "body_hash": "d55741424fc66d24"
+    },
+    {
+      "path": "internal/provider/provider.go",
+      "reason": "provider schema and registration",
+      "body_hash": "a5bd36d5e13db4c5"
+    },
+    {
+      "path": "internal/provider/provider_test.go",
+      "reason": "provider-level unit tests",
+      "body_hash": "2f7f2a66dbb9d1af"
+    },
+    {
+      "path": "internal/provider/testing_helpers_test.go",
+      "reason": "shared httptest helpers for coverage tests",
+      "body_hash": "7048b5f7842bef2e"
+    },
+    {
+      "path": "internal/provider/validators.go",
+      "reason": "custom schema validators",
+      "body_hash": "05809b4c121df503"
+    },
+    {
+      "path": "main.go",
+      "reason": "provider server entrypoint",
+      "body_hash": "28ab931b5e5aa85e"
+    },
+    {
+      "path": "terraform-registry-manifest.json",
+      "reason": "Terraform Registry manifest",
+      "body_hash": "76ac85aa7f3a523b"
+    }
+  ],
+  "warnings": [
+    "anyOf composition not modeled",
+    "anyOf composition not modeled",
+    "anyOf composition not modeled",
+    "anyOf composition not modeled"
+  ]
+}

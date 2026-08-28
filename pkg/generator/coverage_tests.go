@@ -16,7 +16,7 @@ import (
 	"fmt"
 	"go/ast"
 	"go/token"
-	"path/filepath"
+	"path"
 
 	"github.com/signalbreak-labs/eidos/pkg/generator/astgen"
 	"github.com/signalbreak-labs/eidos/pkg/generator/internal/naming"
@@ -46,7 +46,7 @@ func retryDisabledOpt() ast.Expr {
 // file. It is only emitted when at least one coverage test file is produced, so
 // the helpers are never left unused (staticcheck U1000).
 func SharedTestHelpersFile(clientImport string) File {
-	path := filepath.Join("internal", "provider", "testing_helpers_test.go")
+	path := path.Join("internal", "provider", "testing_helpers_test.go")
 	return GoCodeAST(path, generateSharedTestHelpersFile(clientImport))
 }
 
@@ -344,7 +344,7 @@ func byteSliceCall(arg ast.Expr) *ast.CallExpr {
 // (unwired, or a binary file-upload create whose body the mock cannot round-trip).
 func ResourceCoverageTestFile(r ir.ResourceIR, clientImport string) File {
 	name := naming.SnakeCase(r.Name)
-	path := filepath.Join("internal", "provider", fmt.Sprintf("resource_%s_remote_test.go", name))
+	path := path.Join("internal", "provider", fmt.Sprintf("resource_%s_remote_test.go", name))
 	file, err := generateResourceCoverageTestFile(r, clientImport)
 	if err != nil {
 		return ErrorFile(path, err)
@@ -763,7 +763,7 @@ func mapErrBody(info idFieldInfo) (string, bool) {
 // (unwired). Both single-object and list data sources are supported.
 func DataSourceCoverageTestFile(ds ir.DataSourceIR, clientImport string) File {
 	name := naming.SnakeCase(ds.Name)
-	path := filepath.Join("internal", "provider", fmt.Sprintf("data_source_%s_remote_test.go", name))
+	path := path.Join("internal", "provider", fmt.Sprintf("data_source_%s_remote_test.go", name))
 	file, err := generateDataSourceCoverageTestFile(ds, clientImport)
 	if err != nil {
 		return ErrorFile(path, err)
@@ -909,7 +909,7 @@ func buildDataSourceCoverageCases(ds ir.DataSourceIR, plan dataSourceWiringPlan)
 // non-success error surfacing.
 func ActionCoverageTestFile(a ir.ActionIR, clientImport string) File {
 	name := naming.SnakeCase(a.Name)
-	path := filepath.Join("internal", "provider", fmt.Sprintf("action_%s_remote_test.go", name))
+	path := path.Join("internal", "provider", fmt.Sprintf("action_%s_remote_test.go", name))
 	file, err := generateActionCoverageTestFile(a, clientImport)
 	if err != nil {
 		return ErrorFile(path, err)
@@ -1008,7 +1008,7 @@ func buildActionCoverageCases(a ir.ActionIR, plan crudOperationPlan) []coverageC
 // cannot reconstruct, so they stay framework-side and are not exercised here.
 func EphemeralCoverageTestFile(er ir.EphemeralResourceIR, clientImport string) File {
 	name := naming.SnakeCase(er.Name)
-	path := filepath.Join("internal", "provider", fmt.Sprintf("ephemeral_%s_remote_test.go", name))
+	path := path.Join("internal", "provider", fmt.Sprintf("ephemeral_%s_remote_test.go", name))
 	file, err := generateEphemeralCoverageTestFile(er, clientImport)
 	if err != nil {
 		return ErrorFile(path, err)
@@ -1112,7 +1112,7 @@ func buildEphemeralCoverageCases(er ir.EphemeralResourceIR, plan crudOperationPl
 // instantiate) and is covered by acceptance tests.
 func ListCoverageTestFile(lr ir.ListResourceIR, clientImport string) File {
 	name := naming.SnakeCase(lr.Name)
-	path := filepath.Join("internal", "provider", fmt.Sprintf("list_%s_remote_test.go", name))
+	path := path.Join("internal", "provider", fmt.Sprintf("list_%s_remote_test.go", name))
 	file, err := generateListCoverageTestFile(lr, clientImport)
 	if err != nil {
 		return ErrorFile(path, err)

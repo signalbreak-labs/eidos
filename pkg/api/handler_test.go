@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/signalbreak-labs/eidos/pkg/config"
 	"github.com/signalbreak-labs/eidos/pkg/diagnostics"
@@ -577,6 +578,67 @@ func TestValidate_ActionOverrideDoubleClaimedWarnsAndSkips(t *testing.T) {
 	}
 }
 
+// TestValidate_WebhooksNotMappedToProviderOperations verifies the M-11 fix:
+// OpenAPI 3.1 webhook operations describe callbacks the API provider makes to
+// the client, not endpoints the server exposes, so they must not classify as
+// provider-side operations (a webhook POST would otherwise become a wired
+// action calling a path the server does not host). Each webhook is surfaced
+// with a fail-loud warning instead.
+func TestValidate_WebhooksNotMappedToProviderOperations(t *testing.T) {
+	body := []byte(`{
+		"openapi": "3.1.0",
+		"info": {"title": "Webhooks API", "version": "1.0.0"},
+		"webhooks": {
+			"newPet": {
+				"post": {
+					"operationId": "receiveNewPet",
+					"responses": {"200": {"description": "received"}}
+				}
+			}
+		},
+		"paths": {
+			"/pets": {
+				"get": {
+					"operationId": "listPets",
+					"responses": {"200": {"description": "ok"}}
+				}
+			}
+		}
+	}`)
+
+	resp := Validate(body)
+	// A warning is non-blocking: the provider is still generated.
+	if !resp.Valid {
+		t.Fatalf("expected valid response (warning, not error), got diagnostics: %+v", resp.Diagnostics)
+	}
+	if resp.IRPreview == nil {
+		t.Fatal("expected an IR preview")
+	}
+	// The webhook POST must not become a provider-side action.
+	if len(resp.IRPreview.Actions) != 0 {
+		t.Errorf("expected 0 actions (a webhook POST is not a provider endpoint), got %d", len(resp.IRPreview.Actions))
+	}
+	for _, a := range resp.IRPreview.Actions {
+		if a.SourceOperation == "receiveNewPet" {
+			t.Errorf("webhook operation receiveNewPet was classified as a provider-side action")
+		}
+	}
+	// The real path still classifies normally.
+	if len(resp.IRPreview.DataSources) != 1 {
+		t.Errorf("expected 1 data source from the real path, got %d", len(resp.IRPreview.DataSources))
+	}
+	// A fail-loud warning names the webhook.
+	var sawWebhookWarning bool
+	for _, d := range resp.Diagnostics {
+		if d.Severity == diagnostics.Warning.String() && strings.Contains(d.Summary, "webhook") && strings.Contains(d.Summary, "newPet") {
+			sawWebhookWarning = true
+		}
+	}
+	if !sawWebhookWarning {
+		t.Errorf("expected a warning naming webhook newPet, got diagnostics: %+v", resp.Diagnostics)
+	}
+}
+
 // TestValidate_ActionOverrideUnclaimedStillEmitted asserts that an action
 // override for an operation no resource consumes still appends an action (the
 // override is a legitimate declaration, not a double-claim).
@@ -1110,6 +1172,110 @@ func TestValidate_CRUDMappingByMethod(t *testing.T) {
 	// separate action or scaffolded as an empty resource.
 	if len(resp.IRPreview.Actions) != 0 {
 		t.Fatalf("expected 0 actions, got %d", len(resp.IRPreview.Actions))
+	}
+}
+
+// TestValidate_DeprecatedOperationSurfacesOnResource verifies M-10: a full CRUD
+// group whose create operation declares deprecated: true produces a managed
+// resource carrying a DeprecationMessage, so the flag reaches the generated
+// schema.
+func TestValidate_DeprecatedOperationSurfacesOnResource(t *testing.T) {
+	body := []byte(`{
+		"openapi": "3.0.1",
+		"info": {"title": "CRUD API", "version": "1.0.0"},
+		"paths": {
+			"/pets": {
+				"post": {"operationId": "createPet", "deprecated": true, "responses": {"201": {"description": "created"}}}
+			},
+			"/pets/{id}": {
+				"get": {"operationId": "getPet", "responses": {"200": {"description": "ok"}}},
+				"delete": {"operationId": "deletePet", "responses": {"204": {"description": "deleted"}}}
+			}
+		}
+	}`)
+
+	resp := Validate(body)
+	if !resp.Valid {
+		t.Fatalf("expected valid response, got diagnostics: %+v", resp.Diagnostics)
+	}
+	if len(resp.IRPreview.Resources) != 1 {
+		t.Fatalf("expected 1 grouped resource, got %d", len(resp.IRPreview.Resources))
+	}
+	r := resp.IRPreview.Resources[0]
+	if r.DeprecationMessage == "" {
+		t.Errorf("expected resource DeprecationMessage, got empty")
+	}
+}
+
+// TestValidate_DeprecatedOperationSurfacesOnDataSource verifies M-10: a GET
+// operation declared deprecated: true produces a data source carrying a
+// DeprecationMessage.
+func TestValidate_DeprecatedOperationSurfacesOnDataSource(t *testing.T) {
+	body := []byte(`{
+		"openapi": "3.0.1",
+		"info": {"title": "Read API", "version": "1.0.0"},
+		"paths": {
+			"/pets/{id}": {
+				"get": {"operationId": "getPet", "deprecated": true, "responses": {"200": {"description": "ok"}}}
+			}
+		}
+	}`)
+
+	resp := Validate(body)
+	if !resp.Valid {
+		t.Fatalf("expected valid response, got diagnostics: %+v", resp.Diagnostics)
+	}
+	if len(resp.IRPreview.DataSources) != 1 {
+		t.Fatalf("expected 1 data source, got %d", len(resp.IRPreview.DataSources))
+	}
+	ds := resp.IRPreview.DataSources[0]
+	if ds.DeprecationMessage == "" {
+		t.Errorf("expected data source DeprecationMessage, got empty")
+	}
+}
+
+// TestValidate_DeprecatedParameterSurfacesOnDataSource verifies M-10: a data
+// source whose query parameter declares deprecated: true exposes the parameter
+// as a deprecated input attribute.
+func TestValidate_DeprecatedParameterSurfacesOnDataSource(t *testing.T) {
+	body := []byte(`{
+		"openapi": "3.0.1",
+		"info": {"title": "Read API", "version": "1.0.0"},
+		"paths": {
+			"/pets": {
+				"get": {
+					"operationId": "listPets",
+					"parameters": [
+						{"name": "limit", "in": "query", "deprecated": true, "schema": {"type": "integer"}}
+					],
+					"responses": {"200": {"description": "ok", "content": {"application/json": {"schema": {"type": "array", "items": {"type": "string"}}}}}}
+				}
+			}
+		}
+	}`)
+
+	resp := Validate(body)
+	if !resp.Valid {
+		t.Fatalf("expected valid response, got diagnostics: %+v", resp.Diagnostics)
+	}
+	if len(resp.IRPreview.DataSources) != 1 {
+		t.Fatalf("expected 1 data source, got %d", len(resp.IRPreview.DataSources))
+	}
+	ds := resp.IRPreview.DataSources[0]
+	var limit *ir.AttributeIR
+	for i := range ds.Schema.Attributes {
+		if ds.Schema.Attributes[i].Name == "limit" {
+			limit = &ds.Schema.Attributes[i]
+		}
+	}
+	if limit == nil {
+		t.Fatalf("expected a limit attribute, got %+v", ds.Schema.Attributes)
+	}
+	if !limit.Deprecated {
+		t.Errorf("expected limit attribute to be Deprecated")
+	}
+	if limit.DeprecationMessage == "" {
+		t.Errorf("expected limit attribute to carry a DeprecationMessage")
 	}
 }
 
@@ -1670,6 +1836,180 @@ func TestValidate_SingleSecurityRequirementNoORWarning(t *testing.T) {
 	}
 	if got := len(resp.IRPreview.SecurityIR.DefaultRequirements); got != 1 {
 		t.Errorf("expected 1 DefaultRequirement, got %d", got)
+	}
+}
+
+// TestValidate_UndeclaredSecuritySchemeWarns asserts that a global security
+// requirement referencing a scheme that is not declared in
+// components.securitySchemes surfaces a Warning (fail-loud) instead of being
+// silently dropped — the generated client can only apply schemes it knows
+// about, so an undeclared reference would otherwise vanish with no trace (L11).
+func TestValidate_UndeclaredSecuritySchemeWarns(t *testing.T) {
+	body := []byte(`{
+		"openapi": "3.0.1",
+		"info": {"title": "Undeclared Scheme API", "version": "1.0.0"},
+		"paths": {
+			"/items": {
+				"get": {
+					"operationId": "listItems",
+					"responses": {"200": {"description": "ok"}}
+				}
+			}
+		},
+		"security": [
+			{"apiKey": []}
+		],
+		"components": {
+			"securitySchemes": {
+				"bearer": {"type": "http", "scheme": "bearer"}
+			}
+		}
+	}`)
+
+	resp := Validate(body)
+	// A warning is non-blocking: the spec is still valid.
+	if !resp.Valid {
+		t.Fatalf("expected valid response (warning, not error), got diagnostics: %+v", resp.Diagnostics)
+	}
+
+	var sawUndeclared bool
+	for _, d := range resp.Diagnostics {
+		if d.Severity == diagnostics.Warning.String() && strings.Contains(d.Summary, "references undeclared scheme") {
+			sawUndeclared = true
+			if !strings.Contains(d.Detail, "apiKey") {
+				t.Errorf("expected warning detail to name the undeclared scheme, got: %s", d.Detail)
+			}
+		}
+	}
+	if !sawUndeclared {
+		t.Errorf("expected an undeclared-scheme warning, got diagnostics: %+v", resp.Diagnostics)
+	}
+
+	// The requirement is still carried into the IR; the warning is the surface.
+	if resp.IRPreview == nil {
+		t.Fatalf("expected an IR preview, got nil")
+	}
+	if got := len(resp.IRPreview.SecurityIR.DefaultRequirements); got != 1 {
+		t.Errorf("expected 1 DefaultRequirement, got %d", got)
+	}
+}
+
+// TestValidate_DeclaredSecuritySchemeNoWarning asserts that a global security
+// requirement referencing a declared scheme produces no undeclared-scheme
+// warning — the common, well-formed case (L11).
+func TestValidate_DeclaredSecuritySchemeNoWarning(t *testing.T) {
+	body := []byte(`{
+		"openapi": "3.0.1",
+		"info": {"title": "Declared Scheme API", "version": "1.0.0"},
+		"paths": {
+			"/items": {
+				"get": {
+					"operationId": "listItems",
+					"responses": {"200": {"description": "ok"}}
+				}
+			}
+		},
+		"security": [
+			{"apiKey": []}
+		],
+		"components": {
+			"securitySchemes": {
+				"apiKey": {"type": "apiKey", "in": "header", "name": "X-API-Key"}
+			}
+		}
+	}`)
+
+	resp := Validate(body)
+	if !resp.Valid {
+		t.Fatalf("expected valid response, got diagnostics: %+v", resp.Diagnostics)
+	}
+	for _, d := range resp.Diagnostics {
+		if strings.Contains(d.Summary, "references undeclared scheme") {
+			t.Errorf("a declared scheme must not trigger the undeclared-scheme warning, got: %+v", d)
+		}
+	}
+}
+
+// TestValidate_SelectedSchemeSkipsOtherRequirements asserts that when
+// generator.yaml selects a single scheme, global requirements naming other
+// (even undeclared) schemes are intentionally not applied and produce no
+// undeclared-scheme warning, while a selected-but-undeclared scheme still
+// warns (L11).
+func TestValidate_SelectedSchemeSkipsOtherRequirements(t *testing.T) {
+	body := []byte(`{
+		"openapi": "3.0.1",
+		"info": {"title": "Selected Scheme API", "version": "1.0.0"},
+		"config": "provider:\n  name: selected_provider\n  version: \"1.0.0\"\nsecurity:\n  scheme: apiKey\n",
+		"paths": {
+			"/items": {
+				"get": {
+					"operationId": "listItems",
+					"responses": {"200": {"description": "ok"}}
+				}
+			}
+		},
+		"security": [
+			{"apiKey": []},
+			{"ghost": []}
+		],
+		"components": {
+			"securitySchemes": {
+				"apiKey": {"type": "apiKey", "in": "header", "name": "X-API-Key"}
+			}
+		}
+	}`)
+
+	resp := Validate(body)
+	if !resp.Valid {
+		t.Fatalf("expected valid response, got diagnostics: %+v", resp.Diagnostics)
+	}
+	for _, d := range resp.Diagnostics {
+		if strings.Contains(d.Summary, "references undeclared scheme") {
+			t.Errorf("a non-selected requirement must not trigger the undeclared-scheme warning, got: %+v", d)
+		}
+	}
+}
+
+// TestValidate_EmptySecurityRequirementPreserved asserts that an empty global
+// security requirement object {} — OpenAPI's marker for "unauthenticated access
+// allowed" — is preserved as an empty DefaultRequirement and triggers neither the
+// OR warning nor the undeclared-scheme warning (no scheme names are referenced)
+// (L11).
+func TestValidate_EmptySecurityRequirementPreserved(t *testing.T) {
+	body := []byte(`{
+		"openapi": "3.0.1",
+		"info": {"title": "Open Auth API", "version": "1.0.0"},
+		"paths": {
+			"/items": {
+				"get": {
+					"operationId": "listItems",
+					"responses": {"200": {"description": "ok"}}
+				}
+			}
+		},
+		"security": [
+			{}
+		]
+	}`)
+
+	resp := Validate(body)
+	if !resp.Valid {
+		t.Fatalf("expected valid response, got diagnostics: %+v", resp.Diagnostics)
+	}
+	for _, d := range resp.Diagnostics {
+		if strings.Contains(d.Summary, "OR security-requirement resolution not modeled") ||
+			strings.Contains(d.Summary, "references undeclared scheme") {
+			t.Errorf("an empty requirement must not trigger security warnings, got: %+v", d)
+		}
+	}
+	if resp.IRPreview == nil {
+		t.Fatalf("expected an IR preview, got nil")
+	}
+	if got := len(resp.IRPreview.SecurityIR.DefaultRequirements); got != 1 {
+		t.Fatalf("expected 1 DefaultRequirement, got %d", got)
+	}
+	if got := resp.IRPreview.SecurityIR.DefaultRequirements[0]; len(got) != 0 {
+		t.Errorf("expected the empty requirement to be preserved as an empty map, got %v", got)
 	}
 }
 
@@ -2289,6 +2629,75 @@ func TestLoggingConfig_AbsentLeavesLoggingNil(t *testing.T) {
 	if preview.ClientIR.Logging != nil {
 		t.Errorf("ClientIR.Logging = %+v, want nil without a logging config", preview.ClientIR.Logging)
 	}
+}
+
+// TestClientConfig_PlumbedOntoClientIR asserts the generator.yaml client section
+// populates the ClientIR fields the generator bakes into the generated client
+// (L-5): base URL template, user agent, timeout, and retry settings.
+func TestClientConfig_PlumbedOntoClientIR(t *testing.T) {
+	spec := []byte(`{
+		"openapi": "3.0.1",
+		"info": {"title": "Client API", "version": "1.0.0"},
+		"paths": {"/ping": {"get": {"operationId": "ping", "responses": {"200": {"description": "ok"}}}}}
+	}`)
+	cfg := &config.Config{Client: &config.ClientConfig{
+		BaseURLTemplate: "https://api.example.com/v2",
+		UserAgent:       "custom-agent",
+		Timeout:         durPtr(90 * time.Second),
+		RetryMax:        7,
+		RetryWaitMin:    durPtr(2 * time.Second),
+		RetryWaitMax:    durPtr(time.Minute),
+	}}
+
+	preview, _, _, err := BuildProviderIR(spec, cfg)
+	if err != nil {
+		t.Fatalf("BuildProviderIR() error = %v", err)
+	}
+	c := preview.ClientIR
+	if c.BaseURLTemplate != "https://api.example.com/v2" {
+		t.Errorf("BaseURLTemplate = %q, want %q", c.BaseURLTemplate, "https://api.example.com/v2")
+	}
+	if c.UserAgent != "custom-agent" {
+		t.Errorf("UserAgent = %q, want %q", c.UserAgent, "custom-agent")
+	}
+	if c.Timeout != 90*time.Second {
+		t.Errorf("Timeout = %v, want 90s", c.Timeout)
+	}
+	if c.RetryMax != 7 {
+		t.Errorf("RetryMax = %d, want 7", c.RetryMax)
+	}
+	if c.RetryWaitMin != 2*time.Second {
+		t.Errorf("RetryWaitMin = %v, want 2s", c.RetryWaitMin)
+	}
+	if c.RetryWaitMax != time.Minute {
+		t.Errorf("RetryWaitMax = %v, want 1m", c.RetryWaitMax)
+	}
+}
+
+// TestClientConfig_AbsentLeavesClientIRZero asserts no client config leaves the
+// ClientIR client fields at their zero values so the generator's
+// clientConfigFromIR guards fall back to the defaults.
+func TestClientConfig_AbsentLeavesClientIRZero(t *testing.T) {
+	spec := []byte(`{
+		"openapi": "3.0.1",
+		"info": {"title": "Client API", "version": "1.0.0"},
+		"paths": {"/ping": {"get": {"operationId": "ping", "responses": {"200": {"description": "ok"}}}}}
+	}`)
+
+	preview, _, _, err := BuildProviderIR(spec, nil)
+	if err != nil {
+		t.Fatalf("BuildProviderIR() error = %v", err)
+	}
+	c := preview.ClientIR
+	if c.BaseURLTemplate != "" || c.UserAgent != "" || c.Timeout != 0 || c.RetryMax != 0 {
+		t.Errorf("ClientIR client fields = %+v, want zero values without a client config", c)
+	}
+}
+
+// durPtr returns a *config.Duration for the given time.Duration.
+func durPtr(d time.Duration) *config.Duration {
+	dd := config.Duration(d)
+	return &dd
 }
 
 // TestBuildProviderIR_NonLocalRefFailsLoud asserts the generate path runs the
@@ -3346,6 +3755,97 @@ func TestValidate_SecuritySchemeSelection(t *testing.T) {
 		if strings.Contains(d.Summary, "OR security") {
 			t.Errorf("expected OR security warning to be suppressed when a scheme is selected, got %+v", d)
 		}
+	}
+}
+
+// TestValidate_AuthSectionConsumed locks in the M-5 fix: generator.yaml `auth:`
+// entries are read by the transform pipeline and override the auto-derived
+// security scheme configuration. Before the fix the auth section was validated
+// and round-tripped but never consumed, so header_name, token_url, and the
+// env-var hints had no effect on the IR (and therefore on the generated
+// provider).
+func TestValidate_AuthSectionConsumed(t *testing.T) {
+	body := []byte(`{
+		"openapi": "3.0.1",
+		"info": {"title": "Auth API", "version": "1.0.0"},
+		"config": "provider:\n  name: auth\n  version: \"1.0.0\"\nauth:\n  - scheme: apiKey\n    header_name: X-Custom-Key\n    env_var: MY_CUSTOM_KEY\n",
+		"components": {
+			"securitySchemes": {
+				"api_key": {"type": "apiKey", "name": "X-API-Key", "in": "header"}
+			}
+		},
+		"security": [{"api_key": []}],
+		"paths": {
+			"/pets": {
+				"get": {"operationId": "listPets", "responses": {"200": {"description": "ok"}}}
+			}
+		}
+	}`)
+
+	resp := Validate(body)
+	if !resp.Valid {
+		t.Fatalf("expected valid response, got diagnostics: %+v", resp.Diagnostics)
+	}
+	if resp.IRPreview == nil {
+		t.Fatal("no IR preview")
+	}
+	if len(resp.IRPreview.SecurityIR.Schemes) != 1 {
+		t.Fatalf("expected 1 scheme, got %+v", resp.IRPreview.SecurityIR.Schemes)
+	}
+	scheme := resp.IRPreview.SecurityIR.Schemes[0]
+	if scheme.NameField != "X-Custom-Key" {
+		t.Errorf("NameField = %q, want %q (auth header_name override, M-5)", scheme.NameField, "X-Custom-Key")
+	}
+	if scheme.EnvVar != "MY_CUSTOM_KEY" {
+		t.Errorf("EnvVar = %q, want %q (auth env_var preserved, M-5)", scheme.EnvVar, "MY_CUSTOM_KEY")
+	}
+}
+
+// TestValidate_AuthSectionOAuth2TokenURLOverride locks in the M-5 fix for the
+// OAuth2 token_url override: the auth entry's token_url replaces the spec's
+// token endpoint on the flow the generated provider will use.
+func TestValidate_AuthSectionOAuth2TokenURLOverride(t *testing.T) {
+	body := []byte(`{
+		"openapi": "3.0.1",
+		"info": {"title": "OAuth API", "version": "1.0.0"},
+		"config": "provider:\n  name: oauth\n  version: \"1.0.0\"\nauth:\n  - scheme: oauth2\n    flow: client_credentials\n    token_url: https://override.example/token\n    client_id_env: MY_CLIENT_ID\n    client_secret_env: MY_CLIENT_SECRET\n",
+		"components": {
+			"securitySchemes": {
+				"oauth2": {
+					"type": "oauth2",
+					"flows": {
+						"clientCredentials": {"tokenUrl": "https://spec.example/token", "scopes": {}}
+					}
+				}
+			}
+		},
+		"security": [{"oauth2": []}],
+		"paths": {
+			"/pets": {
+				"get": {"operationId": "listPets", "responses": {"200": {"description": "ok"}}}
+			}
+		}
+	}`)
+
+	resp := Validate(body)
+	if !resp.Valid {
+		t.Fatalf("expected valid response, got diagnostics: %+v", resp.Diagnostics)
+	}
+	if resp.IRPreview == nil {
+		t.Fatal("no IR preview")
+	}
+	if len(resp.IRPreview.SecurityIR.Schemes) != 1 {
+		t.Fatalf("expected 1 scheme, got %+v", resp.IRPreview.SecurityIR.Schemes)
+	}
+	scheme := resp.IRPreview.SecurityIR.Schemes[0]
+	if scheme.Flows == nil || scheme.Flows.ClientCredentials == nil {
+		t.Fatalf("expected client_credentials flow, got %+v", scheme.Flows)
+	}
+	if scheme.Flows.ClientCredentials.TokenURL != "https://override.example/token" {
+		t.Errorf("client_credentials TokenURL = %q, want %q (auth token_url override, M-5)", scheme.Flows.ClientCredentials.TokenURL, "https://override.example/token")
+	}
+	if scheme.ClientIDEnv != "MY_CLIENT_ID" || scheme.ClientSecretEnv != "MY_CLIENT_SECRET" {
+		t.Errorf("env hints = %q/%q, want MY_CLIENT_ID/MY_CLIENT_SECRET (M-5)", scheme.ClientIDEnv, scheme.ClientSecretEnv)
 	}
 }
 

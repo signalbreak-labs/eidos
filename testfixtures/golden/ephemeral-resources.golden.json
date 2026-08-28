@@ -1,142 +1,144 @@
-[
-  {
-    "path": ".github/workflows/release.yml",
-    "reason": "GitHub Actions release workflow",
-    "body_hash": "a8749446f75eb6aa"
-  },
-  {
-    "path": ".goreleaser.yml",
-    "reason": "GoReleaser release configuration",
-    "body_hash": "fb77755d6185085d"
-  },
-  {
-    "path": "GNUmakefile",
-    "reason": "build and test automation",
-    "body_hash": "771e0e9e2aefba94"
-  },
-  {
-    "path": "README.md",
-    "reason": "provider overview and usage guide",
-    "body_hash": "87fccd3612cf2143"
-  },
-  {
-    "path": "docs/ephemeral-resources/issue_credentials.md",
-    "reason": "documentation for ephemeral resource issue_credentials",
-    "body_hash": "0b9169e5026745c5"
-  },
-  {
-    "path": "docs/index.md",
-    "reason": "provider overview and authentication guide",
-    "body_hash": "d6675a21cf911349"
-  },
-  {
-    "path": "examples/ephemeral-resources/issue_credentials/ephemeral-resource.tf",
-    "reason": "example for ephemeral resource issue_credentials",
-    "body_hash": "be1dcf582e43d3dd"
-  },
-  {
-    "path": "generator.yaml",
-    "reason": "generated generator configuration",
-    "body_hash": "803d3485b4068f31"
-  },
-  {
-    "path": "go.mod",
-    "reason": "Go module definition",
-    "body_hash": "3524aa0a77e04891"
-  },
-  {
-    "path": "internal/client/auth.go",
-    "reason": "authentication middleware",
-    "body_hash": "0beee19e2c55a414"
-  },
-  {
-    "path": "internal/client/auth_test.go",
-    "reason": "authentication middleware unit tests",
-    "body_hash": "e7953227ea13b9b9"
-  },
-  {
-    "path": "internal/client/client.go",
-    "reason": "generated HTTP client",
-    "body_hash": "7f89fb238f49550d"
-  },
-  {
-    "path": "internal/client/client_test.go",
-    "reason": "generated HTTP client unit tests",
-    "body_hash": "aea6d22c6af4acb6"
-  },
-  {
-    "path": "internal/client/errors.go",
-    "reason": "typed API error helpers",
-    "body_hash": "7b69b0dda148a6d5"
-  },
-  {
-    "path": "internal/client/logging.go",
-    "reason": "request/response trace logging",
-    "body_hash": "9defaf534cc08195"
-  },
-  {
-    "path": "internal/client/logging_test.go",
-    "reason": "trace logging unit tests",
-    "body_hash": "3d1b897c8a09d762"
-  },
-  {
-    "path": "internal/client/models.go",
-    "reason": "request/response model structs",
-    "body_hash": "1efd23827e83c14f"
-  },
-  {
-    "path": "internal/client/pagination.go",
-    "reason": "pagination helpers",
-    "body_hash": "80e851435c7a25d6"
-  },
-  {
-    "path": "internal/client/retry.go",
-    "reason": "retry logic with exponential backoff",
-    "body_hash": "bf53c919903fb008"
-  },
-  {
-    "path": "internal/provider/ephemeral_issue_credentials.go",
-    "reason": "ephemeral resource token-api_issue_credentials",
-    "body_hash": "14bc4e7ae209528d"
-  },
-  {
-    "path": "internal/provider/ephemeral_issue_credentials_remote_test.go",
-    "reason": "coverage tests for ephemeral resource issue_credentials remote helper",
-    "body_hash": "66967ccb92929602"
-  },
-  {
-    "path": "internal/provider/json_convert.go",
-    "reason": "JSON/model conversion helpers for wired CRUD bodies",
-    "body_hash": "f6d9a056cb8d5d0d"
-  },
-  {
-    "path": "internal/provider/provider.go",
-    "reason": "provider schema and registration",
-    "body_hash": "73279f4dfd9a3ef0"
-  },
-  {
-    "path": "internal/provider/provider_test.go",
-    "reason": "provider-level unit tests",
-    "body_hash": "9f4e2ab3b0a04381"
-  },
-  {
-    "path": "internal/provider/testing_helpers_test.go",
-    "reason": "shared httptest helpers for coverage tests",
-    "body_hash": "de049b7ef14ee2aa"
-  },
-  {
-    "path": "internal/provider/validators.go",
-    "reason": "custom schema validators",
-    "body_hash": "94a192299dab9088"
-  },
-  {
-    "path": "main.go",
-    "reason": "provider server entrypoint",
-    "body_hash": "52134eb290c70bbe"
-  },
-  {
-    "path": "terraform-registry-manifest.json",
-    "reason": "Terraform Registry manifest",
-    "body_hash": "76ac85aa7f3a523b"
-  }
-]
+{
+  "files": [
+    {
+      "path": ".github/workflows/release.yml",
+      "reason": "GitHub Actions release workflow",
+      "body_hash": "a8749446f75eb6aa"
+    },
+    {
+      "path": ".goreleaser.yml",
+      "reason": "GoReleaser release configuration",
+      "body_hash": "fb77755d6185085d"
+    },
+    {
+      "path": "GNUmakefile",
+      "reason": "build and test automation",
+      "body_hash": "771e0e9e2aefba94"
+    },
+    {
+      "path": "README.md",
+      "reason": "provider overview and usage guide",
+      "body_hash": "87fccd3612cf2143"
+    },
+    {
+      "path": "docs/ephemeral-resources/issue_credentials.md",
+      "reason": "documentation for ephemeral resource issue_credentials",
+      "body_hash": "0b9169e5026745c5"
+    },
+    {
+      "path": "docs/index.md",
+      "reason": "provider overview and authentication guide",
+      "body_hash": "d6675a21cf911349"
+    },
+    {
+      "path": "examples/ephemeral-resources/issue_credentials/ephemeral-resource.tf",
+      "reason": "example for ephemeral resource issue_credentials",
+      "body_hash": "be1dcf582e43d3dd"
+    },
+    {
+      "path": "generator.yaml",
+      "reason": "generated generator configuration",
+      "body_hash": "803d3485b4068f31"
+    },
+    {
+      "path": "go.mod",
+      "reason": "Go module definition",
+      "body_hash": "df69590a57989766"
+    },
+    {
+      "path": "internal/client/auth.go",
+      "reason": "authentication middleware",
+      "body_hash": "0beee19e2c55a414"
+    },
+    {
+      "path": "internal/client/auth_test.go",
+      "reason": "authentication middleware unit tests",
+      "body_hash": "e7953227ea13b9b9"
+    },
+    {
+      "path": "internal/client/client.go",
+      "reason": "generated HTTP client",
+      "body_hash": "ef074d72579059fa"
+    },
+    {
+      "path": "internal/client/client_test.go",
+      "reason": "generated HTTP client unit tests",
+      "body_hash": "75812f6713bd7b82"
+    },
+    {
+      "path": "internal/client/errors.go",
+      "reason": "typed API error helpers",
+      "body_hash": "7b69b0dda148a6d5"
+    },
+    {
+      "path": "internal/client/logging.go",
+      "reason": "request/response trace logging",
+      "body_hash": "9defaf534cc08195"
+    },
+    {
+      "path": "internal/client/logging_test.go",
+      "reason": "trace logging unit tests",
+      "body_hash": "3d1b897c8a09d762"
+    },
+    {
+      "path": "internal/client/models.go",
+      "reason": "request/response model structs",
+      "body_hash": "1efd23827e83c14f"
+    },
+    {
+      "path": "internal/client/pagination.go",
+      "reason": "pagination helpers",
+      "body_hash": "7a1a499684b413ec"
+    },
+    {
+      "path": "internal/client/retry.go",
+      "reason": "retry logic with exponential backoff",
+      "body_hash": "bf53c919903fb008"
+    },
+    {
+      "path": "internal/provider/ephemeral_issue_credentials.go",
+      "reason": "ephemeral resource token-api_issue_credentials",
+      "body_hash": "14bc4e7ae209528d"
+    },
+    {
+      "path": "internal/provider/ephemeral_issue_credentials_remote_test.go",
+      "reason": "coverage tests for ephemeral resource issue_credentials remote helper",
+      "body_hash": "66967ccb92929602"
+    },
+    {
+      "path": "internal/provider/json_convert.go",
+      "reason": "JSON/model conversion helpers for wired CRUD bodies",
+      "body_hash": "f6d9a056cb8d5d0d"
+    },
+    {
+      "path": "internal/provider/provider.go",
+      "reason": "provider schema and registration",
+      "body_hash": "73279f4dfd9a3ef0"
+    },
+    {
+      "path": "internal/provider/provider_test.go",
+      "reason": "provider-level unit tests",
+      "body_hash": "9f4e2ab3b0a04381"
+    },
+    {
+      "path": "internal/provider/testing_helpers_test.go",
+      "reason": "shared httptest helpers for coverage tests",
+      "body_hash": "de049b7ef14ee2aa"
+    },
+    {
+      "path": "internal/provider/validators.go",
+      "reason": "custom schema validators",
+      "body_hash": "94a192299dab9088"
+    },
+    {
+      "path": "main.go",
+      "reason": "provider server entrypoint",
+      "body_hash": "52134eb290c70bbe"
+    },
+    {
+      "path": "terraform-registry-manifest.json",
+      "reason": "Terraform Registry manifest",
+      "body_hash": "76ac85aa7f3a523b"
+    }
+  ]
+}

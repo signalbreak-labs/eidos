@@ -73,6 +73,10 @@ type Parameter struct {
 	// ir.AttributeIR.Description.
 	Description string
 	Required    bool
+	// Deprecated records the OpenAPI `deprecated: true` flag so the attributes
+	// derived from the parameter (data source and list-resource config inputs)
+	// can carry a deprecation message (M-10).
+	Deprecated bool
 	Type        string
 	// ItemsType is the scalar element type when Type is "array" (the `items`
 	// type of an array parameter); empty for non-array parameters. Used to model

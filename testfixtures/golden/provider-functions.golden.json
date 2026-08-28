@@ -1,122 +1,124 @@
-[
-  {
-    "path": ".github/workflows/release.yml",
-    "reason": "GitHub Actions release workflow",
-    "body_hash": "4b643f9a3e3ce81b"
-  },
-  {
-    "path": ".goreleaser.yml",
-    "reason": "GoReleaser release configuration",
-    "body_hash": "a87feee802e5007e"
-  },
-  {
-    "path": "GNUmakefile",
-    "reason": "build and test automation",
-    "body_hash": "771e0e9e2aefba94"
-  },
-  {
-    "path": "README.md",
-    "reason": "provider overview and usage guide",
-    "body_hash": "7a62673becf76387"
-  },
-  {
-    "path": "docs/functions/lookup_tags.md",
-    "reason": "documentation for function lookup_tags",
-    "body_hash": "11c1b169d4508bab"
-  },
-  {
-    "path": "docs/functions/search_users.md",
-    "reason": "documentation for function search_users",
-    "body_hash": "e27c22ece7b12f95"
-  },
-  {
-    "path": "docs/index.md",
-    "reason": "provider overview and authentication guide",
-    "body_hash": "1a8511cf73f97750"
-  },
-  {
-    "path": "generator.yaml",
-    "reason": "generated generator configuration",
-    "body_hash": "38149b07d78fdbb8"
-  },
-  {
-    "path": "go.mod",
-    "reason": "Go module definition",
-    "body_hash": "a3f7e4c10a993e8d"
-  },
-  {
-    "path": "internal/client/client.go",
-    "reason": "generated HTTP client",
-    "body_hash": "8b1bf6111860e344"
-  },
-  {
-    "path": "internal/client/client_test.go",
-    "reason": "generated HTTP client unit tests",
-    "body_hash": "96569b5131872e4a"
-  },
-  {
-    "path": "internal/client/errors.go",
-    "reason": "typed API error helpers",
-    "body_hash": "7b69b0dda148a6d5"
-  },
-  {
-    "path": "internal/client/logging.go",
-    "reason": "request/response trace logging",
-    "body_hash": "9defaf534cc08195"
-  },
-  {
-    "path": "internal/client/logging_test.go",
-    "reason": "trace logging unit tests",
-    "body_hash": "3d1b897c8a09d762"
-  },
-  {
-    "path": "internal/client/models.go",
-    "reason": "request/response model structs",
-    "body_hash": "1efd23827e83c14f"
-  },
-  {
-    "path": "internal/client/pagination.go",
-    "reason": "pagination helpers",
-    "body_hash": "80e851435c7a25d6"
-  },
-  {
-    "path": "internal/client/retry.go",
-    "reason": "retry logic with exponential backoff",
-    "body_hash": "bf53c919903fb008"
-  },
-  {
-    "path": "internal/provider/function_lookup_tags.go",
-    "reason": "provider-defined function search-api_lookup_tags",
-    "body_hash": "13d95498f8c9bad3"
-  },
-  {
-    "path": "internal/provider/function_search_users.go",
-    "reason": "provider-defined function search-api_search_users",
-    "body_hash": "be40086fa2aa5ba2"
-  },
-  {
-    "path": "internal/provider/provider.go",
-    "reason": "provider schema and registration",
-    "body_hash": "fb2c75a5626f15ba"
-  },
-  {
-    "path": "internal/provider/provider_test.go",
-    "reason": "provider-level unit tests",
-    "body_hash": "db20fb402d1ecfdb"
-  },
-  {
-    "path": "internal/provider/validators.go",
-    "reason": "custom schema validators",
-    "body_hash": "94a192299dab9088"
-  },
-  {
-    "path": "main.go",
-    "reason": "provider server entrypoint",
-    "body_hash": "59f45d9833a812da"
-  },
-  {
-    "path": "terraform-registry-manifest.json",
-    "reason": "Terraform Registry manifest",
-    "body_hash": "76ac85aa7f3a523b"
-  }
-]
+{
+  "files": [
+    {
+      "path": ".github/workflows/release.yml",
+      "reason": "GitHub Actions release workflow",
+      "body_hash": "4b643f9a3e3ce81b"
+    },
+    {
+      "path": ".goreleaser.yml",
+      "reason": "GoReleaser release configuration",
+      "body_hash": "a87feee802e5007e"
+    },
+    {
+      "path": "GNUmakefile",
+      "reason": "build and test automation",
+      "body_hash": "771e0e9e2aefba94"
+    },
+    {
+      "path": "README.md",
+      "reason": "provider overview and usage guide",
+      "body_hash": "7a62673becf76387"
+    },
+    {
+      "path": "docs/functions/lookup_tags.md",
+      "reason": "documentation for function lookup_tags",
+      "body_hash": "11c1b169d4508bab"
+    },
+    {
+      "path": "docs/functions/search_users.md",
+      "reason": "documentation for function search_users",
+      "body_hash": "e27c22ece7b12f95"
+    },
+    {
+      "path": "docs/index.md",
+      "reason": "provider overview and authentication guide",
+      "body_hash": "1a8511cf73f97750"
+    },
+    {
+      "path": "generator.yaml",
+      "reason": "generated generator configuration",
+      "body_hash": "38149b07d78fdbb8"
+    },
+    {
+      "path": "go.mod",
+      "reason": "Go module definition",
+      "body_hash": "1a7faf83bbb0340a"
+    },
+    {
+      "path": "internal/client/client.go",
+      "reason": "generated HTTP client",
+      "body_hash": "b8b9670d3d0a8171"
+    },
+    {
+      "path": "internal/client/client_test.go",
+      "reason": "generated HTTP client unit tests",
+      "body_hash": "a41d872fc3bd054e"
+    },
+    {
+      "path": "internal/client/errors.go",
+      "reason": "typed API error helpers",
+      "body_hash": "7b69b0dda148a6d5"
+    },
+    {
+      "path": "internal/client/logging.go",
+      "reason": "request/response trace logging",
+      "body_hash": "9defaf534cc08195"
+    },
+    {
+      "path": "internal/client/logging_test.go",
+      "reason": "trace logging unit tests",
+      "body_hash": "3d1b897c8a09d762"
+    },
+    {
+      "path": "internal/client/models.go",
+      "reason": "request/response model structs",
+      "body_hash": "1efd23827e83c14f"
+    },
+    {
+      "path": "internal/client/pagination.go",
+      "reason": "pagination helpers",
+      "body_hash": "7a1a499684b413ec"
+    },
+    {
+      "path": "internal/client/retry.go",
+      "reason": "retry logic with exponential backoff",
+      "body_hash": "bf53c919903fb008"
+    },
+    {
+      "path": "internal/provider/function_lookup_tags.go",
+      "reason": "provider-defined function search-api_lookup_tags",
+      "body_hash": "13d95498f8c9bad3"
+    },
+    {
+      "path": "internal/provider/function_search_users.go",
+      "reason": "provider-defined function search-api_search_users",
+      "body_hash": "be40086fa2aa5ba2"
+    },
+    {
+      "path": "internal/provider/provider.go",
+      "reason": "provider schema and registration",
+      "body_hash": "fb2c75a5626f15ba"
+    },
+    {
+      "path": "internal/provider/provider_test.go",
+      "reason": "provider-level unit tests",
+      "body_hash": "db20fb402d1ecfdb"
+    },
+    {
+      "path": "internal/provider/validators.go",
+      "reason": "custom schema validators",
+      "body_hash": "94a192299dab9088"
+    },
+    {
+      "path": "main.go",
+      "reason": "provider server entrypoint",
+      "body_hash": "59f45d9833a812da"
+    },
+    {
+      "path": "terraform-registry-manifest.json",
+      "reason": "Terraform Registry manifest",
+      "body_hash": "76ac85aa7f3a523b"
+    }
+  ]
+}

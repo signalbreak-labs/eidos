@@ -402,3 +402,150 @@ func TestLocPtrOrNil_NoDiagnosticsAliasing(t *testing.T) {
 		_ = sl
 	}
 }
+
+// TestReplaceLeadingSign covers the plus/minus digit rewrites and the
+// pass-through cases of replaceLeadingSign.
+func TestReplaceLeadingSign(t *testing.T) {
+	cases := []struct {
+		in   string
+		want string
+	}{
+		{"+1", "plus1"},
+		{"-1", "minus1"},
+		{"+42", "plus42"},
+		{"-foo", "-foo"},
+		{"+foo", "+foo"},
+		{"a", "a"},
+		{"", ""},
+		{"-", "-"},
+	}
+	for _, tc := range cases {
+		if got := replaceLeadingSign(tc.in); got != tc.want {
+			t.Errorf("replaceLeadingSign(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+}
+
+// TestActiveOAuth2Flow covers the named-flow, priority-fallback, and nil
+// branches of activeOAuth2Flow.
+func TestActiveOAuth2Flow(t *testing.T) {
+	flow := func(url string) *ir.OAuthFlowIR { return &ir.OAuthFlowIR{TokenURL: url} }
+	all := &ir.OAuthFlowsIR{
+		Implicit:          flow("https://implicit"),
+		Password:          flow("https://password"),
+		ClientCredentials: flow("https://client"),
+		AuthorizationCode: flow("https://authcode"),
+	}
+	cases := []struct {
+		name     string
+		scheme   *ir.SecuritySchemeIR
+		flowName string
+		want     string
+	}{
+		{"nil-flows", &ir.SecuritySchemeIR{}, "client_credentials", ""},
+		{"client-credentials", &ir.SecuritySchemeIR{Flows: all}, "client_credentials", "https://client"},
+		{"password", &ir.SecuritySchemeIR{Flows: all}, "password", "https://password"},
+		{"authorization-code", &ir.SecuritySchemeIR{Flows: all}, "authorization_code", "https://authcode"},
+		{"implicit", &ir.SecuritySchemeIR{Flows: all}, "implicit", "https://implicit"},
+		{"unknown-name-fallback", &ir.SecuritySchemeIR{Flows: all}, "nope", "https://client"},
+		{"fallback-password", &ir.SecuritySchemeIR{Flows: &ir.OAuthFlowsIR{Password: flow("https://pw")}}, "", "https://pw"},
+		{"fallback-authcode", &ir.SecuritySchemeIR{Flows: &ir.OAuthFlowsIR{AuthorizationCode: flow("https://ac")}}, "", "https://ac"},
+		{"no-flows", &ir.SecuritySchemeIR{Flows: &ir.OAuthFlowsIR{}}, "", ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := activeOAuth2Flow(tc.scheme, tc.flowName)
+			if got == nil {
+				if tc.want != "" {
+					t.Errorf("activeOAuth2Flow() = nil, want %q", tc.want)
+				}
+				return
+			}
+			if got.TokenURL != tc.want {
+				t.Errorf("activeOAuth2Flow() = %q, want %q", got.TokenURL, tc.want)
+			}
+		})
+	}
+}
+
+// TestDeclaresOAuth2Flow covers the named-flow and nil branches of
+// declaresOAuth2Flow.
+func TestDeclaresOAuth2Flow(t *testing.T) {
+	flow := func(url string) *ir.OAuthFlowIR { return &ir.OAuthFlowIR{TokenURL: url} }
+	all := &ir.OAuthFlowsIR{
+		Implicit:          flow("https://implicit"),
+		Password:          flow("https://password"),
+		ClientCredentials: flow("https://client"),
+		AuthorizationCode: flow("https://authcode"),
+	}
+	cases := []struct {
+		name     string
+		scheme   *ir.SecuritySchemeIR
+		flowName string
+		want     bool
+	}{
+		{"nil-flows", &ir.SecuritySchemeIR{}, "client_credentials", false},
+		{"client-credentials", &ir.SecuritySchemeIR{Flows: all}, "client_credentials", true},
+		{"password", &ir.SecuritySchemeIR{Flows: all}, "password", true},
+		{"authorization-code", &ir.SecuritySchemeIR{Flows: all}, "authorization_code", true},
+		{"implicit", &ir.SecuritySchemeIR{Flows: all}, "implicit", true},
+		{"unknown-name", &ir.SecuritySchemeIR{Flows: all}, "nope", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := declaresOAuth2Flow(tc.scheme, tc.flowName); got != tc.want {
+				t.Errorf("declaresOAuth2Flow() = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestWarnUnmarkableSensitiveRecursive covers the nil, object, collection, and
+// union recursion branches of warnUnmarkableSensitiveRecursive.
+func TestWarnUnmarkableSensitiveRecursive(t *testing.T) {
+	// Nil schema is a no-op.
+	var diags diagnostics.Diagnostics
+	warnUnmarkableSensitiveRecursive(nil, "action", "do_thing", &diags)
+	if len(diags) != 0 {
+		t.Errorf("nil schema must not emit warnings, got %d", len(diags))
+	}
+
+	// Object with a sensitive attribute emits a warning and recurses.
+	obj := &ir.SchemaIR{
+		Attributes: []ir.AttributeIR{
+			{Name: "password", Schema: ir.SchemaIR{Type: ir.TypeString}},
+		},
+	}
+	warnUnmarkableSensitiveRecursive(obj, "action", "do_thing", &diags)
+	if len(diags) != 1 {
+		t.Errorf("object schema: expected 1 warning, got %d", len(diags))
+	}
+
+	// Collection element recursion.
+	diags = diagnostics.Diagnostics{}
+	col := &ir.SchemaIR{
+		Collection: &ir.CollectionType{
+			Kind:        ir.List,
+			ElementType: ir.SchemaIR{Attributes: []ir.AttributeIR{{Name: "token", Schema: ir.SchemaIR{Type: ir.TypeString}}}},
+		},
+	}
+	warnUnmarkableSensitiveRecursive(col, "action", "do_thing", &diags)
+	if len(diags) != 1 {
+		t.Errorf("collection schema: expected 1 warning, got %d", len(diags))
+	}
+
+	// Union variant recursion.
+	diags = diagnostics.Diagnostics{}
+	uni := &ir.SchemaIR{
+		Union: &ir.UnionType{
+			Kind: ir.OneOf,
+			Variants: []ir.SchemaIR{
+				{Attributes: []ir.AttributeIR{{Name: "secret", Schema: ir.SchemaIR{Type: ir.TypeString}}}},
+			},
+		},
+	}
+	warnUnmarkableSensitiveRecursive(uni, "action", "do_thing", &diags)
+	if len(diags) != 1 {
+		t.Errorf("union schema: expected 1 warning, got %d", len(diags))
+	}
+}

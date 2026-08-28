@@ -34,7 +34,10 @@ func OperationsFromSpecWithDiagnostics(spec *parser.Spec) (map[string]map[HTTPMe
 
 	var diags diagnostics.Diagnostics
 	out := make(map[string]map[HTTPMethod]Operation, len(spec.Paths))
-	for path, pi := range spec.Paths {
+	// Iterate paths in sorted order so diagnostics are appended deterministically
+	// regardless of map iteration seed (L-3).
+	for _, path := range sortedKeys(spec.Paths) {
+		pi := spec.Paths[path]
 		if pi == nil {
 			continue
 		}
@@ -124,7 +127,109 @@ func operationFromParser(spec *parser.Spec, path string, method HTTPMethod, op *
 		out.ResponseHeaders = headerNames(resp.Headers)
 	}
 
+	// Path-item and operation-level servers are parsed but the generated client
+	// uses a single base URL derived from the spec-level servers, so an override
+	// cannot be honored. Surface it fail-loud instead of dropping it silently
+	// (M-15).
+	warnOperationServerOverride(diags, spec, pi, op, out.OperationID)
+
+	// OpenAPI callbacks and response links are parsed into the spec model but
+	// have no Terraform construct to map to. Surface them fail-loud instead of
+	// dropping them silently (L-9).
+	warnUnmappedCallbacks(diags, op)
+	warnUnmappedLinks(diags, spec, op)
+
 	return out
+}
+
+// warnUnmappedCallbacks records a fail-loud warning when an operation declares
+// OpenAPI callbacks. Callbacks describe out-of-band requests the server may
+// make to a client-supplied URL; eidos parses them into the spec model but has
+// no Terraform construct to map them to, so they are dropped. The warning makes
+// that visible instead of silent (L-9).
+func warnUnmappedCallbacks(diags *diagnostics.Diagnostics, op *parser.Operation) {
+	if len(op.Callbacks) == 0 {
+		return
+	}
+	*diags = append(*diags, diagnostics.Diagnostic{
+		Severity: diagnostics.Warning,
+		Summary:  "operation callbacks are not mapped to a Terraform construct",
+		Detail: fmt.Sprintf(
+			"operation %q declares callback(s) %s. OpenAPI callbacks describe out-of-band "+
+				"requests the server may make to a URL supplied by the client; eidos parses them "+
+				"but does not map them to any Terraform resource, data source, or action, so they "+
+				"are not generated.",
+			op.OperationID, strings.Join(sortedKeys(op.Callbacks), ", "),
+		),
+	})
+}
+
+// warnUnmappedLinks records a fail-loud warning when an operation's responses
+// declare OpenAPI links. Links describe follow-up requests derived from a
+// response; eidos parses them into the spec model but has no Terraform
+// construct to map them to, so they are dropped. The warning makes that visible
+// instead of silent (L-9).
+func warnUnmappedLinks(diags *diagnostics.Diagnostics, spec *parser.Spec, op *parser.Operation) {
+	if len(op.Responses) == 0 {
+		return
+	}
+	var names []string
+	for _, code := range sortedKeys(op.Responses) {
+		r := resolveResponse(spec, op.Responses[code])
+		if r == nil || len(r.Links) == 0 {
+			continue
+		}
+		for _, name := range sortedKeys(r.Links) {
+			names = append(names, code+"/"+name)
+		}
+	}
+	if len(names) == 0 {
+		return
+	}
+	*diags = append(*diags, diagnostics.Diagnostic{
+		Severity: diagnostics.Warning,
+		Summary:  "response links are not mapped to a Terraform construct",
+		Detail: fmt.Sprintf(
+			"operation %q declares response link(s) %s. OpenAPI links describe follow-up "+
+				"requests derived from a response; eidos parses them but does not map them to any "+
+				"Terraform resource, data source, or action, so they are not generated.",
+			op.OperationID, strings.Join(names, ", "),
+		),
+	})
+}
+
+// warnOperationServerOverride records a fail-loud warning when an operation's
+// effective servers (operation-level, else path-item-level, else global, per
+// OpenAPI override semantics) differ from the spec-level servers. The generated
+// client derives its single base URL from the spec-level servers, so any
+// per-operation or per-path override is dropped; the warning makes that visible
+// instead of silent (M-15).
+func warnOperationServerOverride(diags *diagnostics.Diagnostics, spec *parser.Spec, pi *parser.PathItem, op *parser.Operation, operationID string) {
+	global := parserServersToTransformer(spec.Servers)
+	effective := NormalizeOperationServers(global, parserServersToTransformer(piServers(pi)), parserServersToTransformer(op.Servers))
+	globalIR := NormalizeOperationServers(global, nil, nil)
+	if reflect.DeepEqual(effective, globalIR) {
+		return
+	}
+	*diags = append(*diags, diagnostics.Diagnostic{
+		Severity: diagnostics.Warning,
+		Summary:  "Operation server override not honored",
+		Detail: fmt.Sprintf(
+			"operation %s (or its path item) declares servers that differ from the spec-level servers. "+
+				"The generated provider uses a single base URL from the spec-level servers, so this "+
+				"per-operation/per-path server override is dropped. Move the override to the spec-level "+
+				"servers list if the operation must target a different base URL.",
+			operationID,
+		),
+	})
+}
+
+// piServers returns the path item's servers, or nil when the path item is absent.
+func piServers(pi *parser.PathItem) []parser.Server {
+	if pi == nil {
+		return nil
+	}
+	return pi.Servers
 }
 
 func parametersFromParser(spec *parser.Spec, pi *parser.PathItem, op *parser.Operation) []Parameter {
@@ -158,6 +263,7 @@ func parametersFromParser(spec *parser.Spec, pi *parser.PathItem, op *parser.Ope
 			In:          resolved.In,
 			Description: resolved.Description,
 			Required:    resolved.Required,
+			Deprecated:  resolved.Deprecated,
 			Type:        paramType,
 			ItemsType:   itemsType,
 			Style:       resolved.Style,

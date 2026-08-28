@@ -6,6 +6,379 @@ import (
 	"testing"
 )
 
+// TestValidateNestedRequired flags spec-mandated required fields below the
+// document root: operation responses, parameter name/in, path-parameter
+// required, and response description (M-1).
+func TestValidateNestedRequired(t *testing.T) {
+	data := []byte(`openapi: 3.0.3
+info:
+  title: Test API
+  version: "1.0"
+paths:
+  /pets:
+    get:
+      operationId: listPets
+      parameters:
+        - name: limit
+          in: query
+        - in: path
+          name: petId
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                type: array
+    post:
+      operationId: createPet
+      parameters:
+        - name: petId
+          in: path
+          required: true
+      responses:
+        "200":
+          description: OK
+  /broken:
+    put:
+      operationId: brokenOp
+      parameters:
+        - name: noIn
+      responses:
+        "200":
+          description: OK
+`)
+	root, err := LoadFile("nested.yaml", data)
+	if err != nil {
+		t.Fatalf("LoadFile: %v", err)
+	}
+
+	version, _ := DetectVersion(root)
+	spec, convertDiags, err := ConvertV30(root)
+	if err != nil {
+		t.Fatalf("ConvertV30: %v", err)
+	}
+
+	diags := Validate(root, spec, version)
+	all := append(convertDiags, diags...)
+
+	var missing []string
+	for _, d := range all {
+		if d.Severity == SeverityError && d.Summary == "Missing required field" {
+			missing = append(missing, d.Detail)
+		}
+	}
+	// Expected: GET /pets response missing description; GET /pets path param
+	// petId not required; PUT /broken parameter noIn missing 'in'.
+	for _, want := range []string{
+		"Response in GET /pets is missing the required 'description' field.",
+		"Path parameter \"petId\" in GET /pets must set required: true.",
+		"Parameter \"noIn\" in PUT /broken is missing the required 'in' field.",
+	} {
+		found := false
+		for _, m := range missing {
+			if m == want {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("missing expected diagnostic %q; got %v", want, missing)
+		}
+	}
+}
+
+// TestValidateNestedRequiredV31ResponseDescriptionOptional verifies that OpenAPI
+// 3.1 does not require response descriptions (JSON Schema 2020-12 relaxation).
+func TestValidateNestedRequiredV31ResponseDescriptionOptional(t *testing.T) {
+	data := []byte(`openapi: 3.1.0
+info:
+  title: Test API
+  version: "1.0"
+paths:
+  /pets:
+    get:
+      operationId: listPets
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                type: array
+`)
+	root, err := LoadFile("nested31.yaml", data)
+	if err != nil {
+		t.Fatalf("LoadFile: %v", err)
+	}
+
+	version, _ := DetectVersion(root)
+	spec, convertDiags, err := ConvertV31(root)
+	if err != nil {
+		t.Fatalf("ConvertV31: %v", err)
+	}
+
+	diags := Validate(root, spec, version)
+	all := append(convertDiags, diags...)
+	for _, d := range all {
+		if d.Severity == SeverityError && d.Summary == "Missing required field" {
+			t.Errorf("unexpected missing-required diagnostic in 3.1: %s", d.Detail)
+		}
+	}
+}
+
+// TestNonSequenceEnumWarnsV30 verifies that a non-sequence enum value under a
+// 3.x schema emits a warning instead of being silently dropped (M-2).
+func TestNonSequenceEnumWarnsV30(t *testing.T) {
+	data := []byte(`openapi: 3.0.3
+info:
+  title: Test API
+  version: "1.0"
+paths: {}
+components:
+  schemas:
+    Pet:
+      type: object
+      properties:
+        kind:
+          type: string
+          enum: 5
+`)
+	root, err := LoadFile("enum30.yaml", data)
+	if err != nil {
+		t.Fatalf("LoadFile: %v", err)
+	}
+	version, _ := DetectVersion(root)
+	spec, convertDiags, err := ConvertV30(root)
+	if err != nil {
+		t.Fatalf("ConvertV30: %v", err)
+	}
+	diags := Validate(root, spec, version)
+	all := append(convertDiags, diags...)
+
+	var warned bool
+	for _, d := range all {
+		if d.Severity == SeverityWarning && strings.Contains(d.Summary, "enum") {
+			warned = true
+		}
+	}
+	if !warned {
+		t.Errorf("expected a warning for non-sequence enum; got %v", all)
+	}
+	pet := spec.Components.Schemas["Pet"]
+	if pet.Properties["kind"].Enum != nil {
+		t.Errorf("expected nil Enum for non-sequence enum, got %v", pet.Properties["kind"].Enum)
+	}
+}
+
+// TestNonSequenceEnumWarnsV2 verifies that a non-sequence enum value under a
+// Swagger 2.0 schema or parameter emits a warning instead of being silently
+// dropped (M-2).
+func TestNonSequenceEnumWarnsV2(t *testing.T) {
+	data := []byte(`swagger: "2.0"
+info:
+  title: Test API
+  version: "1.0"
+paths:
+  /pets:
+    get:
+      operationId: listPets
+      parameters:
+        - name: kind
+          in: query
+          type: string
+          enum: 5
+      responses:
+        "200":
+          description: OK
+definitions:
+  Pet:
+    type: object
+    properties:
+      kind:
+        type: string
+        enum: 5
+`)
+	root, err := LoadFile("enum2.yaml", data)
+	if err != nil {
+		t.Fatalf("LoadFile: %v", err)
+	}
+	version, _ := DetectVersion(root)
+	spec, convertDiags, err := ConvertV2(root)
+	if err != nil {
+		t.Fatalf("ConvertV2: %v", err)
+	}
+	diags := Validate(root, spec, version)
+	all := append(convertDiags, diags...)
+
+	var warned int
+	for _, d := range all {
+		if d.Severity == SeverityWarning && strings.Contains(d.Summary, "enum") {
+			warned++
+		}
+	}
+	// One warning for the parameter enum, one for the schema enum.
+	if warned != 2 {
+		t.Errorf("expected 2 warnings for non-sequence enums, got %d (%v)", warned, all)
+	}
+}
+
+// TestSchemaExamplesArrayV31 verifies that the OpenAPI 3.1 schema-level
+// "examples" keyword (an array of raw values) is preserved rather than dropped
+// with a self-contradictory warning (L-1).
+func TestSchemaExamplesArrayV31(t *testing.T) {
+	data := []byte(`openapi: 3.1.0
+info:
+  title: Test API
+  version: "1.0"
+paths: {}
+components:
+  schemas:
+    Pet:
+      type: object
+      properties:
+        name:
+          type: string
+          examples:
+            - Fido
+            - Rex
+`)
+	root, err := LoadFile("examples31.yaml", data)
+	if err != nil {
+		t.Fatalf("LoadFile: %v", err)
+	}
+	version, _ := DetectVersion(root)
+	spec, convertDiags, err := ConvertV31(root)
+	if err != nil {
+		t.Fatalf("ConvertV31: %v", err)
+	}
+	diags := Validate(root, spec, version)
+	all := append(convertDiags, diags...)
+
+	for _, d := range all {
+		if d.Severity == SeverityWarning && strings.Contains(d.Summary, "examples") {
+			t.Errorf("unexpected examples warning: %s", d.String())
+		}
+	}
+
+	pet := spec.Components.Schemas["Pet"]
+	got := pet.Properties["name"].ExamplesArray
+	if len(got) != 2 || got[0] != "Fido" || got[1] != "Rex" {
+		t.Errorf("ExamplesArray = %v, want [Fido Rex]", got)
+	}
+}
+
+// TestSchemaExamplesMapV30 verifies the OpenAPI 3.0 map-of-Example form still
+// converts to the Examples map.
+func TestSchemaExamplesMapV30(t *testing.T) {
+	data := []byte(`openapi: 3.0.3
+info:
+  title: Test API
+  version: "1.0"
+paths: {}
+components:
+  schemas:
+    Pet:
+      type: object
+      properties:
+        name:
+          type: string
+          examples:
+            first:
+              value: Fido
+`)
+	root, err := LoadFile("examples30.yaml", data)
+	if err != nil {
+		t.Fatalf("LoadFile: %v", err)
+	}
+	version, _ := DetectVersion(root)
+	spec, convertDiags, err := ConvertV30(root)
+	if err != nil {
+		t.Fatalf("ConvertV30: %v", err)
+	}
+	diags := Validate(root, spec, version)
+	all := append(convertDiags, diags...)
+	for _, d := range all {
+		if d.Severity == SeverityError {
+			t.Errorf("unexpected error diagnostic: %s", d.String())
+		}
+	}
+	pet := spec.Components.Schemas["Pet"]
+	ex := pet.Properties["name"].Examples
+	if ex == nil || ex["first"] == nil || ex["first"].Value != "Fido" {
+		t.Errorf("Examples = %v, want map with first=Fido", ex)
+	}
+}
+
+// TestValidateDuplicateKeys warns on duplicate mapping keys and verifies that
+// $ref resolution and conversion agree on the last occurrence (H-2).
+func TestValidateDuplicateKeys(t *testing.T) {
+	data := []byte(`openapi: 3.0.3
+info:
+  title: First
+  title: Second
+  version: "1.0"
+paths: {}
+components:
+  schemas:
+    Pet:
+      type: object
+      properties:
+        name:
+          type: string
+        name:
+          type: integer
+`)
+	root, err := LoadFile("dup.yaml", data)
+	if err != nil {
+		t.Fatalf("LoadFile: %v", err)
+	}
+
+	version, _ := DetectVersion(root)
+	spec, convertDiags, err := ConvertV30(root)
+	if err != nil {
+		t.Fatalf("ConvertV30: %v", err)
+	}
+
+	diags := Validate(root, spec, version)
+	all := append(convertDiags, diags...)
+
+	var dupWarnings int
+	for _, d := range all {
+		if d.Summary == "Duplicate mapping key" {
+			dupWarnings++
+		}
+	}
+	// Two duplicate pairs: info.title and Pet.properties.name.
+	if dupWarnings != 2 {
+		t.Errorf("expected 2 duplicate-key warnings, got %d", dupWarnings)
+	}
+
+	// Conversion keeps the last occurrence.
+	if spec.Info.Title != "Second" {
+		t.Errorf("info.title = %q, want last occurrence %q", spec.Info.Title, "Second")
+	}
+	pet := spec.Components.Schemas["Pet"]
+	if got := pet.Properties["name"].Type; got != "integer" {
+		t.Errorf("Pet.properties.name.type = %v, want last occurrence %q", got, "integer")
+	}
+
+	// $ref resolution agrees with conversion (last-wins), not the first entry.
+	refNode, refDiags := ResolveLocalRef(root, "#/components/schemas/Pet/properties/name", SourceLocation{})
+	if len(refDiags) > 0 {
+		t.Fatalf("unexpected ref diagnostics: %v", refDiags)
+	}
+	refMap, ok := refNode.(*MapNode)
+	if !ok {
+		t.Fatalf("resolved ref is %T, want *MapNode", refNode)
+	}
+	typeEntry := findMapEntry(refMap, "type")
+	if typeEntry == nil {
+		t.Fatal("resolved ref has no type entry")
+	}
+	if got := typeEntry.Value.(*ScalarNode).Value; got != "integer" {
+		t.Errorf("$ref-resolved type = %v, want last occurrence %q", got, "integer")
+	}
+}
+
 func TestValidateValidV30(t *testing.T) {
 	data := []byte(`openapi: 3.0.3
 info:

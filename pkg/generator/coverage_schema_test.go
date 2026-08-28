@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/signalbreak-labs/eidos/pkg/generator/astgen"
 	"github.com/signalbreak-labs/eidos/pkg/ir"
 )
 
@@ -328,5 +329,61 @@ func TestProviderBlockExpr(t *testing.T) {
 
 	if _, err := providerBlockExpr(ir.BlockIR{Name: "bad", NestingMode: "exotic"}, ""); err == nil {
 		t.Error("expected error for unsupported nesting mode")
+	}
+}
+
+// TestListResourceMapElementAttributeExpr covers the primitive, object-like,
+// and nil branches of listResourceMapElementAttributeExpr.
+func TestListResourceMapElementAttributeExpr(t *testing.T) {
+	render := func(attr ir.AttributeIR, elem ir.SchemaIR) string {
+		expr := listResourceMapElementAttributeExpr(attr, elem, "test", "thing")
+		if expr == nil {
+			return "<nil>"
+		}
+		b, err := astgen.RenderExpr(expr)
+		if err != nil {
+			t.Fatalf("RenderExpr() error = %v", err)
+		}
+		return string(b)
+	}
+	attr := ir.AttributeIR{Name: "m", Optional: true}
+
+	if got := render(attr, ir.SchemaIR{Type: ir.TypeString}); !strings.Contains(got, "listschema.MapAttribute") {
+		t.Errorf("primitive element = %q, want listschema.MapAttribute", got)
+	}
+	obj := ir.SchemaIR{Attributes: []ir.AttributeIR{{Name: "name", Required: true, Schema: ir.SchemaIR{Type: ir.TypeString}}}}
+	if got := render(attr, obj); !strings.Contains(got, "listschema.MapNestedAttribute") {
+		t.Errorf("object element = %q, want listschema.MapNestedAttribute", got)
+	}
+	if got := render(attr, ir.SchemaIR{}); got != "<nil>" {
+		t.Errorf("empty element = %q, want <nil>", got)
+	}
+}
+
+// TestResourceMapElementAttributeExpr covers the primitive, object-like, and
+// nil branches of resourceMapElementAttributeExpr.
+func TestResourceMapElementAttributeExpr(t *testing.T) {
+	render := func(attr ir.AttributeIR, elem ir.SchemaIR) string {
+		expr := resourceMapElementAttributeExpr(attr, elem, "test")
+		if expr == nil {
+			return "<nil>"
+		}
+		b, err := astgen.RenderExpr(expr)
+		if err != nil {
+			t.Fatalf("RenderExpr() error = %v", err)
+		}
+		return string(b)
+	}
+	attr := ir.AttributeIR{Name: "m", Optional: true}
+
+	if got := render(attr, ir.SchemaIR{Type: ir.TypeString}); !strings.Contains(got, "schema.MapAttribute") {
+		t.Errorf("primitive element = %q, want schema.MapAttribute", got)
+	}
+	obj := ir.SchemaIR{Attributes: []ir.AttributeIR{{Name: "name", Required: true, Schema: ir.SchemaIR{Type: ir.TypeString}}}}
+	if got := render(attr, obj); !strings.Contains(got, "schema.MapNestedAttribute") {
+		t.Errorf("object element = %q, want schema.MapNestedAttribute", got)
+	}
+	if got := render(attr, ir.SchemaIR{}); got != "<nil>" {
+		t.Errorf("empty element = %q, want <nil>", got)
 	}
 }

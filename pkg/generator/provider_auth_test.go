@@ -1,6 +1,7 @@
 package generator
 
 import (
+	"go/ast"
 	"os/exec"
 	"strings"
 	"testing"
@@ -176,6 +177,55 @@ func TestAuthConfigureStmts_OAuth2PasswordWired(t *testing.T) {
 		`tokenURL = config.TokenUrl.ValueString()`,
 		`client.OAuth2Password(tokenURL, config.Username.ValueString(), config.Password.ValueString(), config.ClientId.ValueString(), config.ClientSecret.ValueString(), client.ParseScopes(config.Scopes.ValueString()))`,
 		`opts = append(opts, client.WithSchemeInterceptor("oauth2", `,
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("missing %q in\n%s", want, got)
+		}
+	}
+}
+
+// TestAuthConfigureStmts_OAuth2SelectedFlowOverride locks in the M-5 fix: a
+// generator.yaml `auth:` flow selection (carried on the scheme as SelectedFlow)
+// overrides the default flow priority, so a scheme declaring both
+// client_credentials and password wires the password interceptor when the user
+// selects it.
+func TestAuthConfigureStmts_OAuth2SelectedFlowOverride(t *testing.T) {
+	got := renderAuthStmts(t, []ir.SecuritySchemeIR{{
+		Name: "oauth2",
+		Type: ir.SecuritySchemeOAuth2,
+		Flows: &ir.OAuthFlowsIR{
+			ClientCredentials: &ir.OAuthFlowIR{TokenURL: "https://api.example.com/oauth/token"},
+			Password:          &ir.OAuthFlowIR{TokenURL: "https://api.example.com/oauth/password"},
+		},
+		SelectedFlow: "password",
+	}})
+
+	for _, want := range []string{
+		`client.OAuth2Password(`,
+		`"https://api.example.com/oauth/password"`,
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("missing %q in\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "OAuth2ClientCredentials") {
+		t.Errorf("SelectedFlow=password must not wire client_credentials, got\n%s", got)
+	}
+}
+
+// TestAuthConfigureStmts_APIKeyHeaderNameOverride locks in the M-5 fix: a
+// generator.yaml `auth:` header_name override (carried on the scheme as
+// NameField) is what the generated APIKeyAuth interceptor injects.
+func TestAuthConfigureStmts_APIKeyHeaderNameOverride(t *testing.T) {
+	got := renderAuthStmts(t, []ir.SecuritySchemeIR{{
+		Name:      "api_key",
+		Type:      ir.SecuritySchemeAPIKey,
+		In:        "header",
+		NameField: "X-Custom-Key",
+	}})
+
+	for _, want := range []string{
+		`client.APIKeyAuth(config.ApiKey.ValueString(), "header", "X-Custom-Key")`,
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("missing %q in\n%s", want, got)
@@ -370,4 +420,58 @@ func TestProviderAuthWiring_Compiles(t *testing.T) {
 	if out, err := buildCmd.CombinedOutput(); err != nil {
 		t.Fatalf("go build ./... failed for auth-wired provider: %v\n%s", err, out)
 	}
+}
+
+// TestOAuth2TokenURLExpr covers every branch of oauth2TokenURLExpr: spec URL
+// with and without a token_url config attribute, config-only, and neither.
+func TestOAuth2TokenURLExpr(t *testing.T) {
+	byName := map[string]ir.AttributeIR{
+		"token_url": {Name: "token_url", Schema: ir.SchemaIR{Type: ir.TypeString}},
+	}
+
+	// Spec URL + config attribute: bake-in default then override.
+	expr, stmts := oauth2TokenURLExpr("https://spec", byName)
+	if len(stmts) != 2 {
+		t.Errorf("spec+attr: expected 2 statements, got %d", len(stmts))
+	}
+	if got := renderExprString(t, expr); got != "tokenURL" {
+		t.Errorf("spec+attr: expr = %q, want tokenURL", got)
+	}
+
+	// Spec URL only: literal default.
+	expr, stmts = oauth2TokenURLExpr("https://spec", nil)
+	if len(stmts) != 0 {
+		t.Errorf("spec-only: expected 0 statements, got %d", len(stmts))
+	}
+	if got := renderExprString(t, expr); got != `"https://spec"` {
+		t.Errorf("spec-only: expr = %q, want literal", got)
+	}
+
+	// Config attribute only: read from config.
+	expr, stmts = oauth2TokenURLExpr("", byName)
+	if len(stmts) != 0 {
+		t.Errorf("attr-only: expected 0 statements, got %d", len(stmts))
+	}
+	if got := renderExprString(t, expr); got != "config.TokenUrl.ValueString()" {
+		t.Errorf("attr-only: expr = %q, want config read", got)
+	}
+
+	// Neither: empty literal (fail-loud).
+	expr, stmts = oauth2TokenURLExpr("", nil)
+	if len(stmts) != 0 {
+		t.Errorf("neither: expected 0 statements, got %d", len(stmts))
+	}
+	if got := renderExprString(t, expr); got != `""` {
+		t.Errorf("neither: expr = %q, want empty literal", got)
+	}
+}
+
+// renderExprString renders an ast.Expr to its go/format string for assertions.
+func renderExprString(t *testing.T, expr ast.Expr) string {
+	t.Helper()
+	b, err := astgen.RenderExpr(expr)
+	if err != nil {
+		t.Fatalf("RenderExpr() error = %v", err)
+	}
+	return string(b)
 }

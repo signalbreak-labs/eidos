@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"go/ast"
 	"go/token"
-	"path/filepath"
+	"path"
 	"strings"
 
 	"github.com/signalbreak-labs/eidos/pkg/generator/astgen"
@@ -19,7 +19,7 @@ import (
 // than letting it crash the whole eidos generate run (N-23) — the documented
 // contract in harness.go applies to functions too.
 func FunctionFile(fn ir.FunctionIR) File {
-	path := filepath.Join("internal", "provider", fmt.Sprintf("function_%s.go", naming.SnakeCase(fn.Name)))
+	path := path.Join("internal", "provider", fmt.Sprintf("function_%s.go", naming.SnakeCase(fn.Name)))
 	file, err := renderEntitySafely(func() (*ast.File, error) {
 		return generateFunctionFile(fn), nil
 	})
@@ -247,12 +247,12 @@ func functionDefinitionValues(fn ir.FunctionIR) []ast.Expr {
 
 // functionParameterExpr returns an ast.Expr for a function.Parameter value.
 func functionParameterExpr(arg ir.FunctionParamIR) ast.Expr {
-	return functionParameterForSchema(arg.Name, arg.Schema, arg.Description, arg.MarkdownDescription)
+	return functionParameterForSchema(arg.Name, arg.Schema, arg.Description, arg.MarkdownDescription, arg.DeprecationMessage)
 }
 
 // functionParameterForSchema builds a function parameter expression from a
 // schema and parameter metadata. The name is required for definition validation.
-func functionParameterForSchema(name string, s ir.SchemaIR, description, markdownDescription string) ast.Expr {
+func functionParameterForSchema(name string, s ir.SchemaIR, description, markdownDescription, deprecationMessage string) ast.Expr {
 	elems := []ast.Expr{
 		astgen.KeyValue("Name", astgen.Lit(name)),
 	}
@@ -261,6 +261,9 @@ func functionParameterForSchema(name string, s ir.SchemaIR, description, markdow
 	}
 	if markdownDescription != "" {
 		elems = append(elems, astgen.KeyValue("MarkdownDescription", astgen.Lit(markdownDescription)))
+	}
+	if deprecationMessage != "" {
+		elems = append(elems, astgen.KeyValue("DeprecationMessage", astgen.Lit(deprecationMessage)))
 	}
 
 	if s.Collection != nil {

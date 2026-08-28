@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -86,6 +87,58 @@ func TestNewRequest_MethodPath(t *testing.T) {
 	}
 	if got := req.Header.Get("User-Agent"); got != "eidos-generated-client" {
 		t.Fatalf("User-Agent = %q, want %q", got, "eidos-generated-client")
+	}
+}
+
+func TestNewRequest_RejectsDotSegmentTraversal(t *testing.T) {
+	c := New(WithBaseURL("https://example.test/api"))
+	// A path-param value of ".." resolves out of the base path prefix when it
+	// climbs past the base path's own segments (L-4).
+	if _, err := c.NewRequest(context.Background(), http.MethodGet, "/things/../..", nil); err == nil {
+		t.Fatal("NewRequest with a traversing path should fail")
+	}
+	if _, err := c.NewRequest(context.Background(), http.MethodGet, "/things/../../admin", nil); err == nil {
+		t.Fatal("NewRequest with a multi-segment traversal should fail")
+	}
+}
+
+func TestNewRequest_AcceptsPathWithinBase(t *testing.T) {
+	c := New(WithBaseURL("https://example.test/api"))
+	req, err := c.NewRequest(context.Background(), http.MethodGet, "/things/1", nil)
+	if err != nil {
+		t.Fatalf("NewRequest: %v", err)
+	}
+	if req.URL.String() != "https://example.test/api/things/1" {
+		t.Fatalf("URL = %q", req.URL.String())
+	}
+	// A sibling prefix is joined under the base path, not treated as a
+	// replacement, so it stays within the base path.
+	req, err = c.NewRequest(context.Background(), http.MethodGet, "/apix/1", nil)
+	if err != nil {
+		t.Fatalf("NewRequest with a sibling prefix: %v", err)
+	}
+	if req.URL.String() != "https://example.test/api/apix/1" {
+		t.Fatalf("URL = %q", req.URL.String())
+	}
+}
+
+func TestPathWithin(t *testing.T) {
+	cases := []struct {
+		base, p string
+		want    bool
+	}{
+		{"", "/things", true},
+		{"/", "/things", true},
+		{"/api", "/api", true},
+		{"/api", "/api/things", true},
+		{"/api", "/things", false},
+		{"/api", "/apix", false},
+		{"/api", "/", false},
+	}
+	for _, tc := range cases {
+		if got := pathWithin(tc.base, tc.p); got != tc.want {
+			t.Errorf("pathWithin(%q, %q) = %v, want %v", tc.base, tc.p, got, tc.want)
+		}
 	}
 }
 
@@ -568,6 +621,76 @@ func TestListAllPages_BodyReadError(t *testing.T) {
 	}
 	if _, err := ListAllPages(context.Background(), nil, fetch, nil); err == nil {
 		t.Fatal("expected body read error, got nil")
+	}
+}
+
+// TestListAllPages_LoopBackDetection verifies that a next callback which returns
+// true without advancing the pagination parameters (a server echoing the same
+// cursor) stops the loop instead of issuing an identical request forever (M-9).
+func TestListAllPages_LoopBackDetection(t *testing.T) {
+	calls := 0
+	fetch := func(_ context.Context, _ url.Values) (*http.Response, error) {
+		calls++
+		return &http.Response{StatusCode: 200, Body: io.NopCloser(bytes.NewReader([]byte("page")))}, nil
+	}
+	next := func(_ *http.Response, _ []byte, params url.Values) bool {
+		// Echo the same cursor back: the server never advances.
+		params.Set("cursor", "abc")
+		return true
+	}
+	pages, err := ListAllPages(context.Background(), url.Values{}, fetch, next)
+	if err != nil {
+		t.Fatalf("ListAllPages: %v", err)
+	}
+	if len(pages) != 2 {
+		t.Fatalf("pages = %d, want 2 (first page plus one loop-back page)", len(pages))
+	}
+	if calls != 2 {
+		t.Fatalf("fetch calls = %d, want 2", calls)
+	}
+}
+
+// TestListAllPages_UnchangedParamsStillPaginates verifies that link_header-style
+// pagination, which advances via a response-embedded URL rather than the
+// parameters, is not stopped by the loop-back guard (M-9).
+func TestListAllPages_UnchangedParamsStillPaginates(t *testing.T) {
+	page := 0
+	fetch := func(context.Context, url.Values) (*http.Response, error) {
+		page++
+		return &http.Response{StatusCode: 200, Body: io.NopCloser(bytes.NewReader([]byte("page")))}, nil
+	}
+	next := func(*http.Response, []byte, url.Values) bool {
+		return page < 3 // stop after three pages
+	}
+	pages, err := ListAllPages(context.Background(), url.Values{}, fetch, next)
+	if err != nil {
+		t.Fatalf("ListAllPages: %v", err)
+	}
+	if len(pages) != 3 {
+		t.Fatalf("pages = %d, want 3", len(pages))
+	}
+}
+
+// TestListAllPages_MaxPageBound verifies that a server which never stops
+// returning a next page is bounded by maxPages instead of looping forever (M-9).
+func TestListAllPages_MaxPageBound(t *testing.T) {
+	fetch := func(context.Context, url.Values) (*http.Response, error) {
+		return &http.Response{StatusCode: 200, Body: io.NopCloser(bytes.NewReader([]byte("page")))}, nil
+	}
+	i := 0
+	next := func(_ *http.Response, _ []byte, params url.Values) bool {
+		// Advance the cursor each time so the loop-back guard does not fire; only
+		// the max-page bound can stop this.
+		i++
+		params.Set("cursor", strconv.Itoa(i))
+		return true
+	}
+	_, err := ListAllPages(context.Background(), url.Values{}, fetch, next)
+	if err == nil {
+		t.Fatal("expected max-page bound error, got nil")
+	}
+	if !strings.Contains(err.Error(), "pages") {
+		t.Fatalf("error = %q, want page-bound message", err)
 	}
 }
 

@@ -13,7 +13,6 @@ func TestClientIRRoundTrip(t *testing.T) {
 		RetryWaitMin:    100 * time.Millisecond,
 		RetryWaitMax:    5 * time.Second,
 		Timeout:         30 * time.Second,
-		AuthMiddleware:  []string{"api_key", "oauth2"},
 		Pagination: &PaginationIR{
 			Style:            "cursor",
 			CursorField:      "next_cursor",

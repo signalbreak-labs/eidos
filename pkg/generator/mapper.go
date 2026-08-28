@@ -1,7 +1,7 @@
 package generator
 
 import (
-	"path/filepath"
+	"path"
 
 	"github.com/signalbreak-labs/eidos/pkg/generator/internal/schema"
 	"github.com/signalbreak-labs/eidos/pkg/ir"
@@ -12,6 +12,6 @@ import (
 // ModelFile. The providerImport argument is the canonical import path for the
 // generated provider package.
 func ValueMappersFile(resources []ir.ResourceIR, providerImport string) File {
-	path := filepath.Join("internal", "protocol", "value_mappers.go")
+	path := path.Join("internal", "protocol", "value_mappers.go")
 	return GoCodeAST(path, schema.GenerateValueMappersFile(resources, providerImport))
 }

@@ -211,9 +211,15 @@ func SplitResources(baseName string, schema *ir.SchemaIR, cfg PolymorphismConfig
 
 	union := schema.Union
 
+	// The discriminator property is removed from each variant because the
+	// Terraform resource type itself encodes the selected variant. Variant
+	// attributes are snake_cased during schema conversion, so the discriminator
+	// name must be snake_cased too — a raw PropertyName like "petType" would
+	// otherwise silently fail the exact case-sensitive compare in
+	// filterAttributeByName and leave pet_type in every variant (M-6).
 	discProp := ""
 	if union.Discriminator != nil {
-		discProp = union.Discriminator.PropertyName
+		discProp = ToSnakeCase(union.Discriminator.PropertyName)
 	}
 
 	var resources []ir.ResourceIR

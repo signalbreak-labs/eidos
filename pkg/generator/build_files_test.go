@@ -60,6 +60,7 @@ func TestGoMod(t *testing.T) {
 		"module github.com/acme/terraform-provider-mycloud",
 		"go 1.26",
 		"github.com/hashicorp/terraform-plugin-framework " + TerraformPluginFrameworkVersion,
+		"github.com/hashicorp/terraform-plugin-framework-timeouts " + TerraformPluginFrameworkTimeoutsVersion,
 		"github.com/hashicorp/terraform-plugin-go " + TerraformPluginGoVersion,
 		"github.com/hashicorp/terraform-plugin-log " + TerraformPluginLogVersion,
 		"github.com/hashicorp/terraform-plugin-testing " + TerraformPluginTestingVersion,
@@ -457,6 +458,18 @@ func TestGoMod_BuildVersionsOverride(t *testing.T) {
 			},
 			wantAbsent: []string{
 				"github.com/hashicorp/terraform-plugin-framework " + TerraformPluginFrameworkVersion,
+			},
+		},
+		{
+			name: "timeouts version override",
+			versions: BuildVersions{
+				TimeoutsVersion: "v9.9.9",
+			},
+			wantPresent: []string{
+				"github.com/hashicorp/terraform-plugin-framework-timeouts v9.9.9",
+			},
+			wantAbsent: []string{
+				"github.com/hashicorp/terraform-plugin-framework-timeouts " + TerraformPluginFrameworkTimeoutsVersion,
 			},
 		},
 	}

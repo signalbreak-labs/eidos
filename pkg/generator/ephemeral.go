@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"go/ast"
 	"go/token"
-	"path/filepath"
+	"path"
 	"sort"
 	"strings"
 
@@ -28,7 +28,7 @@ var ErrUnknownEphemeralBlockNesting = errors.New("unknown ephemeral block nestin
 // EphemeralResourceIR. clientImport is the import path of the generated
 // internal/client package, used when the Open body is wired to the API client.
 func EphemeralFile(er ir.EphemeralResourceIR, clientImport string) File {
-	path := filepath.Join("internal", "provider", fmt.Sprintf("ephemeral_%s.go", naming.SnakeCase(er.Name)))
+	path := path.Join("internal", "provider", fmt.Sprintf("ephemeral_%s.go", naming.SnakeCase(er.Name)))
 	file, err := renderEntitySafely(func() (*ast.File, error) {
 		return generateEphemeralFile(er, clientImport), nil
 	})

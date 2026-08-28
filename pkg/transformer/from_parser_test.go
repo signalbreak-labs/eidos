@@ -130,6 +130,53 @@ func TestOperationsFromSpec_RequestAndParameters(t *testing.T) {
 	}
 }
 
+// TestOperationsFromSpec_ParameterDeprecation verifies M-10: a parameter
+// declared deprecated: true is carried onto the normalized transformer
+// Parameter so the attributes derived from it can surface the deprecation.
+func TestOperationsFromSpec_ParameterDeprecation(t *testing.T) {
+	spec := &parser.Spec{
+		Paths: map[string]*parser.PathItem{
+			"/pets": {
+				Get: &parser.Operation{
+					OperationID: "listPets",
+					Parameters: []parser.Parameter{
+						{
+							Name:       "limit",
+							In:         "query",
+							Deprecated: true,
+							Schema:     &parser.Schema{Type: "integer"},
+						},
+						{
+							Name:   "status",
+							In:     "query",
+							Schema: &parser.Schema{Type: "string"},
+						},
+					},
+					Responses: map[string]*parser.Response{
+						"200": {
+							Content: map[string]*parser.MediaType{
+								"application/json": {Schema: &parser.Schema{Type: "array", Items: &parser.Schema{Type: "string"}}},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	ops := OperationsFromSpec(spec)
+	got := ops["/pets"][MethodGet]
+	if len(got.Parameters) != 2 {
+		t.Fatalf("Parameters = %+v, want 2", got.Parameters)
+	}
+	if !got.Parameters[0].Deprecated {
+		t.Errorf("limit parameter Deprecated = false, want true")
+	}
+	if got.Parameters[1].Deprecated {
+		t.Errorf("status parameter Deprecated = true, want false")
+	}
+}
+
 func TestOperationsFromSpec_OperationParamOverridesPathParam(t *testing.T) {
 	spec := &parser.Spec{
 		Paths: map[string]*parser.PathItem{
@@ -1516,4 +1563,301 @@ func TestSameSchemaShape_IgnoresDescriptionAtEveryDepth(t *testing.T) {
 			t.Error("identical deep schemas should compare equal")
 		}
 	})
+}
+
+func TestWarnOperationServerOverride_OperationDiffers(t *testing.T) {
+	spec := &parser.Spec{
+		Servers: []parser.Server{{URL: "https://api.example.com"}},
+	}
+	op := &parser.Operation{
+		OperationID: "getThing",
+		Servers:     []parser.Server{{URL: "https://staging.example.com"}},
+	}
+	var diags diagnostics.Diagnostics
+	warnOperationServerOverride(&diags, spec, nil, op, op.OperationID)
+	if len(diags) != 1 {
+		t.Fatalf("warnOperationServerOverride diags = %d, want 1", len(diags))
+	}
+	if diags[0].Severity != diagnostics.Warning {
+		t.Errorf("severity = %v, want Warning", diags[0].Severity)
+	}
+	if !strings.Contains(diags[0].Detail, "getThing") {
+		t.Errorf("detail %q does not name the operation", diags[0].Detail)
+	}
+}
+
+func TestWarnOperationServerOverride_PathItemDiffers(t *testing.T) {
+	spec := &parser.Spec{
+		Servers: []parser.Server{{URL: "https://api.example.com"}},
+	}
+	pi := &parser.PathItem{
+		Servers: []parser.Server{{URL: "https://api.example.com/v1"}},
+	}
+	op := &parser.Operation{OperationID: "listThings"}
+	var diags diagnostics.Diagnostics
+	warnOperationServerOverride(&diags, spec, pi, op, op.OperationID)
+	if len(diags) != 1 {
+		t.Fatalf("warnOperationServerOverride diags = %d, want 1", len(diags))
+	}
+}
+
+func TestWarnOperationServerOverride_NoWarning(t *testing.T) {
+	cases := []struct {
+		name string
+		spec *parser.Spec
+		pi   *parser.PathItem
+		op   *parser.Operation
+	}{
+		{
+			name: "no servers anywhere",
+			spec: &parser.Spec{},
+			op:   &parser.Operation{OperationID: "getThing"},
+		},
+		{
+			name: "operation matches global",
+			spec: &parser.Spec{Servers: []parser.Server{{URL: "https://api.example.com"}}},
+			op:   &parser.Operation{OperationID: "getThing", Servers: []parser.Server{{URL: "https://api.example.com"}}},
+		},
+		{
+			name: "path item matches global",
+			spec: &parser.Spec{Servers: []parser.Server{{URL: "https://api.example.com"}}},
+			pi:   &parser.PathItem{Servers: []parser.Server{{URL: "https://api.example.com"}}},
+			op:   &parser.Operation{OperationID: "getThing"},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var diags diagnostics.Diagnostics
+			warnOperationServerOverride(&diags, tc.spec, tc.pi, tc.op, tc.op.OperationID)
+			if len(diags) != 0 {
+				t.Fatalf("warnOperationServerOverride diags = %d, want 0: %#v", len(diags), diags)
+			}
+		})
+	}
+}
+
+func TestWarnOperationServerOverride_ExplicitEmptyOverride(t *testing.T) {
+	// An explicit empty operation-level servers list overrides the global
+	// servers to "none", which the generated client cannot honor.
+	spec := &parser.Spec{
+		Servers: []parser.Server{{URL: "https://api.example.com"}},
+	}
+	op := &parser.Operation{
+		OperationID: "getThing",
+		Servers:     []parser.Server{},
+	}
+	var diags diagnostics.Diagnostics
+	warnOperationServerOverride(&diags, spec, nil, op, op.OperationID)
+	if len(diags) != 1 {
+		t.Fatalf("warnOperationServerOverride diags = %d, want 1", len(diags))
+	}
+}
+
+func TestOperationsFromSpecWithDiagnostics_ServerOverrideWarning(t *testing.T) {
+	spec := &parser.Spec{
+		Servers: []parser.Server{{URL: "https://api.example.com"}},
+		Paths: map[string]*parser.PathItem{
+			"/things": {
+				Get: &parser.Operation{
+					OperationID: "listThings",
+					Servers:     []parser.Server{{URL: "https://staging.example.com"}},
+				},
+			},
+		},
+	}
+	_, diags := OperationsFromSpecWithDiagnostics(spec)
+	if len(diags) != 1 {
+		t.Fatalf("OperationsFromSpecWithDiagnostics diags = %d, want 1: %#v", len(diags), diags)
+	}
+	if diags[0].Severity != diagnostics.Warning {
+		t.Errorf("severity = %v, want Warning", diags[0].Severity)
+	}
+}
+
+func TestOperationsFromSpecWithDiagnostics_SortedPathOrder(t *testing.T) {
+	// Diagnostics must be appended in sorted path order, not map-iteration
+	// order, so CLI/dry-run diagnostic output is deterministic (L-3).
+	spec := &parser.Spec{
+		Servers: []parser.Server{{URL: "https://api.example.com"}},
+		Paths: map[string]*parser.PathItem{
+			"/zebra": {
+				Get: &parser.Operation{
+					OperationID: "getZebra",
+					Servers:     []parser.Server{{URL: "https://staging.example.com"}},
+				},
+			},
+			"/alpha": {
+				Get: &parser.Operation{
+					OperationID: "getAlpha",
+					Servers:     []parser.Server{{URL: "https://staging.example.com"}},
+				},
+			},
+			"/mango": {
+				Get: &parser.Operation{
+					OperationID: "getMango",
+					Servers:     []parser.Server{{URL: "https://staging.example.com"}},
+				},
+			},
+		},
+	}
+	_, diags := OperationsFromSpecWithDiagnostics(spec)
+	if len(diags) != 3 {
+		t.Fatalf("diags = %d, want 3: %#v", len(diags), diags)
+	}
+	// Each warning names its operation; the operation IDs must appear in the
+	// order the sorted paths (/alpha, /mango, /zebra) were processed.
+	var got []string
+	for _, d := range diags {
+		for _, opID := range []string{"getAlpha", "getMango", "getZebra"} {
+			if strings.Contains(d.Detail, opID) {
+				got = append(got, opID)
+				break
+			}
+		}
+	}
+	want := []string{"getAlpha", "getMango", "getZebra"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("diagnostic order = %v, want %v", got, want)
+	}
+}
+
+func TestWarnUnmappedCallbacks(t *testing.T) {
+	var diags diagnostics.Diagnostics
+	op := &parser.Operation{
+		OperationID: "subscribeToStream",
+		Callbacks: map[string]parser.Callback{
+			"onData": {},
+			"onError": {},
+		},
+	}
+	warnUnmappedCallbacks(&diags, op)
+	if len(diags) != 1 {
+		t.Fatalf("diags = %d, want 1: %#v", len(diags), diags)
+	}
+	if diags[0].Severity != diagnostics.Warning {
+		t.Errorf("severity = %v, want Warning", diags[0].Severity)
+	}
+	if !strings.Contains(diags[0].Summary, "callbacks are not mapped") {
+		t.Errorf("summary = %q, want callbacks-not-mapped", diags[0].Summary)
+	}
+	if !strings.Contains(diags[0].Detail, "subscribeToStream") {
+		t.Errorf("detail should name the operation: %q", diags[0].Detail)
+	}
+	// Callback names must be listed deterministically (sorted).
+	if !strings.Contains(diags[0].Detail, "onData, onError") {
+		t.Errorf("detail should list sorted callback names: %q", diags[0].Detail)
+	}
+}
+
+func TestWarnUnmappedCallbacks_NoCallbacks(t *testing.T) {
+	var diags diagnostics.Diagnostics
+	warnUnmappedCallbacks(&diags, &parser.Operation{OperationID: "getThing"})
+	if len(diags) != 0 {
+		t.Fatalf("diags = %d, want 0: %#v", len(diags), diags)
+	}
+}
+
+func TestWarnUnmappedLinks(t *testing.T) {
+	var diags diagnostics.Diagnostics
+	op := &parser.Operation{
+		OperationID: "listUsers",
+		Responses: map[string]*parser.Response{
+			"200": {
+				Links: map[string]*parser.Link{
+					"userDetails": {},
+				},
+			},
+		},
+	}
+	warnUnmappedLinks(&diags, &parser.Spec{}, op)
+	if len(diags) != 1 {
+		t.Fatalf("diags = %d, want 1: %#v", len(diags), diags)
+	}
+	if diags[0].Severity != diagnostics.Warning {
+		t.Errorf("severity = %v, want Warning", diags[0].Severity)
+	}
+	if !strings.Contains(diags[0].Summary, "response links are not mapped") {
+		t.Errorf("summary = %q, want links-not-mapped", diags[0].Summary)
+	}
+	if !strings.Contains(diags[0].Detail, "listUsers") {
+		t.Errorf("detail should name the operation: %q", diags[0].Detail)
+	}
+	if !strings.Contains(diags[0].Detail, "200/userDetails") {
+		t.Errorf("detail should name the response code and link: %q", diags[0].Detail)
+	}
+}
+
+func TestWarnUnmappedLinks_NoLinks(t *testing.T) {
+	var diags diagnostics.Diagnostics
+	op := &parser.Operation{
+		OperationID: "getThing",
+		Responses: map[string]*parser.Response{
+			"200": {Description: "ok"},
+		},
+	}
+	warnUnmappedLinks(&diags, &parser.Spec{}, op)
+	if len(diags) != 0 {
+		t.Fatalf("diags = %d, want 0: %#v", len(diags), diags)
+	}
+}
+
+func TestWarnUnmappedLinks_RefResponse(t *testing.T) {
+	// Links on a $ref-referenced response must still be detected (L-9).
+	var diags diagnostics.Diagnostics
+	spec := &parser.Spec{
+		Components: &parser.Components{
+			Responses: map[string]*parser.Response{
+				"UserList": {
+					Links: map[string]*parser.Link{"userDetails": {}},
+				},
+			},
+		},
+	}
+	op := &parser.Operation{
+		OperationID: "listUsers",
+		Responses: map[string]*parser.Response{
+			"200": {Ref: "#/components/responses/UserList"},
+		},
+	}
+	warnUnmappedLinks(&diags, spec, op)
+	if len(diags) != 1 {
+		t.Fatalf("diags = %d, want 1: %#v", len(diags), diags)
+	}
+	if !strings.Contains(diags[0].Detail, "200/userDetails") {
+		t.Errorf("detail should name the resolved link: %q", diags[0].Detail)
+	}
+}
+
+func TestOperationsFromSpecWithDiagnostics_CallbackAndLinkWarnings(t *testing.T) {
+	// End-to-end: a spec whose operations declare callbacks and links must
+	// surface both fail-loud warnings through the pipeline (L-9).
+	spec := &parser.Spec{
+		Paths: map[string]*parser.PathItem{
+			"/streams": {
+				Post: &parser.Operation{
+					OperationID: "subscribeToStream",
+					Callbacks:   map[string]parser.Callback{"onData": {}},
+				},
+			},
+			"/users": {
+				Get: &parser.Operation{
+					OperationID: "listUsers",
+					Responses: map[string]*parser.Response{
+						"200": {Links: map[string]*parser.Link{"userDetails": {}}},
+					},
+				},
+			},
+		},
+	}
+	_, diags := OperationsFromSpecWithDiagnostics(spec)
+	if len(diags) != 2 {
+		t.Fatalf("diags = %d, want 2: %#v", len(diags), diags)
+	}
+	// Sorted path order: /streams (callback) before /users (link).
+	if !strings.Contains(diags[0].Summary, "callbacks are not mapped") {
+		t.Errorf("diags[0] = %q, want callback warning", diags[0].Summary)
+	}
+	if !strings.Contains(diags[1].Summary, "response links are not mapped") {
+		t.Errorf("diags[1] = %q, want link warning", diags[1].Summary)
+	}
 }

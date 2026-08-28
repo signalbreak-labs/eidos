@@ -114,7 +114,10 @@ func Run(provider *ir.ProviderIR, opts Options) ([]FileEntry, error) {
 		if _, err := removeStaleGeneratedFiles(opts.OutputDir, prev, planned, currentMode, opts.Force, opts.IncludeConfig); err != nil {
 			return nil, err
 		}
-		if err := writeGenerationManifest(opts.OutputDir, &generationManifest{Mode: currentMode, Generated: planned}); err != nil {
+		// Merge the current run's bookkeeping into the manifest rather than
+		// overwriting it: the other run kind's file list must survive so its
+		// next run can still clean up stale files (M-3).
+		if err := writeGenerationManifest(opts.OutputDir, prev.withRun(currentMode, planned)); err != nil {
 			return nil, fmt.Errorf("write %s: %w", manifestName, err)
 		}
 		// Build the returned plan from the files actually written. Reasons come
@@ -633,8 +636,36 @@ const (
 
 // generationManifest is the on-disk shape of .eidos-generated.json.
 type generationManifest struct {
+	// Mode is the mode of the most recent write-mode run. It is retained for
+	// backward compatibility with manifests written before per-mode tracking
+	// (M-3); new runs always populate ByMode.
 	Mode      string   `json:"mode"`
 	Generated []string `json:"generated"`
+	// ByMode holds the file list each run kind (full vs only-build) most
+	// recently generated, so a full run and an --only-build run each keep their
+	// own bookkeeping without clobbering the other's (M-3). A full run can
+	// therefore still delete stale provider files after an --only-build refresh
+	// ran in between, and vice versa.
+	ByMode map[string][]string `json:"by_mode,omitempty"`
+}
+
+// withRun returns a copy of the manifest with the current run's mode and file
+// list recorded, preserving the other mode's bookkeeping. Without this, an
+// --only-build refresh would overwrite the full-mode manifest, and the next
+// full run would see a mode mismatch, silently skip stale cleanup, and leave
+// orphaned provider files in the manifest of no run (M-3).
+func (m *generationManifest) withRun(mode string, files []string) *generationManifest {
+	next := &generationManifest{Mode: mode, Generated: files}
+	if m != nil {
+		next.ByMode = make(map[string][]string, len(m.ByMode)+1)
+		for k, v := range m.ByMode {
+			next.ByMode[k] = v
+		}
+	} else {
+		next.ByMode = make(map[string][]string, 1)
+	}
+	next.ByMode[mode] = files
+	return next
 }
 
 // readGenerationManifest loads the write-mode bookkeeping file from dir. A
@@ -655,6 +686,11 @@ func readGenerationManifest(dir string) (*generationManifest, error) {
 	if err := json.Unmarshal(data, &m); err != nil {
 		return nil, fmt.Errorf("parse %s: %w", manifestName, err)
 	}
+	// Backfill per-mode tracking from the legacy single-mode shape so a
+	// manifest written before M-3 still drives stale cleanup.
+	if len(m.ByMode) == 0 && m.Mode != "" {
+		m.ByMode = map[string][]string{m.Mode: m.Generated}
+	}
 	return &m, nil
 }
 
@@ -674,12 +710,16 @@ func writeGenerationManifest(dir string, m *generationManifest) error {
 	return os.Rename(tmp, filepath.Join(dir, manifestName))
 }
 
-// removeStaleGeneratedFiles deletes the paths the previous write-mode run
-// recorded in prev that are not in planned, gated on force and on the previous
-// run's mode matching currentMode. It only ever removes files eidos itself
-// wrote (per the manifest), so hand-written files are untouched even when they
-// sit at a path the generator would own. Empty parent directories are pruned up
-// to (but never including) the output root. It returns the removed paths.
+// removeStaleGeneratedFiles deletes the paths the previous write-mode run of
+// the same kind (full vs only-build) recorded in prev that are not in planned,
+// gated on force. The per-mode bookkeeping (ByMode) means a full run and an
+// --only-build run each clean up only their own previous output, so an
+// --only-build refresh can never delete provider code a full run produced and a
+// full run can still delete stale provider files after an --only-build refresh
+// ran in between (M-3). It only ever removes files eidos itself wrote (per the
+// manifest), so hand-written files are untouched even when they sit at a path
+// the generator would own. Empty parent directories are pruned up to (but never
+// including) the output root. It returns the removed paths.
 //
 // includeConfig guards the generator.yaml path: when the current run is not
 // configured to emit it (IncludeConfig=false, e.g. the MCP generate tool which
@@ -688,7 +728,11 @@ func writeGenerationManifest(dir string, m *generationManifest) error {
 // deliverable, and removing it would silently destroy the very config the
 // current run was invoked with (M-82).
 func removeStaleGeneratedFiles(dir string, prev *generationManifest, planned []string, currentMode string, force, includeConfig bool) ([]string, error) {
-	if !force || prev == nil || prev.Mode != currentMode {
+	if !force || prev == nil {
+		return nil, nil
+	}
+	prevFiles := prev.ByMode[currentMode]
+	if len(prevFiles) == 0 {
 		return nil, nil
 	}
 	plannedSet := make(map[string]struct{}, len(planned))
@@ -696,7 +740,7 @@ func removeStaleGeneratedFiles(dir string, prev *generationManifest, planned []s
 		plannedSet[p] = struct{}{}
 	}
 	var removed []string
-	for _, p := range prev.Generated {
+	for _, p := range prevFiles {
 		if _, ok := plannedSet[p]; ok {
 			continue
 		}

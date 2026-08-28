@@ -604,7 +604,29 @@ type yamlParser struct {
 	// recorded as they are parsed; aliases resolve to a deep copy of the
 	// anchored node so the two occurrences never share mutable state.
 	anchors map[string]Node
+	// aliasCount and aliasBytes bound alias expansion (H-1). A hostile document
+	// can otherwise amplify a small anchor into an exponential blowup during
+	// lexing — before the post-parse memory budget (MaxMemoryBytes) is ever
+	// accounted — by nesting aliases that each deep-copy an already-expanded
+	// subtree. Both counters accumulate across the whole document.
+	aliasCount int
+	aliasBytes int64
 }
+
+// Alias-expansion guardrails. resolveAlias deep-copies the anchored node per
+// alias occurrence, and a cloned subtree can itself contain already-expanded
+// aliases, so a crafted document can grow exponentially in size during lexing.
+// These caps bound the total work done by alias resolution regardless of the
+// input size; exceeding either fails the parse loud rather than exhausting
+// memory (H-1).
+const (
+	// maxAliasExpansions caps the number of alias resolutions per document.
+	maxAliasExpansions = 10000
+	// maxAliasExpansionBytes caps the cumulative estimated size of cloned alias
+	// subtrees. It uses the same coarse per-node estimate as the memory budget
+	// (estimateNodeMemory) so the two guardrails are comparable.
+	maxAliasExpansionBytes = 64 << 20 // 64 MiB
+)
 
 func loadYAML(file string, data []byte) (Node, error) {
 	p := &yamlParser{file: file, anchors: make(map[string]Node)}
@@ -1434,7 +1456,7 @@ func (p *yamlParser) parseInlineValue(valueText string, loc SourceLocation) (Nod
 		// Check the error before ok: parseYAMLFlow only sets ok when err is nil,
 		// so a depth-limit error would otherwise be swallowed and the value
 		// silently degraded to a plain scalar (N-6).
-		node, ok, ferr := parseYAMLFlow(p.file, trimmed, loc.Line, p.depth)
+		node, ok, ferr := parseYAMLFlow(p, p.file, trimmed, loc.Line, p.depth)
 		if ferr != nil {
 			return nil, ferr
 		}
@@ -1941,13 +1963,38 @@ func (p *yamlParser) parseAnchoredValue(i, baseIndent int, anchor, rest string, 
 // rather than silently producing a null value. The alias occupies its line, so
 // the returned index advances past it (i+1) to keep block loops from spinning.
 func (p *yamlParser) resolveAlias(i int, name string, loc SourceLocation) (Node, int, error) {
+	clone, err := p.resolveAliasNode(name, loc)
+	if err != nil {
+		return nil, i, p.errorAt(i, err.Error())
+	}
+	return clone, i + 1, nil
+}
+
+// resolveAliasNode resolves a YAML alias ("*name") against the anchor table,
+// enforcing the alias-expansion guardrails (H-1) and returning a deep copy of
+// the anchored node with its location set to the alias use site. It is shared
+// by block-style resolution (resolveAlias) and flow-style resolution (the flow
+// parser), so both count against the same per-document expansion budget (L-2).
+func (p *yamlParser) resolveAliasNode(name string, loc SourceLocation) (Node, error) {
 	ref, ok := p.anchors[name]
 	if !ok {
-		return nil, i, p.errorAt(i, fmt.Sprintf("unknown YAML alias *%s (no matching &%s anchor)", name, name))
+		return nil, fmt.Errorf("unknown YAML alias *%s (no matching &%s anchor)", name, name)
 	}
+	// Bound alias expansion before cloning (H-1): a nested-alias document can
+	// otherwise amplify a small anchor into an exponential blowup during
+	// lexing, before the post-parse memory budget is accounted.
+	if p.aliasCount >= maxAliasExpansions {
+		return nil, fmt.Errorf("YAML alias expansion limit exceeded: more than %d aliases resolved in one document", maxAliasExpansions)
+	}
+	size := estimateNodeMemory(ref)
+	if p.aliasBytes+size > maxAliasExpansionBytes {
+		return nil, fmt.Errorf("YAML alias expansion limit exceeded: cumulative alias expansion exceeds %d bytes", maxAliasExpansionBytes)
+	}
+	p.aliasCount++
+	p.aliasBytes += size
 	clone := cloneNode(ref)
 	setNodeLoc(clone, loc)
-	return clone, i + 1, nil
+	return clone, nil
 }
 
 // cloneNode returns a deep copy of a parsed node tree so an aliased node never

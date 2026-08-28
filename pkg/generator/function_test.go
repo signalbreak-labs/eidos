@@ -602,6 +602,53 @@ func TestFunctionFile_Descriptions(t *testing.T) {
 	}
 }
 
+// TestFunctionFile_DeprecatedParameter verifies that a deprecated function
+// argument emits DeprecationMessage on the generated function.Parameter (M-10).
+func TestFunctionFile_DeprecatedParameter(t *testing.T) {
+	fn := ir.FunctionIR{
+		Name:        "lookup",
+		TypeName:    "lookup",
+		Description: "Looks up a value.",
+		Arguments: []ir.AttributeIR{
+			{
+				Name:               "legacy_key",
+				Description:        "Legacy lookup key.",
+				Deprecated:         true,
+				DeprecationMessage: "Use key instead.",
+				Schema:             ir.SchemaIR{Type: ir.TypeString},
+			},
+			{
+				Name:        "key",
+				Description: "Current lookup key.",
+				Schema:      ir.SchemaIR{Type: ir.TypeString},
+			},
+		},
+		ReturnType: ir.SchemaIR{Type: ir.TypeString},
+	}
+
+	file := FunctionFile(fn)
+	var buf bytes.Buffer
+	if err := file.Render(&buf); err != nil {
+		t.Fatalf("Render() error = %v", err)
+	}
+	got := buf.String()
+
+	for _, want := range []string{
+		"Name: \"legacy_key\"",
+		"DeprecationMessage:",
+		"\"Use key instead.\"",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("generated function file missing %q\ncontent:\n%s", want, got)
+		}
+	}
+
+	// The non-deprecated parameter must not carry a DeprecationMessage.
+	if strings.Contains(got, "Name: \"key\"\n\t\t\tDeprecationMessage:") {
+		t.Errorf("non-deprecated parameter unexpectedly emitted DeprecationMessage\ncontent:\n%s", got)
+	}
+}
+
 // sampleFunctionIR returns a FunctionIR used for render and validation tests.
 func sampleFunctionIR() ir.FunctionIR {
 	return ir.FunctionIR{
@@ -829,3 +876,187 @@ func functionDefinitionVariadicName(t *testing.T, def *ast.CompositeLit) string 
 // compile-time interface checks.
 var _ = ir.FunctionIR{}
 var _ = time.Second
+
+// TestFunctionFile_SetAndMapCollectionParameters verifies functionAttrType
+// renders Set and Map collection parameters (the branches beyond List).
+func TestFunctionFile_SetAndMapCollectionParameters(t *testing.T) {
+	fn := ir.FunctionIR{
+		Name:     "summarize",
+		TypeName: "summarize",
+		Arguments: []ir.AttributeIR{
+			{
+				Name: "unique_tags",
+				Schema: ir.SchemaIR{
+					Collection: &ir.CollectionType{Kind: ir.Set, ElementType: ir.SchemaIR{Type: ir.TypeString}},
+				},
+			},
+			{
+				Name: "counts",
+				Schema: ir.SchemaIR{
+					Collection: &ir.CollectionType{Kind: ir.Map, ElementType: ir.SchemaIR{Type: ir.TypeInt}},
+				},
+			},
+		},
+		ReturnType: ir.SchemaIR{Type: ir.TypeString},
+	}
+
+	file := FunctionFile(fn)
+	var buf bytes.Buffer
+	if err := file.Render(&buf); err != nil {
+		t.Fatalf("Render() error = %v", err)
+	}
+	got := buf.String()
+
+	if !strings.Contains(got, "function.SetParameter") {
+		t.Errorf("set parameter must render function.SetParameter\ncontent:\n%s", got)
+	}
+	if !strings.Contains(got, "function.MapParameter") {
+		t.Errorf("map parameter must render function.MapParameter\ncontent:\n%s", got)
+	}
+	if !strings.Contains(got, "types.Int64Type") {
+		t.Errorf("map element must render types.Int64Type\ncontent:\n%s", got)
+	}
+}
+
+// TestFunctionAttrType_NestedCollectionBranches covers the collection, union,
+// object, dynamic, and unknown-type branches of functionAttrType, which are
+// only reachable through nested collection elements (parameters and returns
+// handle their own top-level collection kind).
+func TestFunctionAttrType_NestedCollectionBranches(t *testing.T) {
+	fn := ir.FunctionIR{
+		Name:     "analyze",
+		TypeName: "analyze",
+		Arguments: []ir.AttributeIR{
+			{
+				Name: "matrix",
+				Schema: ir.SchemaIR{
+					Collection: &ir.CollectionType{
+						Kind:        ir.List,
+						ElementType: ir.SchemaIR{Collection: &ir.CollectionType{Kind: ir.List, ElementType: ir.SchemaIR{Type: ir.TypeString}}},
+					},
+				},
+			},
+		},
+		ReturnType: ir.SchemaIR{
+			Collection: &ir.CollectionType{
+				Kind: ir.List,
+				ElementType: ir.SchemaIR{
+					Collection: &ir.CollectionType{Kind: ir.Set, ElementType: ir.SchemaIR{Type: ir.TypeString}},
+				},
+			},
+		},
+	}
+
+	file := FunctionFile(fn)
+	var buf bytes.Buffer
+	if err := file.Render(&buf); err != nil {
+		t.Fatalf("Render() error = %v", err)
+	}
+	got := buf.String()
+
+	// Nested List-of-List parameter: the inner element renders via functionAttrType.
+	if !strings.Contains(got, "function.ListParameter{Name: \"matrix\", ElementType: types.ListType{ElemType: types.StringType}}") {
+		t.Errorf("nested list parameter not rendered as expected\ncontent:\n%s", got)
+	}
+	// Nested List-of-Set return: the Set element renders via functionAttrType.
+	if !strings.Contains(got, "function.ListReturn{ElementType: types.SetType{ElemType: types.StringType}}") {
+		t.Errorf("nested set return not rendered as expected\ncontent:\n%s", got)
+	}
+}
+
+// TestFunctionAttrType_UnionObjectDynamicUnknown covers the union, object,
+// dynamic, and unknown-type branches of functionAttrType via collection
+// elements.
+func TestFunctionAttrType_UnionObjectDynamicUnknown(t *testing.T) {
+	fn := ir.FunctionIR{
+		Name:     "classify",
+		TypeName: "classify",
+		ReturnType: ir.SchemaIR{
+			Collection: &ir.CollectionType{
+				Kind: ir.List,
+				ElementType: ir.SchemaIR{
+					Union: &ir.UnionType{
+						Kind:     ir.OneOf,
+						Variants: []ir.SchemaIR{{Type: ir.TypeString}, {Type: ir.TypeInt}},
+					},
+				},
+			},
+		},
+	}
+
+	file := FunctionFile(fn)
+	var buf bytes.Buffer
+	if err := file.Render(&buf); err != nil {
+		t.Fatalf("Render() error = %v", err)
+	}
+	got := buf.String()
+
+	if !strings.Contains(got, "types.DynamicType") {
+		t.Errorf("union element must render types.DynamicType\ncontent:\n%s", got)
+	}
+
+	// Object element: List of object renders ObjectType with AttrTypes.
+	fn2 := ir.FunctionIR{
+		Name:     "describe",
+		TypeName: "describe",
+		ReturnType: ir.SchemaIR{
+			Collection: &ir.CollectionType{
+				Kind: ir.List,
+				ElementType: ir.SchemaIR{
+					Attributes: []ir.AttributeIR{{Name: "label", Required: true, Schema: ir.SchemaIR{Type: ir.TypeString}}},
+				},
+			},
+		},
+	}
+	file2 := FunctionFile(fn2)
+	var buf2 bytes.Buffer
+	if err := file2.Render(&buf2); err != nil {
+		t.Fatalf("Render() error = %v", err)
+	}
+	got2 := buf2.String()
+	if !strings.Contains(got2, "types.ObjectType{AttrTypes: map[string]attr.Type{\"label\": types.StringType}}") {
+		t.Errorf("object element must render types.ObjectType\ncontent:\n%s", got2)
+	}
+
+	// Dynamic element: List of dynamic renders DynamicType.
+	fn3 := ir.FunctionIR{
+		Name:     "probe",
+		TypeName: "probe",
+		ReturnType: ir.SchemaIR{
+			Collection: &ir.CollectionType{
+				Kind:        ir.List,
+				ElementType: ir.SchemaIR{Type: ir.TypeDynamic},
+			},
+		},
+	}
+	file3 := FunctionFile(fn3)
+	var buf3 bytes.Buffer
+	if err := file3.Render(&buf3); err != nil {
+		t.Fatalf("Render() error = %v", err)
+	}
+	got3 := buf3.String()
+	if !strings.Contains(got3, "types.DynamicType") {
+		t.Errorf("dynamic element must render types.DynamicType\ncontent:\n%s", got3)
+	}
+
+	// Unknown element type: renders DynamicType (honest fallback, N-27).
+	fn4 := ir.FunctionIR{
+		Name:     "opaque",
+		TypeName: "opaque",
+		ReturnType: ir.SchemaIR{
+			Collection: &ir.CollectionType{
+				Kind:        ir.List,
+				ElementType: ir.SchemaIR{},
+			},
+		},
+	}
+	file4 := FunctionFile(fn4)
+	var buf4 bytes.Buffer
+	if err := file4.Render(&buf4); err != nil {
+		t.Fatalf("Render() error = %v", err)
+	}
+	got4 := buf4.String()
+	if !strings.Contains(got4, "types.DynamicType") {
+		t.Errorf("unknown element must render types.DynamicType\ncontent:\n%s", got4)
+	}
+}

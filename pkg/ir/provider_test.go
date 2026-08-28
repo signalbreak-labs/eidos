@@ -72,7 +72,6 @@ func TestProviderIRRoundTrip(t *testing.T) {
 			RetryWaitMin:    time.Second,
 			RetryWaitMax:    30 * time.Second,
 			Timeout:         2 * time.Minute,
-			AuthMiddleware:  []string{"api_key"},
 			Pagination: &PaginationIR{
 				Style:        "offset",
 				PageParam:    "page",

@@ -40,6 +40,7 @@ type Config struct {
 	ListResourceOverrides  []ListResourceOverride `yaml:"list_resource_overrides,omitempty" json:"list_resource_overrides,omitempty"`
 	FunctionOverrides      []FunctionOverride     `yaml:"function_overrides,omitempty" json:"function_overrides,omitempty"`
 	Logging                *LoggingConfig         `yaml:"logging,omitempty" json:"logging,omitempty"`
+	Client                 *ClientConfig          `yaml:"client,omitempty" json:"client,omitempty"`
 	Auth                   []AuthConfig           `yaml:"auth,omitempty" json:"auth,omitempty"`
 	Security               *SecurityConfig        `yaml:"security,omitempty" json:"security,omitempty"`
 	Naming                 *NamingConfig          `yaml:"naming,omitempty" json:"naming,omitempty"`
@@ -305,10 +306,14 @@ type ListResourceOverride struct {
 }
 
 // ListConfigSchema describes a list-resource filter/search argument.
+//
+// Optional is a *bool so an omitted `optional:` key is distinguishable from an
+// explicit `optional: false`. A description-only override must not flip an
+// existing spec-optional filter to Required (M-7).
 type ListConfigSchema struct {
 	Name        string `yaml:"name" json:"name"`
 	Type        string `yaml:"type,omitempty" json:"type,omitempty"`
-	Optional    bool   `yaml:"optional,omitempty" json:"optional,omitempty"`
+	Optional    *bool  `yaml:"optional,omitempty" json:"optional,omitempty"`
 	Description string `yaml:"description,omitempty" json:"description,omitempty"`
 }
 
@@ -345,6 +350,20 @@ type LoggingConfig struct {
 	CaptureResponseBody    bool     `yaml:"capture_response_body,omitempty" json:"capture_response_body,omitempty"`
 	MaxBodyBytes           int      `yaml:"max_body_bytes,omitempty" json:"max_body_bytes,omitempty"`
 	RedactHeaders          []string `yaml:"redact_headers,omitempty" json:"redact_headers,omitempty"`
+}
+
+// ClientConfig controls the generated HTTP client's base URL, user agent,
+// timeout, and retry behavior. All fields are optional; an unset field falls
+// back to the generator's default (the spec's first server URL,
+// "eidos-generated-client", a 30s timeout, 3 retries with 1s/30s backoff).
+// Duration fields accept Go duration strings ("30s", "1m30s").
+type ClientConfig struct {
+	BaseURLTemplate string    `yaml:"base_url_template,omitempty" json:"base_url_template,omitempty"`
+	UserAgent       string    `yaml:"user_agent,omitempty" json:"user_agent,omitempty"`
+	Timeout         *Duration `yaml:"timeout,omitempty" json:"timeout,omitempty"`
+	RetryMax        int       `yaml:"retry_max,omitempty" json:"retry_max,omitempty"`
+	RetryWaitMin    *Duration `yaml:"retry_wait_min,omitempty" json:"retry_wait_min,omitempty"`
+	RetryWaitMax    *Duration `yaml:"retry_wait_max,omitempty" json:"retry_wait_max,omitempty"`
 }
 
 // AuthConfig describes provider-level authentication configuration.

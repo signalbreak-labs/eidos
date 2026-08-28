@@ -3,6 +3,7 @@ package generator
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/signalbreak-labs/eidos/pkg/ir"
@@ -744,6 +745,147 @@ func TestRun_WriteModeOnlyBuildKeepsProviderCode(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(out, "GNUmakefile")); err != nil {
 		t.Errorf("only-build run did not write GNUmakefile: %v", err)
+	}
+}
+
+// TestFilePathsUseForwardSlashes locks in the M-4 contract: every File.Path the
+// generator emits is a relative path spelled with forward slashes, as
+// documented in harness.go. Before the fix the emitters built paths with
+// filepath.Join, which produces backslashes on Windows — breaking record/write
+// matching (the record plan is forward-slash-keyed), the N-30 lockstep, and
+// byte-identical cross-OS output. The test exercises every emitter family
+// (resource, data source, action, ephemeral, list resource, function, examples,
+// tftest modules, coverage tests) and asserts the forward-slash contract plus
+// record/write path parity.
+func TestFilePathsUseForwardSlashes(t *testing.T) {
+	provider := &ir.ProviderIR{
+		Name:    "mycloud",
+		Version: "0.1.0",
+		Resources: []ir.ResourceIR{
+			{Name: "pet", TypeName: "mycloud_pet"},
+		},
+		DataSources: []ir.DataSourceIR{
+			{Name: "pet", TypeName: "mycloud_pet"},
+		},
+		Actions: []ir.ActionIR{
+			{Name: "scrap", TypeName: "mycloud_scrap"},
+		},
+		EphemeralResources: []ir.EphemeralResourceIR{
+			{Name: "token", TypeName: "mycloud_token"},
+		},
+		ListResources: []ir.ListResourceIR{
+			{Name: "pet", TypeName: "mycloud_pet"},
+		},
+		Functions: []ir.FunctionIR{
+			{Name: "add", TypeName: "mycloud_add"},
+		},
+	}
+	opts := DefaultCollectOptions()
+	opts.IncludeTerraformTests = true
+	opts.IncludeDynamicRelease = true
+
+	cfg := BuildConfigFromIR(provider)
+	files, err := FilesForProviderIR(provider, cfg, opts)
+	if err != nil {
+		t.Fatalf("FilesForProviderIR: %v", err)
+	}
+	if len(files) == 0 {
+		t.Fatal("FilesForProviderIR returned no files")
+	}
+
+	// Every emitted path must be relative, forward-slash, and stable under a
+	// round-trip through the OS path conversion the harness applies on write.
+	for _, f := range files {
+		if f.Path == "" {
+			t.Errorf("empty File.Path")
+			continue
+		}
+		if strings.ContainsRune(f.Path, '\\') {
+			t.Errorf("File.Path %q contains a backslash; must use forward slashes (M-4)", f.Path)
+		}
+		if filepath.IsAbs(f.Path) || filepath.VolumeName(f.Path) != "" {
+			t.Errorf("File.Path %q is absolute; must be relative (M-4)", f.Path)
+		}
+		if round := filepath.ToSlash(filepath.FromSlash(f.Path)); round != f.Path {
+			t.Errorf("File.Path %q does not round-trip through filepath.FromSlash/ToSlash (got %q) (M-4)", f.Path, round)
+		}
+	}
+
+	// Record/write lockstep: the write-mode path set must equal the record-mode
+	// plan exactly, so a Windows-spelled path can never silently diverge (M-4).
+	// Compared as sets because the two collectors are not required to agree on
+	// ordering — only on the exact set of paths.
+	record := pathsFrom(CollectFromProviderIR(provider, opts))
+	write := pathsFromFile(files)
+	if len(record) != len(write) {
+		t.Fatalf("record/write path sets differ in size: record=%d write=%d (M-4)", len(record), len(write))
+	}
+	writeSet := make(map[string]struct{}, len(write))
+	for _, p := range write {
+		writeSet[p] = struct{}{}
+	}
+	for _, p := range record {
+		if _, ok := writeSet[p]; !ok {
+			t.Errorf("record path %q missing from write set (M-4)", p)
+		}
+	}
+}
+
+// TestRun_WriteModeOnlyBuildPreservesFullManifest locks in the M-3 fix: an
+// --only-build refresh must not clobber the full-mode manifest, so a later full
+// run can still delete the stale provider files the first full run recorded.
+// Before the fix the only-build run overwrote the manifest with its four build
+// files, the next full run saw a mode mismatch and silently skipped cleanup,
+// and the orphaned resource file was in no manifest — so no later run ever
+// deleted it.
+func TestRun_WriteModeOnlyBuildPreservesFullManifest(t *testing.T) {
+	out := t.TempDir()
+	fullOpts := Options{Mode: ModeWrite, OutputDir: out, Force: true, CollectOptions: DefaultCollectOptions()}
+	pet := &ir.ProviderIR{Name: "test", Resources: []ir.ResourceIR{
+		{Name: "pet", TypeName: "test_pet"},
+	}}
+	if _, err := Run(pet, fullOpts); err != nil {
+		t.Fatalf("first full write run: %v", err)
+	}
+	oldFile := "internal/provider/resource_pet.go"
+	if _, err := os.Stat(filepath.Join(out, filepath.FromSlash(oldFile))); err != nil {
+		t.Fatalf("first full run did not write %q: %v", oldFile, err)
+	}
+
+	// An --only-build --force refresh in between must not delete the provider
+	// file (N-70 mode scoping) and must not clobber the full-mode manifest.
+	onlyBuildOpts := Options{Mode: ModeWrite, OutputDir: out, Force: true, CollectOptions: CollectOptions{OnlyBuild: true}}
+	if _, err := Run(pet, onlyBuildOpts); err != nil {
+		t.Fatalf("only-build write run: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(out, filepath.FromSlash(oldFile))); err != nil {
+		t.Fatalf("only-build run deleted provider file %q (N-70 mode scoping)", oldFile)
+	}
+	prev, err := readGenerationManifest(out)
+	if err != nil {
+		t.Fatalf("read manifest after only-build: %v", err)
+	}
+	if !containsStr(prev.ByMode[generationModeFull], oldFile) {
+		t.Errorf("only-build run clobbered the full-mode manifest: %q missing from ByMode[full] = %v (M-3)", oldFile, prev.ByMode[generationModeFull])
+	}
+	if len(prev.ByMode[generationModeOnlyBuild]) == 0 {
+		t.Errorf("only-build run did not record its own bookkeeping: ByMode[only-build] = %v", prev.ByMode[generationModeOnlyBuild])
+	}
+
+	// Second full run with the resource renamed pet -> cat: the stale pet file
+	// from the FIRST full run must still be removed, proving the full-mode
+	// bookkeeping survived the only-build refresh.
+	cat := &ir.ProviderIR{Name: "test", Resources: []ir.ResourceIR{
+		{Name: "cat", TypeName: "test_cat"},
+	}}
+	if _, err := Run(cat, fullOpts); err != nil {
+		t.Fatalf("second full write run: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(out, filepath.FromSlash(oldFile))); !os.IsNotExist(err) {
+		t.Errorf("stale %q was not removed by the second full run (M-3: only-build clobbered the full manifest)", oldFile)
+	}
+	if _, err := os.Stat(filepath.Join(out, "internal/provider/resource_cat.go")); err != nil {
+		t.Errorf("second full run did not write resource_cat.go: %v", err)
 	}
 }
 

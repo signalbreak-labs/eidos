@@ -7,25 +7,6 @@ import (
 	"path/filepath"
 )
 
-// WriteStarterGeneratorConfig emits a starter generator.yaml that references
-// the supplied OpenAPI spec path and provider name. It is the scaffold
-// implementation used by the eidos generate-config CLI command.
-//
-// The helper will create any missing parent directories for outputPath using
-// os.MkdirAll. Callers that want to constrain writes to the working
-// directory should validate outputPath before calling this helper.
-func WriteStarterGeneratorConfig(specPath, outputPath, providerName string, force bool) error {
-	if specPath == "" {
-		return fmt.Errorf("spec path must not be empty")
-	}
-	if providerName == "" {
-		return fmt.Errorf("provider name must not be empty")
-	}
-
-	cfg := fmt.Sprintf(starterGeneratorTemplate, providerName, DefaultProviderVersion, specPath)
-	return WriteStarterGeneratorConfigBytes(outputPath, []byte(cfg), force)
-}
-
 // WriteStarterGeneratorConfigBytes writes serialized generator.yaml bytes to
 // outputPath atomically. It creates parent directories as needed. When force is
 // false and outputPath already exists, it refuses to overwrite. On any write or
@@ -72,60 +53,3 @@ func WriteStarterGeneratorConfigBytes(outputPath string, data []byte, force bool
 	}
 	return nil
 }
-
-const starterGeneratorTemplate = `# Starter generator.yaml produced by eidos generate-config
-provider:
-  name: %q
-  version: %q
-spec:
-  path: %q
-  format: openapi3
-# sign_release opts out of GPG-signed checksums. Signed releases are default-on;
-# configure GPG_PRIVATE_KEY and GPG_PASSPHRASE repository secrets, or uncomment
-# to disable signing:
-# sign_release: false
-generation:
-  resources:
-    include: []
-    exclude: []
-    package: ""
-    packages: []
-  datasources:
-    include: []
-    exclude: []
-    package: ""
-    packages: []
-  actions:
-    include: []
-    exclude: []
-    package: ""
-    packages: []
-  ephemeral_resources:
-    include: []
-    exclude: []
-    package: ""
-    packages: []
-  list_resources:
-    include: []
-    exclude: []
-    package: ""
-    packages: []
-  functions:
-    include: []
-    exclude: []
-    package: ""
-    packages: []
-  skip_tests: false
-  skip_docs: false
-  skip_build: false
-  # dynamic_release opts into also generating
-  # .github/workflows/regenerate-and-release.yml: a manually-dispatched
-  # workflow that regenerates this provider from generator.yaml (which carries
-  # the spec reference and all overrides) and publishes a release using the
-  # eidos CI image. Off by default. spec_path is optional: leave it unset to
-  # regenerate the spec referenced by generator.yaml, or set it to override.
-  # dynamic_release:
-  #   enabled: true
-  #   image: ghcr.io/signalbreak-labs/eidos:latest
-  #   spec_path: spec.yaml
-`

@@ -83,6 +83,23 @@ func (c *v30Converter) scalarFloat(n Node, field string) float64 {
 	return f
 }
 
+// scalarAnySlice extracts a sequence of arbitrary values from n, appending a
+// warning diagnostic when the node is present but not a sequence. Unlike the
+// silent nodeNativeSlice, a non-sequence enum value (e.g. `enum: 5`) is
+// surfaced rather than dropped with zero diagnostics (M-2).
+func (c *v30Converter) scalarAnySlice(n Node, field string) []any {
+	s, ok := n.(*SequenceNode)
+	if !ok {
+		c.warnScalarTypeMismatch(n, field, "sequence")
+		return nil
+	}
+	out := make([]any, 0, len(s.Items))
+	for _, item := range s.Items {
+		out = append(out, nodeToNative(item))
+	}
+	return out
+}
+
 func (c *v30Converter) scalarStringSlice(n Node, field string) []string {
 	s, ok := n.(*SequenceNode)
 	if !ok {
@@ -1137,7 +1154,7 @@ func (c *v30Converter) convertSchema(n Node) *Schema {
 		case "required":
 			s.Required = c.scalarStringSlice(value, "required")
 		case "enum":
-			s.Enum = nodeNativeSlice(value)
+			s.Enum = c.scalarAnySlice(value, "enum")
 		case "allOf":
 			s.AllOf = c.convertSchemaSlice(value)
 		case "oneOf":
@@ -1173,7 +1190,19 @@ func (c *v30Converter) convertSchema(n Node) *Schema {
 		case "example":
 			s.Example = nodeToNative(value)
 		case "examples":
-			s.Examples = c.convertExamples(value)
+			// The schema-level "examples" keyword has two legal forms: a map of
+			// Example objects (OpenAPI 3.0) and an array of raw values (OpenAPI
+			// 3.1 / JSON Schema 2020-12). Route by node type so a valid 3.1 spec
+			// is preserved instead of dropped with a self-contradictory warning
+			// (L-1).
+			if seq, ok := value.(*SequenceNode); ok {
+				s.ExamplesArray = make([]any, 0, len(seq.Items))
+				for _, item := range seq.Items {
+					s.ExamplesArray = append(s.ExamplesArray, nodeToNative(item))
+				}
+			} else {
+				s.Examples = c.convertExamples(value)
+			}
 		case "nullable":
 			s.Nullable = c.scalarBool(value, "nullable")
 		case "readOnly":

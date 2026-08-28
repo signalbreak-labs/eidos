@@ -32,12 +32,187 @@ func Validate(root Node, spec *Spec, version Version) []Diagnostic {
 	var diags []Diagnostic
 
 	diags = append(diags, validateRequired(spec, version)...)
+	diags = append(diags, validateNestedRequired(spec, version)...)
 	if root != nil {
 		diags = append(diags, validateRefs(root)...)
 		diags = append(diags, validateUnsupportedKeywords(root, version)...)
 		diags = append(diags, validateTypes(root, version)...)
+		diags = append(diags, validateDuplicateKeys(root)...)
 	}
 
+	return diags
+}
+
+// validateNestedRequired checks the spec-mandated required fields that live
+// below the document root: every operation must declare a non-empty responses
+// object, every parameter must declare name and in, path parameters must set
+// required: true, and (in 2.0/3.0) every response must declare a description.
+// These were previously unchecked despite the validateRequired docstring
+// claiming "nested requirements" (M-1). $ref parameters and responses are
+// skipped here; their definitions are validated at their own site.
+func validateNestedRequired(spec *Spec, version Version) []Diagnostic {
+	var diags []Diagnostic
+
+	checkParameter := func(p *Parameter, where string) {
+		if p == nil || p.Ref != "" {
+			return
+		}
+		if p.Name == "" {
+			diags = append(diags, Diagnostic{
+				Severity:       SeverityError,
+				Summary:        "Missing required field",
+				Detail:         fmt.Sprintf("Parameter in %s is missing the required 'name' field.", where),
+				SourceLocation: &p.SourceLocation,
+			})
+		}
+		if p.In == "" {
+			diags = append(diags, Diagnostic{
+				Severity:       SeverityError,
+				Summary:        "Missing required field",
+				Detail:         fmt.Sprintf("Parameter %q in %s is missing the required 'in' field.", p.Name, where),
+				SourceLocation: &p.SourceLocation,
+			})
+		}
+		if p.In == "path" && !p.Required {
+			diags = append(diags, Diagnostic{
+				Severity:       SeverityError,
+				Summary:        "Missing required field",
+				Detail:         fmt.Sprintf("Path parameter %q in %s must set required: true.", p.Name, where),
+				SourceLocation: &p.SourceLocation,
+			})
+		}
+	}
+
+	checkResponse := func(r *Response, where string) {
+		if r == nil || r.Ref != "" {
+			return
+		}
+		// OpenAPI 3.1 (JSON Schema 2020-12) made response description optional;
+		// 2.0 and 3.0 require it.
+		if version != Version3_1 && r.Description == "" {
+			diags = append(diags, Diagnostic{
+				Severity:       SeverityError,
+				Summary:        "Missing required field",
+				Detail:         fmt.Sprintf("Response in %s is missing the required 'description' field.", where),
+				SourceLocation: &r.SourceLocation,
+			})
+		}
+	}
+
+	checkOperation := func(op *Operation, where string) {
+		if op == nil {
+			return
+		}
+		if len(op.Responses) == 0 {
+			diags = append(diags, Diagnostic{
+				Severity:       SeverityError,
+				Summary:        "Missing required field",
+				Detail:         fmt.Sprintf("Operation %s is missing the required 'responses' object.", where),
+				SourceLocation: &op.SourceLocation,
+			})
+		}
+		for i := range op.Parameters {
+			checkParameter(&op.Parameters[i], where)
+		}
+		for _, r := range op.Responses {
+			checkResponse(r, where)
+		}
+	}
+
+	checkPathItem := func(pi *PathItem, where string) {
+		if pi == nil {
+			return
+		}
+		for i := range pi.Parameters {
+			checkParameter(&pi.Parameters[i], where)
+		}
+		for _, method := range []string{"GET", "PUT", "POST", "DELETE", "OPTIONS", "HEAD", "PATCH", "TRACE"} {
+			var op *Operation
+			switch method {
+			case "GET":
+				op = pi.Get
+			case "PUT":
+				op = pi.Put
+			case "POST":
+				op = pi.Post
+			case "DELETE":
+				op = pi.Delete
+			case "OPTIONS":
+				op = pi.Options
+			case "HEAD":
+				op = pi.Head
+			case "PATCH":
+				op = pi.Patch
+			case "TRACE":
+				op = pi.Trace
+			}
+			checkOperation(op, fmt.Sprintf("%s %s", method, where))
+		}
+	}
+
+	for path, pi := range spec.Paths {
+		checkPathItem(pi, path)
+	}
+	for name, pi := range spec.Webhooks {
+		checkPathItem(pi, "webhook "+name)
+	}
+	if spec.Components != nil {
+		for name, p := range spec.Components.Parameters {
+			checkParameter(p, "components.parameters."+name)
+		}
+		for name, r := range spec.Components.Responses {
+			checkResponse(r, "components.responses."+name)
+		}
+	}
+
+	return diags
+}
+
+// validateDuplicateKeys walks the raw AST and emits a warning for every mapping
+// that contains a duplicate key. Duplicate keys are invalid in both JSON and
+// YAML; the converters resolve them last-wins (matching encoding/json and
+// yaml.v3), while $ref resolution previously saw the first occurrence — two
+// inconsistent views of one document. The warning makes the collapse loud, and
+// findMapEntry/findEntryValue now agree with the converters on last-wins (H-2).
+func validateDuplicateKeys(root Node) []Diagnostic {
+	var diags []Diagnostic
+	var walk func(n Node)
+	walk = func(n Node) {
+		if n == nil {
+			return
+		}
+		switch v := n.(type) {
+		case *MapNode:
+			seen := make(map[string]bool, len(v.Entries))
+			for _, e := range v.Entries {
+				if e.Key == nil {
+					continue
+				}
+				key, ok := asString(e.Key)
+				if !ok {
+					key = e.Key.Raw
+				}
+				if key == "" {
+					continue
+				}
+				if seen[key] {
+					diags = append(diags, Diagnostic{
+						Severity:       SeverityWarning,
+						Summary:        "Duplicate mapping key",
+						Detail:         fmt.Sprintf("Mapping key %q appears more than once; the last occurrence wins.", key),
+						SourceLocation: &e.Key.SourceLocation,
+					})
+				}
+				seen[key] = true
+				walk(e.Value)
+			}
+		case *SequenceNode:
+			for _, item := range v.Items {
+				walk(item)
+			}
+		}
+	}
+	walk(root)
 	return diags
 }
 

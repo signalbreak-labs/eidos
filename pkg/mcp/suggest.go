@@ -76,14 +76,14 @@ func SuggestResourcesTool() *sdkmcp.Tool {
 }
 
 // HandleSuggestResources implements eidos/suggest-resources.
-func HandleSuggestResources(ctx context.Context, _ *sdkmcp.CallToolRequest, args SuggestResourcesArgs) (res *sdkmcp.CallToolResult, out SuggestResourcesResult, err error) {
+func HandleSuggestResources(ctx context.Context, req *sdkmcp.CallToolRequest, args SuggestResourcesArgs) (res *sdkmcp.CallToolResult, out SuggestResourcesResult, err error) {
 	defer recoverHandler("eidos/suggest-resources", suggestResourcesErrorResult, &res, &out)
 	result := SuggestResourcesResult{
 		Diagnostics: []api.DiagnosticJSON{},
 		Suggestions: []Suggestion{},
 	}
 
-	specBytes, err := normalizeSpec(ctx, args.Spec)
+	specBytes, err := normalizeSpec(ctx, args.Spec, rawArguments(req))
 	if err != nil {
 		out = suggestResourcesErrorResult(err)
 		res, err = marshalToolResult(out)

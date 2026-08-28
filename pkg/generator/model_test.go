@@ -283,3 +283,21 @@ func sampleModelResourceIR() ir.ResourceIR {
 		},
 	}
 }
+
+// TestModelFiles verifies ModelFiles returns one model file per resource.
+func TestModelFiles(t *testing.T) {
+	resources := []ir.ResourceIR{
+		{Name: "pet", TypeName: "mycloud_pet"},
+		{Name: "owner", TypeName: "mycloud_owner"},
+	}
+	files := ModelFiles(resources)
+	if len(files) != 2 {
+		t.Fatalf("expected 2 model files, got %d", len(files))
+	}
+	if files[0].Path != "internal/provider/model_pet.go" {
+		t.Errorf("expected pet model path, got %q", files[0].Path)
+	}
+	if files[1].Path != "internal/provider/model_owner.go" {
+		t.Errorf("expected owner model path, got %q", files[1].Path)
+	}
+}

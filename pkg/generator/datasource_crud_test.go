@@ -252,6 +252,72 @@ func TestWiredListDataSource_Cursor_Render(t *testing.T) {
 	}
 }
 
+// TestWiredListDataSource_Offset_Envelope_Render asserts the H-4 fix: an offset
+// pagination next callback for an enveloped list response (e.g. SpaceTraders'
+// {data: [...], meta: ...}) unwraps the envelope before deciding whether another
+// page exists. Without the unwrap the raw body unmarshals into a map, len is
+// always 0, and pagination silently truncates to page 1.
+func TestWiredListDataSource_Offset_Envelope_Render(t *testing.T) {
+	ds := listDataSourceIR(&ir.PaginationIR{Style: ir.PaginationStyleOffset, PageParam: "page"})
+	ds.ReadMapping.ResponseEnvelope = "data"
+
+	file := DataSourceFile(ds, testClientImport)
+	var buf bytes.Buffer
+	if err := file.Render(&buf); err != nil {
+		t.Fatalf("Render() error = %v", err)
+	}
+	got := buf.String()
+
+	for _, want := range []string{
+		// The page body is decoded as an object, not a bare array.
+		`pageObj := map[string]any{}`,
+		`json.Unmarshal(body, &pageObj)`,
+		// The envelope key is extracted as the item array before the emptiness
+		// check; a missing envelope stops pagination.
+		`pageItems, ok := pageObj["data"].([]any)`,
+		`if !ok {`,
+		`if len(pageItems) == 0 {`,
+		// The page parameter still advances.
+		`p.Set("page", strconv.Itoa(page+1))`,
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("generated enveloped offset list body missing %q\n--- body ---\n%s", want, got)
+		}
+	}
+	// The bare-array decode must not appear for the enveloped case.
+	if strings.Contains(got, `json.Unmarshal(body, &pageItems)`) {
+		t.Errorf("enveloped offset list body must not decode the raw body as an array\n--- body ---\n%s", got)
+	}
+}
+
+// TestWiredListDataSource_Cursor_Envelope_Render asserts the H-4 fix: a cursor
+// pagination next callback for an enveloped response looks inside the envelope
+// object for the cursor field when it is not a top-level sibling, so an
+// enveloped cursor-paginated endpoint does not silently truncate to page 1.
+func TestWiredListDataSource_Cursor_Envelope_Render(t *testing.T) {
+	ds := listDataSourceIR(&ir.PaginationIR{Style: ir.PaginationStyleCursor, CursorField: "next_cursor"})
+	ds.ReadMapping.ResponseEnvelope = "data"
+
+	file := DataSourceFile(ds, testClientImport)
+	var buf bytes.Buffer
+	if err := file.Render(&buf); err != nil {
+		t.Fatalf("Render() error = %v", err)
+	}
+	got := buf.String()
+
+	for _, want := range []string{
+		// Top-level lookup first, then the envelope-object fallback.
+		`page["next_cursor"].(string)`,
+		`inner, ok2 := page["data"].(map[string]any); ok2 {`,
+		`inner["next_cursor"].(string)`,
+		`p.Set("next_cursor", cursor)`,
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("generated enveloped cursor list body missing %q\n--- body ---\n%s", want, got)
+		}
+	}
+}
+
 // TestWiredListDataSource_LinkHeader_Render asserts the link_header next callback
 // extracts the next URL from the Link header onto the shared nextURL variable.
 func TestWiredListDataSource_LinkHeader_Render(t *testing.T) {
@@ -326,6 +392,36 @@ func TestWiredListDataSource_Offset_Compiles(t *testing.T) {
 	buildCmd.Dir = tmp
 	if out, err := buildCmd.CombinedOutput(); err != nil {
 		t.Fatalf("go build ./... failed for list data source (offset): %v\n%s", err, out)
+	}
+}
+
+// TestWiredListDataSource_Offset_Envelope_Compiles generates a full provider
+// module with an enveloped offset-paginated list data source and compiles it,
+// proving the envelope-unwrapping next callback is syntactically valid (H-4).
+func TestWiredListDataSource_Offset_Envelope_Compiles(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping network-bound compile test in -short mode")
+	}
+	ds := listDataSourceIR(&ir.PaginationIR{
+		Style:     ir.PaginationStyleOffset,
+		PageParam: "page",
+	})
+	ds.ReadMapping.ResponseEnvelope = "data"
+	p := sampleProviderWithDataSourceIR(ds)
+	tmp := generateWiredDataSourceModule(t, p)
+
+	ctx, cancel := contextWithTimeout(t, 5*time.Minute)
+	defer cancel()
+
+	tidyCmd := exec.CommandContext(ctx, "go", "mod", "tidy")
+	tidyCmd.Dir = tmp
+	if out, err := tidyCmd.CombinedOutput(); err != nil {
+		t.Fatalf("go mod tidy failed: %v\n%s", err, out)
+	}
+	buildCmd := exec.CommandContext(ctx, "go", "build", "./...")
+	buildCmd.Dir = tmp
+	if out, err := buildCmd.CombinedOutput(); err != nil {
+		t.Fatalf("go build ./... failed for enveloped offset list data source: %v\n%s", err, out)
 	}
 }
 

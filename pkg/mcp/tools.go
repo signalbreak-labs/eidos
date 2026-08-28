@@ -133,9 +133,9 @@ func InspectTool() *sdkmcp.Tool {
 }
 
 // HandleInspect implements eidos/inspect.
-func HandleInspect(ctx context.Context, _ *sdkmcp.CallToolRequest, args InspectArgs) (res *sdkmcp.CallToolResult, out InspectResult, err error) {
+func HandleInspect(ctx context.Context, req *sdkmcp.CallToolRequest, args InspectArgs) (res *sdkmcp.CallToolResult, out InspectResult, err error) {
 	defer recoverHandler("eidos/inspect", inspectErrorResult, &res, &out)
-	specBytes, err := normalizeSpec(ctx, args.Spec)
+	specBytes, err := normalizeSpec(ctx, args.Spec, rawArguments(req))
 	if err != nil {
 		out = inspectErrorResult(err)
 		res, err = marshalToolResult(out)
@@ -297,9 +297,9 @@ func GenerateTool() *sdkmcp.Tool {
 }
 
 // HandleGenerate implements eidos/generate.
-func HandleGenerate(ctx context.Context, _ *sdkmcp.CallToolRequest, args GenerateArgs) (res *sdkmcp.CallToolResult, out GenerateResult, err error) {
+func HandleGenerate(ctx context.Context, req *sdkmcp.CallToolRequest, args GenerateArgs) (res *sdkmcp.CallToolResult, out GenerateResult, err error) {
 	defer recoverHandler("eidos/generate", generateErrorResult, &res, &out)
-	specBytes, err := normalizeSpec(ctx, args.Spec)
+	specBytes, err := normalizeSpec(ctx, args.Spec, rawArguments(req))
 	if err != nil {
 		out = generateErrorResult(err)
 		res, err = marshalToolResult(out)
@@ -486,9 +486,9 @@ func ValidateSchemasTool() *sdkmcp.Tool {
 }
 
 // HandleValidateSchemas implements eidos/validate-schemas.
-func HandleValidateSchemas(ctx context.Context, _ *sdkmcp.CallToolRequest, args ValidateSchemasArgs) (res *sdkmcp.CallToolResult, out ValidateSchemasResult, err error) {
+func HandleValidateSchemas(ctx context.Context, req *sdkmcp.CallToolRequest, args ValidateSchemasArgs) (res *sdkmcp.CallToolResult, out ValidateSchemasResult, err error) {
 	defer recoverHandler("eidos/validate-schemas", validateSchemasErrorResult, &res, &out)
-	specBytes, err := normalizeSpec(ctx, args.Spec)
+	specBytes, err := normalizeSpec(ctx, args.Spec, rawArguments(req))
 	if err != nil {
 		out = validateSchemasErrorResult(err)
 		res, err = marshalToolResult(out)
@@ -583,9 +583,9 @@ func OverridePreviewTool() *sdkmcp.Tool {
 }
 
 // HandleOverridePreview implements eidos/override-preview.
-func HandleOverridePreview(ctx context.Context, _ *sdkmcp.CallToolRequest, args OverridePreviewArgs) (res *sdkmcp.CallToolResult, out OverridePreviewResult, err error) {
+func HandleOverridePreview(ctx context.Context, req *sdkmcp.CallToolRequest, args OverridePreviewArgs) (res *sdkmcp.CallToolResult, out OverridePreviewResult, err error) {
 	defer recoverHandler("eidos/override-preview", overridePreviewErrorResult, &res, &out)
-	specBytes, err := normalizeSpec(ctx, args.Spec)
+	specBytes, err := normalizeSpec(ctx, args.Spec, rawArguments(req))
 	if err != nil {
 		out = overridePreviewErrorResult(err)
 		res, err = marshalToolResult(out)
@@ -862,18 +862,20 @@ func mergeConfigIntoSpec(specBytes []byte, configYAML string) ([]byte, error) {
 	return json.Marshal(doc)
 }
 
-// decodeSpecMap decodes a spec into a generic map, preserving integer precision:
+// decodeSpecMap decodes a spec into a generic map, preserving scalar typing:
 // json.Decoder with UseNumber keeps integral values as json.Number so an int64
 // bound like "maximum": 9223372036854775807 survives the config-merge round-trip
 // instead of silently degrading to float64 (which rounds past 2^53). The YAML
-// fallback is unaffected — yaml.v3 already decodes integers as int64 (N-50).
+// fallback decodes via yaml.Node so integers stay int64 and timestamp-shaped
+// scalars keep their original string form instead of being re-typed to
+// time.Time and re-serialized as RFC3339 (N-50, L-6).
 func decodeSpecMap(data []byte) (map[string]any, error) {
 	dec := json.NewDecoder(bytes.NewReader(data))
 	dec.UseNumber()
 	var doc map[string]any
 	if err := dec.Decode(&doc); err != nil {
-		var out map[string]any
-		if err2 := yaml.Unmarshal(data, &out); err2 != nil {
+		out, err2 := yamlToMap(data)
+		if err2 != nil {
 			return nil, fmt.Errorf("spec must be JSON or YAML: %w", errors.Join(err, err2))
 		}
 		return out, nil
@@ -884,6 +886,66 @@ func decodeSpecMap(data []byte) (map[string]any, error) {
 		return nil, fmt.Errorf("spec must be a single JSON or YAML document")
 	}
 	return doc, nil
+}
+
+// yamlToMap decodes a YAML document into a generic map, preserving scalar
+// typing. It walks the yaml.Node tree instead of yaml.Unmarshal into
+// map[string]any so a timestamp-shaped scalar (e.g. an example or default value
+// of "2024-01-01") is not resolved to time.Time and re-serialized as RFC3339
+// (L-6). Integers decode as int64, preserving precision (N-50).
+func yamlToMap(data []byte) (map[string]any, error) {
+	var root yaml.Node
+	if err := yaml.Unmarshal(data, &root); err != nil {
+		return nil, err
+	}
+	if len(root.Content) == 0 {
+		return nil, fmt.Errorf("empty YAML document")
+	}
+	doc := nodeToAny(root.Content[0])
+	m, ok := doc.(map[string]any)
+	if !ok {
+		return nil, fmt.Errorf("YAML document must be a mapping")
+	}
+	return m, nil
+}
+
+// nodeToAny converts a yaml.Node subtree into Go values, preserving scalar
+// typing via scalarToAny.
+func nodeToAny(n *yaml.Node) any {
+	switch n.Kind {
+	case yaml.MappingNode:
+		m := make(map[string]any, len(n.Content)/2)
+		for i := 0; i+1 < len(n.Content); i += 2 {
+			m[n.Content[i].Value] = nodeToAny(n.Content[i+1])
+		}
+		return m
+	case yaml.SequenceNode:
+		s := make([]any, 0, len(n.Content))
+		for _, c := range n.Content {
+			s = append(s, nodeToAny(c))
+		}
+		return s
+	case yaml.ScalarNode:
+		return scalarToAny(n)
+	default:
+		return nil
+	}
+}
+
+// scalarToAny converts a scalar node to a Go value. Timestamp- and binary-tagged
+// scalars keep their original text: yaml.v3 would otherwise resolve a timestamp
+// to time.Time (re-serialized as RFC3339) or binary to []byte (re-serialized as
+// base64), silently mutating the spec (L-6). All other scalars decode normally,
+// so integers stay int64 and booleans stay bool.
+func scalarToAny(n *yaml.Node) any {
+	if n.Tag == "!!timestamp" || n.Tag == "!!binary" {
+		return n.Value
+	}
+	var v any
+	if err := n.Decode(&v); err != nil {
+		return n.Value
+	}
+	return v
 }
 
 // generateCollectOptions builds the CollectOptions for an MCP generate run. It

@@ -163,34 +163,43 @@ list_resource_overrides:
       config_schema:
         - name: organization
           type: string
+          optional: false
     - resource: list_branches
       operation: listBranches
       config_schema:
         - name: organization
           type: string
+          optional: false
         - name: project
           type: string
+          optional: false
     - resource: list_commits
       operation: listCommits
       config_schema:
         - name: organization
           type: string
+          optional: false
         - name: project
           type: string
+          optional: false
     - resource: list_pull_requests
       operation: listPullRequests
       config_schema:
         - name: organization
           type: string
+          optional: false
         - name: project
           type: string
+          optional: false
     - resource: list_tasks
       operation: listTasks
       config_schema:
         - name: organization
           type: string
+          optional: false
         - name: project
           type: string
+          optional: false
     - resource: list_workspaces
       operation: listWorkspaces
     - resource: list_configs
@@ -198,26 +207,31 @@ list_resource_overrides:
       config_schema:
         - name: workspace
           type: string
+          optional: false
     - resource: list_instances
       operation: listInstances
       config_schema:
         - name: workspace
           type: string
+          optional: false
     - resource: list_networks
       operation: listNetworks
       config_schema:
         - name: workspace
           type: string
+          optional: false
     - resource: list_secrets
       operation: listSecrets
       config_schema:
         - name: workspace
           type: string
+          optional: false
     - resource: list_stacks
       operation: listStacks
       config_schema:
         - name: workspace
           type: string
+          optional: false
 auth:
     - scheme: bearer
       env_var: MYCLOUD_BEARERAUTH

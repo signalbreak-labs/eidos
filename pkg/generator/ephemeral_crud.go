@@ -519,12 +519,24 @@ func wiredEphemeralLifecycleBody(er ir.EphemeralResourceIR, plan crudOperationPl
 
 	// Read every referenced value back from private state, in a fixed order
 	// (path substitutions, then query, header, cookie) for deterministic
-	// output.
+	// output. A field that backs both a path placeholder and another param is
+	// read once: emitting the same <field>Bytes, diags := ... twice would be a
+	// redeclaration compile error (H-5). The Open/stash path
+	// (lifecyclePrivateParams) dedups by field; Renew/Close must match it.
+	seen := make(map[string]bool)
 	for _, sub := range plan.subs {
+		if seen[sub.field] {
+			continue
+		}
+		seen[sub.field] = true
 		stmts = append(stmts, privateParamReadStmts(paramSubstitution{field: sub.field, primitive: sub.primitive})...)
 	}
 	for _, params := range [][]paramSubstitution{plan.queryParams, plan.headerParams, plan.cookieParams} {
 		for _, p := range params {
+			if seen[p.field] {
+				continue
+			}
+			seen[p.field] = true
 			stmts = append(stmts, privateParamReadStmts(p)...)
 		}
 	}

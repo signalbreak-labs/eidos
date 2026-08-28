@@ -261,6 +261,16 @@ func applyManagedAttributeFlags(
 // attribute of that name is added so the generator's ID-field lookup succeeds and
 // wired Read/Delete path substitution resolves.
 func ManagedResourceSchema(c ResourceCRUD) (ir.ObjectSchemaIR, string) {
+	return ManagedResourceSchemaWithDiagnostics(c, nil)
+}
+
+// ManagedResourceSchemaWithDiagnostics is ManagedResourceSchema that appends
+// fail-loud diagnostics to diags (a nil diags is allowed and simply suppresses
+// emission). It emits a Warning when two distinct response properties sanitize
+// to the same Terraform attribute name (e.g. "fooBar" and "foo_bar"), dropping
+// the later property so the generated schema never carries duplicate attributes
+// (H-3).
+func ManagedResourceSchemaWithDiagnostics(c ResourceCRUD, diags *diagnostics.Diagnostics) (ir.ObjectSchemaIR, string) {
 	stateSpec := resourceStateSpec(c)
 
 	// A "get one" read that returns a single-array response wrapper (e.g.
@@ -315,9 +325,27 @@ func ManagedResourceSchema(c ResourceCRUD) (ir.ObjectSchemaIR, string) {
 
 	attrs := make([]ir.AttributeIR, 0, len(names))
 	hasID := false
+	// seen tracks sanitized attribute names so two distinct response properties
+	// that normalize to the same Terraform name (e.g. "fooBar" and "foo_bar") do
+	// not both survive as duplicate attributes. The property with the
+	// lexicographically smaller original name wins (names are iterated sorted);
+	// the dropped property is surfaced with a Warning so the collision is not
+	// silent (H-3).
+	seen := make(map[string]string, len(names))
 	for _, name := range names {
 		prop := stateSpec.Properties[name]
 		snake := SanitizeAttributeName(name)
+		if prev, dup := seen[snake]; dup {
+			if diags != nil {
+				*diags = diags.Append(diagnostics.Diagnostic{
+					Severity: diagnostics.Warning,
+					Summary:  "duplicate attribute after name normalization",
+					Detail:   fmt.Sprintf("properties %q and %q both normalize to %q; dropping %q", prev, name, snake, name),
+				})
+			}
+			continue
+		}
+		seen[snake] = name
 		attr := ir.AttributeIR{
 			Name:        snake,
 			WireName:    name,
@@ -657,6 +685,15 @@ func unionWrapperAttribute(spec SchemaSpec) ir.AttributeIR {
 // yields an empty schema. Attributes are sorted by name for deterministic
 // generation.
 func ObjectSchemaFromSpec(spec *SchemaSpec) ir.ObjectSchemaIR {
+	return ObjectSchemaFromSpecWithDiagnostics(spec, nil)
+}
+
+// ObjectSchemaFromSpecWithDiagnostics is ObjectSchemaFromSpec that appends
+// fail-loud diagnostics to diags (a nil diags is allowed and simply suppresses
+// emission). It emits a Warning when two distinct properties sanitize to the
+// same Terraform attribute name (e.g. "fooBar" and "foo_bar"), dropping the
+// later property so the schema never carries duplicate attributes (H-3).
+func ObjectSchemaFromSpecWithDiagnostics(spec *SchemaSpec, diags *diagnostics.Diagnostics) ir.ObjectSchemaIR {
 	if spec == nil || len(spec.Properties) == 0 {
 		return ir.ObjectSchemaIR{}
 	}
@@ -666,9 +703,22 @@ func ObjectSchemaFromSpec(spec *SchemaSpec) ir.ObjectSchemaIR {
 	}
 	sort.Strings(names)
 	attrs := make([]ir.AttributeIR, 0, len(names))
+	seen := make(map[string]string, len(names))
 	for _, name := range names {
+		snake := SanitizeAttributeName(name)
+		if prev, dup := seen[snake]; dup {
+			if diags != nil {
+				*diags = diags.Append(diagnostics.Diagnostic{
+					Severity: diagnostics.Warning,
+					Summary:  "duplicate attribute after name normalization",
+					Detail:   fmt.Sprintf("properties %q and %q both normalize to %q; dropping %q", prev, name, snake, name),
+				})
+			}
+			continue
+		}
+		seen[snake] = name
 		attrs = append(attrs, ir.AttributeIR{
-			Name:        SanitizeAttributeName(name),
+			Name:        snake,
 			Computed:    true,
 			Schema:      schemaIRFromSpecRecursive(spec.Properties[name]),
 			Description: spec.Properties[name].Description,
@@ -728,6 +778,13 @@ func DataSourceSchema(op Operation, diags *diagnostics.Diagnostics) ir.ObjectSch
 			a.Schema = paramSchemaIR(p.In, p.Type, p.ItemsType, p.Style, diags, p.Name)
 			a.WireName = p.Name
 			a.Description = preferDescription(a.Description, p.Description)
+			// A deprecated parameter surfaces as a deprecated input attribute so
+			// the flag reaches the generated schema (M-10). OpenAPI carries no
+			// message with the boolean, so a fixed honest message is used.
+			if p.Deprecated {
+				a.Deprecated = true
+				a.DeprecationMessage = "This parameter is deprecated."
+			}
 			switch {
 			case p.Required || strings.EqualFold(p.In, "path"):
 				a.Required = true
@@ -870,6 +927,12 @@ func ListResourceConfigSchema(op Operation, diags *diagnostics.Diagnostics) ir.O
 			attr.Required = true
 		} else {
 			attr.Optional = true
+		}
+		// A deprecated parameter surfaces as a deprecated filter attribute so the
+		// flag reaches the generated schema (M-10).
+		if p.Deprecated {
+			attr.Deprecated = true
+			attr.DeprecationMessage = "This parameter is deprecated."
 		}
 		attrs = append(attrs, attr)
 	}

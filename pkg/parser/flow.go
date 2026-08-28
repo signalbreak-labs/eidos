@@ -6,6 +6,12 @@ import (
 	"strings"
 )
 
+// errFlowAliasResolution marks an alias-resolution failure inside a flow
+// collection. parseYAMLFlow propagates it (like ErrMaxNestingDepth) instead of
+// falling back to plain-scalar handling, because an unknown alias is a genuine
+// YAML semantic error, not a value that merely looks like flow (L-2).
+var errFlowAliasResolution = errors.New("flow alias resolution failed")
+
 // yamlFlowParser parses a single-line YAML flow-style collection ({...} or
 // [...]) that the JSON parser rejected because it uses YAML-only syntax such as
 // unquoted keys ({ type: string }). It implements the subset of YAML 1.2 flow
@@ -22,6 +28,11 @@ type yamlFlowParser struct {
 	// document line instead (N-7).
 	line  int
 	depth int
+	// owner is the block parser that invoked the flow parser. It supplies the
+	// anchor table and the alias-expansion guardrails so flow-style aliases
+	// ("*name" inside a flow collection) resolve identically to block-style
+	// ones and count against the same per-document budget (L-2, H-1).
+	owner *yamlParser
 }
 
 // parseYAMLFlow parses text as a single-line YAML flow collection. ok is true
@@ -30,9 +41,11 @@ type yamlFlowParser struct {
 // (preserving the pre-existing lenient behavior for values that merely look
 // like flow, e.g. a description of "{foo}"). ErrMaxNestingDepth is propagated
 // so deeply-nested input cannot blow the stack. line is the 1-based source
-// line of text, used in error messages and node locations.
-func parseYAMLFlow(file, text string, line, depth int) (node Node, ok bool, err error) {
-	p := &yamlFlowParser{file: file, text: text, line: line, depth: depth}
+// line of text, used in error messages and node locations. owner is the block
+// parser that invoked the flow parser; it provides the anchor table for
+// flow-style alias resolution (L-2).
+func parseYAMLFlow(owner *yamlParser, file, text string, line, depth int) (node Node, ok bool, err error) {
+	p := &yamlFlowParser{owner: owner, file: file, text: text, line: line, depth: depth}
 	p.skipWS()
 	if p.pos >= len(p.text) {
 		return nil, false, nil
@@ -47,7 +60,7 @@ func parseYAMLFlow(file, text string, line, depth int) (node Node, ok bool, err 
 		return nil, false, nil
 	}
 	if err != nil {
-		if errors.Is(err, ErrMaxNestingDepth) {
+		if errors.Is(err, ErrMaxNestingDepth) || errors.Is(err, errFlowAliasResolution) {
 			return nil, false, err
 		}
 		return nil, false, nil
@@ -201,7 +214,7 @@ func (p *yamlFlowParser) parseValue() (Node, error) {
 
 // parseKey parses a flow mapping key: a quoted string or a plain scalar that
 // ends at the ':' separator (a colon not followed by whitespace is part of the
-// key, e.g. "a:b").
+// key, e.g. "a:b"). A flow-style alias key must resolve to a scalar.
 func (p *yamlFlowParser) parseKey() (*ScalarNode, error) {
 	p.skipWS()
 	if p.pos >= len(p.text) {
@@ -214,7 +227,15 @@ func (p *yamlFlowParser) parseKey() (*ScalarNode, error) {
 	case '\'':
 		return p.parseQuoted(loc, '\'')
 	default:
-		return p.parsePlain(loc, true)
+		n, err := p.parsePlain(loc, true)
+		if err != nil {
+			return nil, err
+		}
+		s, ok := n.(*ScalarNode)
+		if !ok {
+			return nil, p.errorf("flow mapping key alias does not resolve to a scalar")
+		}
+		return s, nil
 	}
 }
 
@@ -260,8 +281,10 @@ func (p *yamlFlowParser) parseQuoted(loc SourceLocation, quote byte) (*ScalarNod
 // at a ':' followed by whitespace or end-of-input (the mapping separator);
 // otherwise it ends at a flow indicator (',', '}', ']'). The token is trimmed
 // and passed through YAML scalar inference so numbers, booleans, and null keep
-// their types.
-func (p *yamlFlowParser) parsePlain(loc SourceLocation, isKey bool) (*ScalarNode, error) {
+// their types. A token that is a YAML alias ("*name") resolves against the
+// block parser's anchor table instead of becoming a literal string (L-2); the
+// resolved node may be a collection, so the return type is Node.
+func (p *yamlFlowParser) parsePlain(loc SourceLocation, isKey bool) (Node, error) {
 	start := p.pos
 	for p.pos < len(p.text) {
 		c := p.text[p.pos]
@@ -278,6 +301,16 @@ func (p *yamlFlowParser) parsePlain(loc SourceLocation, isKey bool) (*ScalarNode
 	token := strings.TrimSpace(p.text[start:p.pos])
 	if token == "" {
 		return nil, p.errorf("empty flow scalar")
+	}
+	if alias, ok := splitAliasIndicator(token); ok {
+		if p.owner == nil {
+			return nil, fmt.Errorf("%w: %s", errFlowAliasResolution, p.errorf("unknown YAML alias *%s (no anchor table in flow context)", alias))
+		}
+		resolved, err := p.owner.resolveAliasNode(alias, loc)
+		if err != nil {
+			return nil, fmt.Errorf("%w: %s", errFlowAliasResolution, p.errorf("%s", err.Error()))
+		}
+		return resolved, nil
 	}
 	val, err := inferScalar(token)
 	if err != nil {

@@ -395,6 +395,111 @@ func TestWiredEphemeralClose_Render(t *testing.T) {
 	}
 }
 
+// TestWiredEphemeralLifecycle_DedupsSharedField asserts the H-5 fix: when one
+// config field backs both a path placeholder and a query/header/cookie param in
+// a Renew/Close mapping, the private-state read is emitted once. Before the fix
+// the same `<field>Bytes, diags := req.Private.GetKey(...)` was emitted twice,
+// a redeclaration compile error.
+func TestWiredEphemeralLifecycle_DedupsSharedField(t *testing.T) {
+	er := wiredEphemeralIRWithPath()
+	er.HasRenew = true
+	er.RenewMapping = &ir.OperationMappingIR{
+		Method:       "POST",
+		PathTemplate: "/secrets/{name}/renew",
+		SuccessCodes: []int{200},
+		// The same "name" field also travels as a query parameter.
+		QueryParams: []ir.ParamIR{{Name: "name", In: "query", Schema: ir.SchemaIR{Type: ir.TypeString}}},
+	}
+	er.HasClose = true
+	er.CloseMapping = &ir.OperationMappingIR{
+		Method:       "DELETE",
+		PathTemplate: "/secrets/{name}",
+		SuccessCodes: []int{204},
+		QueryParams:  []ir.ParamIR{{Name: "name", In: "query", Schema: ir.SchemaIR{Type: ir.TypeString}}},
+	}
+
+	file := EphemeralFile(er, testClientImport)
+	var buf bytes.Buffer
+	if err := file.Render(&buf); err != nil {
+		t.Fatalf("Render() error = %v", err)
+	}
+	got := buf.String()
+
+	// The read-back must appear exactly once per lifecycle body (the path
+	// substitution and the query param share the field). Two bodies (Renew and
+	// Close) each declare their own variable, so the whole-file count is 2; the
+	// H-5 bug emitted the read twice *within* a single body (4 total).
+	marker := "nameBytes, diags := req.Private.GetKey(ctx, \"eidos.param.Name\")"
+	if n := strings.Count(got, marker); n != 2 {
+		t.Errorf("lifecycle bodies emit the private-state read %d times, want 2 (one per Renew/Close body; H-5 redeclaration)\n--- body ---\n%s", n, got)
+	}
+	// Each body must contain exactly one declaration — the redeclaration bug
+	// put two in the same function. Slice each method from its signature to the
+	// next method signature so the two bodies are counted independently.
+	funcs := []string{"func (e *SecretEphemeralResource) Renew", "func (e *SecretEphemeralResource) Close"}
+	for i, method := range funcs {
+		start := strings.Index(got, method)
+		if start < 0 {
+			t.Fatalf("generated code missing %s", method)
+		}
+		end := len(got)
+		if i+1 < len(funcs) {
+			if next := strings.Index(got[start+len(method):], funcs[i+1]); next >= 0 {
+				end = start + len(method) + next
+			}
+		}
+		body := got[start:end]
+		if n := strings.Count(body, marker); n != 1 {
+			t.Errorf("%s body emits the private-state read %d times, want 1 (H-5 redeclaration)\n--- body ---\n%s", method, n, body)
+		}
+	}
+	// The query param still travels on the request.
+	if !strings.Contains(got, `query.Set("name", string(nameBytes))`) {
+		t.Errorf("generated lifecycle body missing query.Set for the shared field\n--- body ---\n%s", got)
+	}
+}
+
+// TestWiredEphemeralLifecycle_SharedField_Compiles generates a full provider
+// module with a wired ephemeral resource whose Renew/Close share one field
+// between a path placeholder and a query param, and compiles it — proving the
+// deduped private-state reads are syntactically valid (H-5).
+func TestWiredEphemeralLifecycle_SharedField_Compiles(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping network-bound compile test in -short mode")
+	}
+	er := wiredEphemeralIRWithPath()
+	er.HasRenew = true
+	er.RenewMapping = &ir.OperationMappingIR{
+		Method:       "POST",
+		PathTemplate: "/secrets/{name}/renew",
+		SuccessCodes: []int{200},
+		QueryParams:  []ir.ParamIR{{Name: "name", In: "query", Schema: ir.SchemaIR{Type: ir.TypeString}}},
+	}
+	er.HasClose = true
+	er.CloseMapping = &ir.OperationMappingIR{
+		Method:       "DELETE",
+		PathTemplate: "/secrets/{name}",
+		SuccessCodes: []int{204},
+		QueryParams:  []ir.ParamIR{{Name: "name", In: "query", Schema: ir.SchemaIR{Type: ir.TypeString}}},
+	}
+	p := sampleProviderWithEphemeralIR(er)
+	tmp := generateWiredEphemeralModule(t, p)
+
+	ctx, cancel := contextWithTimeout(t, 5*time.Minute)
+	defer cancel()
+
+	tidyCmd := exec.CommandContext(ctx, "go", "mod", "tidy")
+	tidyCmd.Dir = tmp
+	if out, err := tidyCmd.CombinedOutput(); err != nil {
+		t.Fatalf("go mod tidy failed: %v\n%s", err, out)
+	}
+	buildCmd := exec.CommandContext(ctx, "go", "build", "./...")
+	buildCmd.Dir = tmp
+	if out, err := buildCmd.CombinedOutput(); err != nil {
+		t.Fatalf("go build ./... failed for shared-field ephemeral lifecycle: %v\n%s", err, out)
+	}
+}
+
 // TestEphemeralLifecycleQueryParamsNoPathNoStrings asserts the M-12 fix: an
 // ephemeral whose Renew/Close carry query/header/cookie parameters but no path
 // placeholders must not set needsStrings/needsURL (strings.ReplaceAll and

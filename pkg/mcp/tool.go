@@ -155,7 +155,7 @@ func GenerateConfigTool() *mcp.Tool {
 //     support parsed tool results.
 //   - error: reserved for protocol-level errors; it is always nil because
 //     application errors are represented as diagnostics inside the result.
-func HandleGenerateConfig(ctx context.Context, _ *mcp.CallToolRequest, args GenerateConfigArgs) (res *mcp.CallToolResult, out GenerateConfigResult, err error) {
+func HandleGenerateConfig(ctx context.Context, req *mcp.CallToolRequest, args GenerateConfigArgs) (res *mcp.CallToolResult, out GenerateConfigResult, err error) {
 	defer func() {
 		if rec := recover(); rec != nil {
 			// Log the panic with a stack trace server-side so a recurring
@@ -168,7 +168,7 @@ func HandleGenerateConfig(ctx context.Context, _ *mcp.CallToolRequest, args Gene
 		}
 	}()
 
-	specBytes, err := normalizeSpec(ctx, args.Spec)
+	specBytes, err := normalizeSpec(ctx, args.Spec, rawArguments(req))
 	if err != nil {
 		res, out = resultFromError(err)
 		return res, out, nil
@@ -263,7 +263,11 @@ func setValidateContextForTest(fn func(context.Context, []byte) api.ValidateResp
 	validateContextMu.Unlock()
 }
 
-func normalizeSpec(ctx context.Context, spec any) ([]byte, error) {
+// normalizeSpec resolves a spec argument into raw spec bytes. rawArgs is the
+// original wire arguments (req.Params.Arguments) when available; it lets the
+// object-shaped spec path recover integer precision that the SDK's float64
+// decode already rounded (L7).
+func normalizeSpec(ctx context.Context, spec any, rawArgs json.RawMessage) ([]byte, error) {
 	if spec == nil {
 		return nil, fmt.Errorf("spec is required")
 	}
@@ -286,11 +290,22 @@ func normalizeSpec(ctx context.Context, spec any) ([]byte, error) {
 	case json.RawMessage:
 		specBytes = []byte(v)
 	case map[string]any:
-		data, err := json.Marshal(v)
-		if err != nil {
-			return nil, fmt.Errorf("failed to marshal spec object: %w", err)
+		// The MCP SDK decodes object arguments into map[string]any with plain
+		// encoding/json, which turns every number into a float64 and silently
+		// rounds integers beyond 2^53 (L7). Re-extract the spec from the raw
+		// wire arguments so integer precision survives the transport boundary,
+		// matching the string-spec path. Fall back to marshaling the decoded
+		// map when the raw arguments are unavailable (e.g. direct handler calls
+		// in tests).
+		if raw, ok := specFromRawArguments(rawArgs); ok {
+			specBytes = raw
+		} else {
+			data, err := json.Marshal(v)
+			if err != nil {
+				return nil, fmt.Errorf("failed to marshal spec object: %w", err)
+			}
+			specBytes = data
 		}
-		specBytes = data
 	default:
 		// Reject scalar or otherwise unsupported types early instead of
 		// letting api.Validate fail with a less helpful parse error.
@@ -300,6 +315,39 @@ func normalizeSpec(ctx context.Context, spec any) ([]byte, error) {
 		return nil, fmt.Errorf("spec exceeds maximum size of %d bytes", maxSpecSize)
 	}
 	return specBytes, nil
+}
+
+// specFromRawArguments extracts the raw JSON bytes of the "spec" argument from
+// the original wire arguments. The SDK decodes object arguments into
+// map[string]any with float64 numbers, which silently rounds integers beyond
+// 2^53; re-decoding the raw bytes preserves them (L7). It returns ok=false when
+// the arguments are absent or the spec is not a JSON object, in which case the
+// caller falls back to marshaling the decoded map.
+func specFromRawArguments(rawArgs json.RawMessage) (json.RawMessage, bool) {
+	if len(rawArgs) == 0 {
+		return nil, false
+	}
+	var args struct {
+		Spec json.RawMessage `json:"spec"`
+	}
+	if err := json.Unmarshal(rawArgs, &args); err != nil {
+		return nil, false
+	}
+	if len(args.Spec) == 0 || args.Spec[0] != '{' {
+		return nil, false
+	}
+	return args.Spec, true
+}
+
+// rawArguments returns the original wire arguments for a tool call, or nil when
+// the request is absent. The SDK decodes object arguments into map[string]any
+// with float64 numbers, so normalizeSpec re-reads the raw bytes to preserve
+// integer precision (L7).
+func rawArguments(req *mcp.CallToolRequest) json.RawMessage {
+	if req == nil || req.Params == nil {
+		return nil
+	}
+	return req.Params.Arguments
 }
 
 // normalizeConfig resolves a generator.yaml input the same way normalizeSpec

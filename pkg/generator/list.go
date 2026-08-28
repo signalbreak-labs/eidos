@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"go/ast"
 	"go/token"
-	"path/filepath"
+	"path"
 	"strings"
 
 	"github.com/signalbreak-labs/eidos/pkg/generator/astgen"
@@ -30,7 +30,7 @@ const listResourceSetBlockFallbackComment = "Set-nested blocks are not supported
 // (planListResourceWiring), the generated List method streams real instances
 // from the API instead of the honest scaffold diagnostic.
 func ListResourceFile(lr ir.ListResourceIR, clientImport string) File {
-	path := filepath.Join("internal", "provider", fmt.Sprintf("list_%s.go", naming.SnakeCase(lr.Name)))
+	path := path.Join("internal", "provider", fmt.Sprintf("list_%s.go", naming.SnakeCase(lr.Name)))
 	file, err := renderEntitySafely(func() (*ast.File, error) {
 		return generateListResourceFile(lr, clientImport), nil
 	})

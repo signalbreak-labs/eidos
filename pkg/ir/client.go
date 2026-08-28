@@ -14,7 +14,6 @@ type ClientIR struct {
 	RetryWaitMin    time.Duration `json:"retry_wait_min,omitempty"`
 	RetryWaitMax    time.Duration `json:"retry_wait_max,omitempty"`
 	Timeout         time.Duration `json:"timeout,omitempty"`
-	AuthMiddleware  []string      `json:"auth_middleware,omitempty"`
 	Pagination      *PaginationIR `json:"pagination,omitempty"`
 	Logging         *LoggingIR    `json:"logging,omitempty"`
 }

@@ -1,177 +1,179 @@
-[
-  {
-    "path": ".github/workflows/release.yml",
-    "reason": "GitHub Actions release workflow",
-    "body_hash": "6cac0e8066f12180"
-  },
-  {
-    "path": ".goreleaser.yml",
-    "reason": "GoReleaser release configuration",
-    "body_hash": "5bc5aa7694f4e57f"
-  },
-  {
-    "path": "GNUmakefile",
-    "reason": "build and test automation",
-    "body_hash": "771e0e9e2aefba94"
-  },
-  {
-    "path": "README.md",
-    "reason": "provider overview and usage guide",
-    "body_hash": "d0b5157703cd4887"
-  },
-  {
-    "path": "docs/actions/delete_item.md",
-    "reason": "documentation for action delete_item",
-    "body_hash": "6350fe30eba4f526"
-  },
-  {
-    "path": "docs/data-sources/get_item.md",
-    "reason": "documentation for data source get_item",
-    "body_hash": "5c44980938778444"
-  },
-  {
-    "path": "docs/data-sources/list_items.md",
-    "reason": "documentation for data source list_items",
-    "body_hash": "f08dc70e18e52899"
-  },
-  {
-    "path": "docs/index.md",
-    "reason": "provider overview and authentication guide",
-    "body_hash": "784a239e2548453a"
-  },
-  {
-    "path": "docs/list-resources/list_items.md",
-    "reason": "documentation for list resource list_items",
-    "body_hash": "2df3db5cc77153fe"
-  },
-  {
-    "path": "examples/actions/delete_item/action.tf",
-    "reason": "example for action delete_item",
-    "body_hash": "39f9c2faa18187a8"
-  },
-  {
-    "path": "examples/data-sources/get_item/data-source.tf",
-    "reason": "example for data source get_item",
-    "body_hash": "f86f405cffee1adc"
-  },
-  {
-    "path": "examples/data-sources/list_items/data-source.tf",
-    "reason": "example for data source list_items",
-    "body_hash": "7e950b7063457393"
-  },
-  {
-    "path": "generator.yaml",
-    "reason": "generated generator configuration",
-    "body_hash": "fc821951565f5bb4"
-  },
-  {
-    "path": "go.mod",
-    "reason": "Go module definition",
-    "body_hash": "c2a4fe7d73f024cd"
-  },
-  {
-    "path": "internal/client/client.go",
-    "reason": "generated HTTP client",
-    "body_hash": "a37c74d3b5e33306"
-  },
-  {
-    "path": "internal/client/client_test.go",
-    "reason": "generated HTTP client unit tests",
-    "body_hash": "0fb890fb4f1b0e58"
-  },
-  {
-    "path": "internal/client/errors.go",
-    "reason": "typed API error helpers",
-    "body_hash": "7b69b0dda148a6d5"
-  },
-  {
-    "path": "internal/client/logging.go",
-    "reason": "request/response trace logging",
-    "body_hash": "9defaf534cc08195"
-  },
-  {
-    "path": "internal/client/logging_test.go",
-    "reason": "trace logging unit tests",
-    "body_hash": "3d1b897c8a09d762"
-  },
-  {
-    "path": "internal/client/models.go",
-    "reason": "request/response model structs",
-    "body_hash": "1efd23827e83c14f"
-  },
-  {
-    "path": "internal/client/pagination.go",
-    "reason": "pagination helpers",
-    "body_hash": "80e851435c7a25d6"
-  },
-  {
-    "path": "internal/client/retry.go",
-    "reason": "retry logic with exponential backoff",
-    "body_hash": "bf53c919903fb008"
-  },
-  {
-    "path": "internal/provider/action_delete_item.go",
-    "reason": "action parameter-types-api_delete_item",
-    "body_hash": "e4b68cfba0d86e28"
-  },
-  {
-    "path": "internal/provider/action_delete_item_remote_test.go",
-    "reason": "coverage tests for action delete_item remote helper",
-    "body_hash": "eac33d1afe06abc9"
-  },
-  {
-    "path": "internal/provider/data_source_get_item.go",
-    "reason": "data source parameter-types-api_get_item",
-    "body_hash": "16792ab9d75b0c05"
-  },
-  {
-    "path": "internal/provider/data_source_get_item_test.go",
-    "reason": "unit tests for data source get_item",
-    "body_hash": "4908c9a4f4a39ba1"
-  },
-  {
-    "path": "internal/provider/data_source_list_items.go",
-    "reason": "data source parameter-types-api_list_items",
-    "body_hash": "34925226da7e180d"
-  },
-  {
-    "path": "internal/provider/data_source_list_items_test.go",
-    "reason": "unit tests for data source list_items",
-    "body_hash": "ba830fddc636be61"
-  },
-  {
-    "path": "internal/provider/list_list_items.go",
-    "reason": "list resource parameter-types-api_list_items",
-    "body_hash": "7967d1e76c05c837"
-  },
-  {
-    "path": "internal/provider/provider.go",
-    "reason": "provider schema and registration",
-    "body_hash": "be208c04519f053e"
-  },
-  {
-    "path": "internal/provider/provider_test.go",
-    "reason": "provider-level unit tests",
-    "body_hash": "7ccdf4ad048c4031"
-  },
-  {
-    "path": "internal/provider/testing_helpers_test.go",
-    "reason": "shared httptest helpers for coverage tests",
-    "body_hash": "608326c51077a78e"
-  },
-  {
-    "path": "internal/provider/validators.go",
-    "reason": "custom schema validators",
-    "body_hash": "94a192299dab9088"
-  },
-  {
-    "path": "main.go",
-    "reason": "provider server entrypoint",
-    "body_hash": "eff3e3e4346d47be"
-  },
-  {
-    "path": "terraform-registry-manifest.json",
-    "reason": "Terraform Registry manifest",
-    "body_hash": "76ac85aa7f3a523b"
-  }
-]
+{
+  "files": [
+    {
+      "path": ".github/workflows/release.yml",
+      "reason": "GitHub Actions release workflow",
+      "body_hash": "6cac0e8066f12180"
+    },
+    {
+      "path": ".goreleaser.yml",
+      "reason": "GoReleaser release configuration",
+      "body_hash": "5bc5aa7694f4e57f"
+    },
+    {
+      "path": "GNUmakefile",
+      "reason": "build and test automation",
+      "body_hash": "771e0e9e2aefba94"
+    },
+    {
+      "path": "README.md",
+      "reason": "provider overview and usage guide",
+      "body_hash": "d0b5157703cd4887"
+    },
+    {
+      "path": "docs/actions/delete_item.md",
+      "reason": "documentation for action delete_item",
+      "body_hash": "6350fe30eba4f526"
+    },
+    {
+      "path": "docs/data-sources/get_item.md",
+      "reason": "documentation for data source get_item",
+      "body_hash": "5c44980938778444"
+    },
+    {
+      "path": "docs/data-sources/list_items.md",
+      "reason": "documentation for data source list_items",
+      "body_hash": "f08dc70e18e52899"
+    },
+    {
+      "path": "docs/index.md",
+      "reason": "provider overview and authentication guide",
+      "body_hash": "784a239e2548453a"
+    },
+    {
+      "path": "docs/list-resources/list_items.md",
+      "reason": "documentation for list resource list_items",
+      "body_hash": "2df3db5cc77153fe"
+    },
+    {
+      "path": "examples/actions/delete_item/action.tf",
+      "reason": "example for action delete_item",
+      "body_hash": "39f9c2faa18187a8"
+    },
+    {
+      "path": "examples/data-sources/get_item/data-source.tf",
+      "reason": "example for data source get_item",
+      "body_hash": "f86f405cffee1adc"
+    },
+    {
+      "path": "examples/data-sources/list_items/data-source.tf",
+      "reason": "example for data source list_items",
+      "body_hash": "7e950b7063457393"
+    },
+    {
+      "path": "generator.yaml",
+      "reason": "generated generator configuration",
+      "body_hash": "fc821951565f5bb4"
+    },
+    {
+      "path": "go.mod",
+      "reason": "Go module definition",
+      "body_hash": "3c2e7ee847a9dc4a"
+    },
+    {
+      "path": "internal/client/client.go",
+      "reason": "generated HTTP client",
+      "body_hash": "8d49aecbcffa7f8d"
+    },
+    {
+      "path": "internal/client/client_test.go",
+      "reason": "generated HTTP client unit tests",
+      "body_hash": "269234701b828124"
+    },
+    {
+      "path": "internal/client/errors.go",
+      "reason": "typed API error helpers",
+      "body_hash": "7b69b0dda148a6d5"
+    },
+    {
+      "path": "internal/client/logging.go",
+      "reason": "request/response trace logging",
+      "body_hash": "9defaf534cc08195"
+    },
+    {
+      "path": "internal/client/logging_test.go",
+      "reason": "trace logging unit tests",
+      "body_hash": "3d1b897c8a09d762"
+    },
+    {
+      "path": "internal/client/models.go",
+      "reason": "request/response model structs",
+      "body_hash": "1efd23827e83c14f"
+    },
+    {
+      "path": "internal/client/pagination.go",
+      "reason": "pagination helpers",
+      "body_hash": "7a1a499684b413ec"
+    },
+    {
+      "path": "internal/client/retry.go",
+      "reason": "retry logic with exponential backoff",
+      "body_hash": "bf53c919903fb008"
+    },
+    {
+      "path": "internal/provider/action_delete_item.go",
+      "reason": "action parameter-types-api_delete_item",
+      "body_hash": "e4b68cfba0d86e28"
+    },
+    {
+      "path": "internal/provider/action_delete_item_remote_test.go",
+      "reason": "coverage tests for action delete_item remote helper",
+      "body_hash": "eac33d1afe06abc9"
+    },
+    {
+      "path": "internal/provider/data_source_get_item.go",
+      "reason": "data source parameter-types-api_get_item",
+      "body_hash": "16792ab9d75b0c05"
+    },
+    {
+      "path": "internal/provider/data_source_get_item_test.go",
+      "reason": "unit tests for data source get_item",
+      "body_hash": "4908c9a4f4a39ba1"
+    },
+    {
+      "path": "internal/provider/data_source_list_items.go",
+      "reason": "data source parameter-types-api_list_items",
+      "body_hash": "34925226da7e180d"
+    },
+    {
+      "path": "internal/provider/data_source_list_items_test.go",
+      "reason": "unit tests for data source list_items",
+      "body_hash": "ba830fddc636be61"
+    },
+    {
+      "path": "internal/provider/list_list_items.go",
+      "reason": "list resource parameter-types-api_list_items",
+      "body_hash": "7967d1e76c05c837"
+    },
+    {
+      "path": "internal/provider/provider.go",
+      "reason": "provider schema and registration",
+      "body_hash": "be208c04519f053e"
+    },
+    {
+      "path": "internal/provider/provider_test.go",
+      "reason": "provider-level unit tests",
+      "body_hash": "7ccdf4ad048c4031"
+    },
+    {
+      "path": "internal/provider/testing_helpers_test.go",
+      "reason": "shared httptest helpers for coverage tests",
+      "body_hash": "608326c51077a78e"
+    },
+    {
+      "path": "internal/provider/validators.go",
+      "reason": "custom schema validators",
+      "body_hash": "94a192299dab9088"
+    },
+    {
+      "path": "main.go",
+      "reason": "provider server entrypoint",
+      "body_hash": "eff3e3e4346d47be"
+    },
+    {
+      "path": "terraform-registry-manifest.json",
+      "reason": "Terraform Registry manifest",
+      "body_hash": "76ac85aa7f3a523b"
+    }
+  ]
+}

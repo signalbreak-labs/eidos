@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/signalbreak-labs/eidos/pkg/generator/astgen"
 	"github.com/signalbreak-labs/eidos/pkg/generator/internal/schema"
 	"github.com/signalbreak-labs/eidos/pkg/ir"
 )
@@ -801,3 +802,102 @@ func contextWithTimeout(t *testing.T, d time.Duration) (context.Context, context
 // compile-time interface checks.
 var _ = ir.ProviderIR{}
 var _ = time.Second
+
+// TestFrameworkAttributeExpr_Branches exercises every branch of
+// frameworkAttributeExpr directly: collection kinds (List/Set/Map) with
+// primitive and object elements, dynamic-element collections, primitive
+// types, discriminated and plain unions, and the empty-schema nil return.
+func TestFrameworkAttributeExpr_Branches(t *testing.T) {
+	render := func(attr ir.AttributeIR) string {
+		expr := frameworkAttributeExpr(attr, "test")
+		if expr == nil {
+			return "<nil>"
+		}
+		b, err := astgen.RenderExpr(expr)
+		if err != nil {
+			t.Fatalf("RenderExpr() error = %v", err)
+		}
+		return string(b)
+	}
+
+	objElem := func() ir.SchemaIR {
+		return ir.SchemaIR{Attributes: []ir.AttributeIR{{Name: "name", Required: true, Schema: ir.SchemaIR{Type: ir.TypeString}}}}
+	}
+	col := func(kind ir.CollectionKind, elem ir.SchemaIR) ir.AttributeIR {
+		return ir.AttributeIR{Name: "a", Optional: true, Schema: ir.SchemaIR{Collection: &ir.CollectionType{Kind: kind, ElementType: elem}}}
+	}
+
+	cases := []struct {
+		name string
+		attr ir.AttributeIR
+		want string
+	}{
+		{"list-primitive", col(ir.List, ir.SchemaIR{Type: ir.TypeString}), "schema.ListAttribute"},
+		{"list-object", col(ir.List, objElem()), "schema.ListNestedAttribute"},
+		{"set-primitive", col(ir.Set, ir.SchemaIR{Type: ir.TypeString}), "schema.SetAttribute"},
+		{"set-object", col(ir.Set, objElem()), "schema.SetNestedAttribute"},
+		{"map-primitive", col(ir.Map, ir.SchemaIR{Type: ir.TypeString}), "schema.MapAttribute"},
+		{"map-object", col(ir.Map, objElem()), "schema.MapNestedAttribute"},
+		{"list-dynamic-element", col(ir.List, ir.SchemaIR{Type: ir.TypeDynamic}), "schema.DynamicAttribute"},
+		{"float", ir.AttributeIR{Name: "a", Optional: true, Schema: ir.SchemaIR{Type: ir.TypeFloat}}, "schema.Float64Attribute"},
+		{"dynamic", ir.AttributeIR{Name: "a", Optional: true, Schema: ir.SchemaIR{Type: ir.TypeDynamic}}, "schema.DynamicAttribute"},
+		{"union-discriminated", ir.AttributeIR{Name: "a", Optional: true, Schema: ir.SchemaIR{Union: &ir.UnionType{
+			Kind: ir.OneOf,
+			Variants: []ir.SchemaIR{
+				{Name: "Cat", Attributes: []ir.AttributeIR{{Name: "lives", Schema: ir.SchemaIR{Type: ir.TypeInt}}}},
+				{Name: "Dog", Attributes: []ir.AttributeIR{{Name: "barks", Schema: ir.SchemaIR{Type: ir.TypeBool}}}},
+			},
+			Discriminator: &ir.DiscriminatorIR{PropertyName: "petType", Mapping: map[string]string{"cat": "#/components/schemas/Cat", "dog": "#/components/schemas/Dog"}},
+		}}}, "schema.SingleNestedAttribute"},
+		{"union-plain", ir.AttributeIR{Name: "a", Optional: true, Schema: ir.SchemaIR{Union: &ir.UnionType{Kind: ir.OneOf, Variants: []ir.SchemaIR{{Type: ir.TypeString}, {Type: ir.TypeInt}}}}}, "schema.DynamicAttribute"},
+		{"empty-schema", ir.AttributeIR{Name: "a", Optional: true, Schema: ir.SchemaIR{}}, "<nil>"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := render(tc.attr)
+			if !strings.Contains(got, tc.want) {
+				t.Errorf("frameworkAttributeExpr() = %q, want substring %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestValidateProviderObjectSchema covers the attribute-error, block-nesting,
+// and block-schema-error branches of validateProviderObjectSchema.
+func TestValidateProviderObjectSchema(t *testing.T) {
+	// Attribute whose schema fails validation propagates the error.
+	err := validateProviderObjectSchema(ir.SchemaIR{
+		Attributes: []ir.AttributeIR{{Name: "bad", Schema: ir.SchemaIR{Type: ir.TypeNull}}},
+	}, "test")
+	if err == nil || !strings.Contains(err.Error(), "test attribute bad") {
+		t.Errorf("attribute error = %v, want error naming the attribute", err)
+	}
+
+	// Supported nesting modes validate the block schema.
+	for _, mode := range []ir.BlockNestingMode{ir.NestingSingle, ir.NestingList, ir.NestingSet} {
+		err := validateProviderObjectSchema(ir.SchemaIR{
+			Blocks: []ir.BlockIR{{Name: "b", NestingMode: mode, Schema: ir.ObjectSchemaIR{}}},
+		}, "test")
+		if err != nil {
+			t.Errorf("block nesting %q: unexpected error %v", mode, err)
+		}
+	}
+
+	// Unsupported nesting mode is rejected.
+	err = validateProviderObjectSchema(ir.SchemaIR{
+		Blocks: []ir.BlockIR{{Name: "b", NestingMode: "map"}},
+	}, "test")
+	if err == nil || !strings.Contains(err.Error(), "unsupported nesting mode") {
+		t.Errorf("unsupported nesting = %v, want error", err)
+	}
+
+	// A block whose schema fails validation wraps the error with the block name.
+	err = validateProviderObjectSchema(ir.SchemaIR{
+		Blocks: []ir.BlockIR{{Name: "b", NestingMode: ir.NestingSingle, Schema: ir.ObjectSchemaIR{
+			Attributes: []ir.AttributeIR{{Name: "bad", Schema: ir.SchemaIR{Type: ir.TypeNull}}},
+		}}},
+	}, "test")
+	if err == nil || !strings.Contains(err.Error(), "test block \"b\"") {
+		t.Errorf("block schema error = %v, want error naming the block", err)
+	}
+}

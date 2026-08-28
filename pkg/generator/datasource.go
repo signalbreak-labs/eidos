@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"go/ast"
 	"go/token"
-	"path/filepath"
+	"path"
 	"strings"
 
 	"github.com/signalbreak-labs/eidos/pkg/generator/astgen"
@@ -27,7 +27,7 @@ var ErrUnknownDatasourceBlockNesting = errors.New("unknown data source block nes
 // DataSourceIR. clientImport is the import path of the generated internal/client
 // package, used when the data source Read is wired to the API client.
 func DataSourceFile(ds ir.DataSourceIR, clientImport string) File {
-	path := filepath.Join("internal", "provider", fmt.Sprintf("data_source_%s.go", naming.SnakeCase(ds.Name)))
+	path := path.Join("internal", "provider", fmt.Sprintf("data_source_%s.go", naming.SnakeCase(ds.Name)))
 	file, err := renderEntitySafely(func() (*ast.File, error) {
 		return generateDataSourceFile(ds, clientImport), nil
 	})
@@ -318,6 +318,12 @@ func dataSourceSchemaValues(ds ir.DataSourceIR) []ast.Expr {
 	elems := []ast.Expr{}
 	if v := litOrOmit(ds.Description); v != nil {
 		elems = append(elems, astgen.KeyValue("MarkdownDescription", v))
+	}
+
+	// A data source whose source operation is deprecated carries a deprecation
+	// message on the schema so practitioners see it in plan output (M-10).
+	if v := litOrOmit(ds.DeprecationMessage); v != nil {
+		elems = append(elems, astgen.KeyValue("DeprecationMessage", v))
 	}
 
 	attrs := ds.Schema.Attributes

@@ -768,7 +768,7 @@ func parameterSchemaFromType(m *MapNode) (*Schema, []Diagnostic) {
 		diags = append(diags, d...)
 	}
 	if enumNode := findEntryValue(m, "enum"); enumNode != nil {
-		schema.Enum = anySlice(enumNode)
+		schema.Enum = v2AnySlice(enumNode, "parameter.enum", &diags)
 	}
 	if def := findEntryValue(m, "default"); def != nil {
 		schema.Default = nodeToNative(def)
@@ -830,7 +830,7 @@ func parseSchema(node Node) (*Schema, []Diagnostic) {
 		MaxProperties:    v2ScalarInt(findEntryValue(m, "maxProperties"), "schema.maxProperties", &diags),
 		MinProperties:    v2ScalarInt(findEntryValue(m, "minProperties"), "schema.minProperties", &diags),
 		Required:         v2StringSlice(findEntryValue(m, "required"), "schema.required", &diags),
-		Enum:             anySlice(findEntryValue(m, "enum")),
+		Enum:             v2AnySlice(findEntryValue(m, "enum"), "schema.enum", &diags),
 		Nullable:         v2ScalarBool(findEntryValue(m, "x-nullable"), "schema.x-nullable", &diags),
 		ReadOnly:         v2ScalarBool(findEntryValue(m, "readOnly"), "schema.readOnly", &diags),
 		WriteOnly:        v2ScalarBool(findEntryValue(m, "writeOnly"), "schema.writeOnly", &diags),
@@ -1387,10 +1387,12 @@ func parseExternalDocs(node Node, diags *[]Diagnostic) *ExternalDocs {
 }
 
 // findEntryValue returns the value node for the given key in a MapNode, or nil.
+// A duplicated key resolves to the last occurrence, matching the converters'
+// last-wins map assignment (H-2).
 func findEntryValue(m *MapNode, key string) Node {
-	for _, entry := range m.Entries {
-		if entry.Key != nil && entry.Key.Value == key {
-			return entry.Value
+	for i := len(m.Entries) - 1; i >= 0; i-- {
+		if m.Entries[i].Key != nil && m.Entries[i].Key.Value == key {
+			return m.Entries[i].Value
 		}
 	}
 	return nil
@@ -1434,16 +1436,25 @@ func stringValue(n Node) string {
 	return ""
 }
 
-func anySlice(n Node) []any {
+// v2AnySlice extracts a sequence of arbitrary values from n, appending warning
+// diagnostics when the node is present but not a sequence or when an item is
+// not a scalar. The prior anySlice returned nil silently for a non-sequence
+// and nulled non-scalar items, so `enum: 5` produced zero diagnostics (M-2).
+func v2AnySlice(n Node, path string, diags *[]Diagnostic) []any {
 	if n == nil {
 		return nil
 	}
 	seq, ok := n.(*SequenceNode)
 	if !ok {
+		*diags = append(*diags, v2ScalarTypeMismatchDiag(n, path, "sequence"))
 		return nil
 	}
 	out := make([]any, 0, len(seq.Items))
 	for _, item := range seq.Items {
+		if _, ok := item.(*ScalarNode); !ok {
+			*diags = append(*diags, v2ScalarTypeMismatchDiag(item, path+" item", "scalar"))
+			continue
+		}
 		out = append(out, scalarValue(item))
 	}
 	return out

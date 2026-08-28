@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/signalbreak-labs/eidos/pkg/ir"
+	"github.com/signalbreak-labs/eidos/pkg/parser"
 )
 
 func TestNormalizeOperationServersInheritsGlobal(t *testing.T) {
@@ -132,5 +133,64 @@ func TestNormalizeOperationServersAllNil(t *testing.T) {
 	got := NormalizeOperationServers(nil, nil, nil)
 	if got != nil {
 		t.Fatalf("expected nil, got %#v", got)
+	}
+}
+
+func TestParserServersToTransformerConvertsVariables(t *testing.T) {
+	in := []parser.Server{
+		{
+			URL:         "https://{region}.api.example.com",
+			Description: "Regional",
+			Variables: map[string]*parser.ServerVariable{
+				"region": {
+					Default:     "us-east-1",
+					Enum:        []string{"us-east-1", "us-west-2"},
+					Description: "Deployment region",
+				},
+			},
+		},
+	}
+	got := parserServersToTransformer(in)
+	want := []Server{
+		{
+			URL:         "https://{region}.api.example.com",
+			Description: "Regional",
+			Variables: map[string]ServerVariable{
+				"region": {
+					Default:     "us-east-1",
+					Enum:        []string{"us-east-1", "us-west-2"},
+					Description: "Deployment region",
+				},
+			},
+		},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("parserServersToTransformer mismatch:\ngot:  %#v\nwant: %#v", got, want)
+	}
+}
+
+func TestParserServersToTransformerNilAndEmpty(t *testing.T) {
+	if got := parserServersToTransformer(nil); got != nil {
+		t.Fatalf("parserServersToTransformer(nil) = %#v, want nil", got)
+	}
+	// An explicit empty (non-nil) slice must stay non-nil so
+	// NormalizeOperationServers honors the empty override.
+	if got := parserServersToTransformer([]parser.Server{}); got == nil {
+		t.Fatal("parserServersToTransformer([]) = nil, want empty non-nil slice")
+	}
+}
+
+func TestParserServersToTransformerSkipsNilVariable(t *testing.T) {
+	in := []parser.Server{
+		{
+			URL: "https://api.example.com",
+			Variables: map[string]*parser.ServerVariable{
+				"region": nil,
+			},
+		},
+	}
+	got := parserServersToTransformer(in)
+	if len(got) != 1 || len(got[0].Variables) != 0 {
+		t.Fatalf("parserServersToTransformer with nil variable = %#v, want empty Variables", got)
 	}
 }

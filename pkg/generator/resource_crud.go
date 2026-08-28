@@ -3,9 +3,11 @@ package generator
 import (
 	"fmt"
 	"go/ast"
+	"go/parser"
 	"go/token"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/signalbreak-labs/eidos/pkg/generator/astgen"
 	"github.com/signalbreak-labs/eidos/pkg/generator/internal/naming"
@@ -247,6 +249,13 @@ func planResourceWiring(r ir.ResourceIR) resourceWiringPlan {
 	plan.read = read
 	plan.delete = del
 	plan.wired = true
+
+	// The create ID fallback extracts the trailing path segment from the
+	// Location header with strings.TrimRight/LastIndex (M-8), so a wired
+	// resource with a string ID attribute needs the strings import.
+	if info := resourceIDFieldInfo(r); info.found && info.primitive == ir.TypeString {
+		plan.needsStrings = true
+	}
 
 	if r.CRUDMapping.Update != nil {
 		if upd, ok := planOperation(r, *r.CRUDMapping.Update); ok {
@@ -1670,6 +1679,72 @@ func xmlBodyStmts(op crudOperationPlan, summary, modelVar string) ([]ast.Stmt, a
 	return stmts, body
 }
 
+// goDurationAST renders a time.Duration as a Go source expression for astgen
+// emission, reusing goDurationExpr (client.go) as the single source of truth
+// for the rendered form so the client and resource files cannot drift. The
+// expressions goDurationExpr produces are always valid Go, so ParseExpr cannot
+// fail; a failure would be a programming error and is surfaced loudly (and
+// caught by renderEntitySafely) rather than silently emitting a wrong duration.
+func goDurationAST(d time.Duration) ast.Expr {
+	expr, err := parser.ParseExpr(goDurationExpr(d))
+	if err != nil {
+		panic(fmt.Sprintf("goDurationExpr(%v) produced unparseable Go: %v", d, err))
+	}
+	return expr
+}
+
+// resourceTimeoutWiringNeedsTime reports whether any wired CRUD method will
+// reference the time package through a timeout default (goDurationExpr renders
+// configured durations as "N * time.Minute" etc.). The timeouts schema block
+// and model field are emitted for any resource with configured timeouts, but
+// the time import is only needed when a wired body actually wires one (M-14).
+func resourceTimeoutWiringNeedsTime(r ir.ResourceIR, wiring resourceWiringPlan) bool {
+	if !wiring.wired || r.Timeouts == nil {
+		return false
+	}
+	if r.Timeouts.Create != nil || r.Timeouts.Read != nil || r.Timeouts.Delete != nil {
+		return true
+	}
+	return r.Timeouts.Update != nil && wiring.update
+}
+
+// resourceTimeoutWiringStmts emits the framework timeout wiring for one CRUD
+// operation: it reads the configured timeout from the model's timeouts block
+// (falling back to the generator.yaml default), surfaces any parse diagnostics,
+// and bounds the remaining HTTP exchange with context.WithTimeout. Emitted only
+// for wired operations with a configured timeout (M-14). modelVar is the plan
+// or state variable whose Timeouts field carries the block value; op is the
+// timeouts.Value accessor (Create/Read/Update/Delete).
+func resourceTimeoutWiringStmts(modelVar, op string, defaultTimeout time.Duration) []ast.Stmt {
+	return []ast.Stmt{
+		astgen.Assign(
+			[]ast.Expr{astgen.Ident("timeout"), astgen.Ident("diags")},
+			[]ast.Expr{astgen.Call(
+				astgen.Selector(astgen.Selector(astgen.Ident(modelVar), "Timeouts"), op),
+				astgen.Ident("ctx"),
+				goDurationAST(defaultTimeout),
+			)},
+		),
+		astgen.ExprStmt(astgen.Call(
+			astgen.Selector(astgen.Selector(astgen.Ident("resp"), "Diagnostics"), "Append"),
+			astgen.Ellipsis(astgen.Ident("diags")),
+		)),
+		astgen.If(
+			astgen.Call(astgen.Selector(astgen.Selector(astgen.Ident("resp"), "Diagnostics"), "HasError")),
+			astgen.Return(),
+		),
+		astgen.Assign(
+			[]ast.Expr{astgen.Ident("ctx"), astgen.Ident("cancel")},
+			[]ast.Expr{astgen.Call(
+				astgen.QualExpr("context", "WithTimeout"),
+				astgen.Ident("ctx"),
+				astgen.Ident("timeout"),
+			)},
+		),
+		astgen.Defer(astgen.Call(astgen.Ident("cancel"))),
+	}
+}
+
 // wiredCreateBody returns the framework Create body: it reads the plan, then
 // delegates the HTTP exchange to createRemote (which writes diagnostics to the
 // same resp), and finally populates the resource identity and stores state.
@@ -1693,6 +1768,12 @@ func wiredCreateBody(r ir.ResourceIR, modelName string) []ast.Stmt {
 			astgen.Call(astgen.Selector(astgen.Selector(astgen.Ident("resp"), "Diagnostics"), "HasError")),
 			astgen.Return(),
 		),
+	)
+	// A configured create timeout bounds the HTTP exchange (M-14).
+	if r.Timeouts != nil && r.Timeouts.Create != nil {
+		stmts = append(stmts, resourceTimeoutWiringStmts("plan", "Create", *r.Timeouts.Create)...)
+	}
+	stmts = append(stmts,
 		astgen.ExprStmt(astgen.Call(
 			astgen.Selector(astgen.Ident("r"), "createRemote"),
 			astgen.Ident("ctx"),
@@ -1769,7 +1850,26 @@ func createIDFallbackStmts(r ir.ResourceIR, modelVar, summary string) []ast.Stmt
 			astgen.Selector(astgen.Selector(astgen.Ident("httpResp"), "Header"), "Get"),
 			astgen.Lit("Location"),
 		))
-		setFromLoc := astgen.Block(astgen.AssignStmt(
+		// The Location header is an absolute URL or absolute path per RFC 7231,
+		// not a bare ID; extract the trailing path segment as the identifier
+		// (M-8). A bare ID with no "/" is left unchanged.
+		trimLoc := astgen.AssignStmt(
+			[]ast.Expr{astgen.Ident("loc")},
+			[]ast.Expr{astgen.Call(astgen.QualExpr("strings", "TrimRight"), astgen.Ident("loc"), astgen.Lit("/"))},
+			token.ASSIGN,
+		)
+		lastSlash := astgen.AssignSingle(astgen.Ident("i"), astgen.Call(
+			astgen.QualExpr("strings", "LastIndex"), astgen.Ident("loc"), astgen.Lit("/"),
+		))
+		extractID := astgen.If(
+			astgen.Binary(astgen.Ident("i"), token.GEQ, astgen.IntLit(0)),
+			astgen.AssignStmt(
+				[]ast.Expr{astgen.Ident("loc")},
+				[]ast.Expr{astgen.SliceExpr(astgen.Ident("loc"), astgen.Binary(astgen.Ident("i"), token.ADD, astgen.IntLit(1)), nil)},
+				token.ASSIGN,
+			),
+		)
+		setFromLoc := astgen.Block(trimLoc, lastSlash, extractID, astgen.AssignStmt(
 			[]ast.Expr{idSel},
 			[]ast.Expr{astgen.Call(astgen.QualExpr("types", "StringValue"), astgen.Ident("loc"))},
 			token.ASSIGN,
@@ -1813,6 +1913,12 @@ func wiredReadBody(r ir.ResourceIR, modelName string) []ast.Stmt {
 			astgen.Call(astgen.Selector(astgen.Selector(astgen.Ident("resp"), "Diagnostics"), "HasError")),
 			astgen.Return(),
 		),
+	)
+	// A configured read timeout bounds the HTTP exchange (M-14).
+	if r.Timeouts != nil && r.Timeouts.Read != nil {
+		stmts = append(stmts, resourceTimeoutWiringStmts("state", "Read", *r.Timeouts.Read)...)
+	}
+	stmts = append(stmts,
 		astgen.If(
 			astgen.Call(
 				astgen.Selector(astgen.Ident("r"), "readRemote"),
@@ -1908,6 +2014,10 @@ func wiredUpdateBody(r ir.ResourceIR, modelName string) []ast.Stmt {
 			astgen.Return(),
 		),
 	}
+	// A configured update timeout bounds the HTTP exchange (M-14).
+	if r.Timeouts != nil && r.Timeouts.Update != nil {
+		stmts = append(stmts, resourceTimeoutWiringStmts("plan", "Update", *r.Timeouts.Update)...)
+	}
 	if preserve := updateIDPreservation(r); preserve != nil {
 		stmts = append(stmts, preserve)
 	}
@@ -1974,7 +2084,7 @@ func wiredUpdateHelperDecl(r ir.ResourceIR, plan resourceWiringPlan, modelName, 
 // wiredDeleteBody returns the framework Delete body: it reads the state, then
 // delegates the HTTP exchange to deleteRemote (which treats a 404 as already
 // deleted and reports other errors via diagnostics).
-func wiredDeleteBody(modelName string) []ast.Stmt {
+func wiredDeleteBody(r ir.ResourceIR, modelName string) []ast.Stmt {
 	stmts := make([]ast.Stmt, 0, 8)
 	stmts = append(stmts,
 		astgen.VarDecl("state", modelName, nil),
@@ -1990,6 +2100,12 @@ func wiredDeleteBody(modelName string) []ast.Stmt {
 			astgen.Call(astgen.Selector(astgen.Selector(astgen.Ident("resp"), "Diagnostics"), "HasError")),
 			astgen.Return(),
 		),
+	)
+	// A configured delete timeout bounds the HTTP exchange (M-14).
+	if r.Timeouts != nil && r.Timeouts.Delete != nil {
+		stmts = append(stmts, resourceTimeoutWiringStmts("state", "Delete", *r.Timeouts.Delete)...)
+	}
+	stmts = append(stmts,
 		astgen.ExprStmt(astgen.Call(
 			astgen.Selector(astgen.Ident("r"), "deleteRemote"),
 			astgen.Ident("ctx"),

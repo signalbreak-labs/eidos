@@ -429,7 +429,7 @@ func wiredListHelperBody(lr ir.ListResourceIR, plan listResourceWiringPlan) []as
 		listFetchAssign("l", plan.read, "config"),
 	)
 	if style != ir.PaginationStyleNone {
-		stmts = append(stmts, listNextAssign(style, "page", "cursor", "next"))
+		stmts = append(stmts, listNextAssign(style, "page", "cursor", "next", plan.read.responseEnvelope))
 	}
 	listArgs := []ast.Expr{astgen.Ident("ctx"), astgen.Ident("params"), astgen.Ident("fetch")}
 	if style == ir.PaginationStyleNone {

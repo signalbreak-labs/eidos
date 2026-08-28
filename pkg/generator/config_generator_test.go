@@ -545,6 +545,78 @@ func TestConvertSecurityScheme_UnknownFallback(t *testing.T) {
 	}
 }
 
+// TestConvertSecurityScheme_PreservesAuthOverrides locks in the M-5 round-trip
+// fix: a user-customized env var (or flow selection) carried on the scheme by
+// transformer.ApplyAuthOverrides is emitted back verbatim instead of being
+// recomputed from the provider prefix, so regeneration does not revert edits.
+func TestConvertSecurityScheme_PreservesAuthOverrides(t *testing.T) {
+	t.Run("apiKey env_var preserved", func(t *testing.T) {
+		ac := convertSecurityScheme("mycloud", ir.SecuritySchemeIR{
+			Name:      "api_key",
+			Type:      ir.SecuritySchemeAPIKey,
+			In:        "header",
+			NameField: "X-API-Key",
+			EnvVar:    "MY_CUSTOM_KEY",
+		})
+		if ac.EnvVar != "MY_CUSTOM_KEY" {
+			t.Errorf("env_var = %q, want preserved MY_CUSTOM_KEY (M-5)", ac.EnvVar)
+		}
+		if ac.HeaderName != "X-API-Key" {
+			t.Errorf("header_name = %q, want X-API-Key", ac.HeaderName)
+		}
+	})
+
+	t.Run("bearer env_var preserved", func(t *testing.T) {
+		ac := convertSecurityScheme("mycloud", ir.SecuritySchemeIR{
+			Name:   "bearer",
+			Type:   ir.SecuritySchemeHTTP,
+			Scheme: "bearer",
+			EnvVar: "MY_CUSTOM_TOKEN",
+		})
+		if ac.EnvVar != "MY_CUSTOM_TOKEN" {
+			t.Errorf("env_var = %q, want preserved MY_CUSTOM_TOKEN (M-5)", ac.EnvVar)
+		}
+	})
+
+	t.Run("oauth2 flow and env hints preserved", func(t *testing.T) {
+		ac := convertSecurityScheme("mycloud", ir.SecuritySchemeIR{
+			Name: "oauth2",
+			Type: ir.SecuritySchemeOAuth2,
+			Flows: &ir.OAuthFlowsIR{
+				ClientCredentials: &ir.OAuthFlowIR{TokenURL: "https://spec.example/token"},
+				Password:          &ir.OAuthFlowIR{TokenURL: "https://override.example/password"},
+			},
+			SelectedFlow:    "password",
+			ClientIDEnv:     "MY_CLIENT_ID",
+			ClientSecretEnv: "MY_CLIENT_SECRET",
+		})
+		if ac.Flow != "password" {
+			t.Errorf("flow = %q, want preserved password (M-5)", ac.Flow)
+		}
+		if ac.TokenURL != "https://override.example/password" {
+			t.Errorf("token_url = %q, want the selected flow's token URL (M-5)", ac.TokenURL)
+		}
+		if ac.ClientIDEnv != "MY_CLIENT_ID" {
+			t.Errorf("client_id_env = %q, want preserved MY_CLIENT_ID (M-5)", ac.ClientIDEnv)
+		}
+		if ac.ClientSecretEnv != "MY_CLIENT_SECRET" {
+			t.Errorf("client_secret_env = %q, want preserved MY_CLIENT_SECRET (M-5)", ac.ClientSecretEnv)
+		}
+	})
+
+	t.Run("oidc client_id_env preserved", func(t *testing.T) {
+		ac := convertSecurityScheme("mycloud", ir.SecuritySchemeIR{
+			Name:             "oidc",
+			Type:             ir.SecuritySchemeOpenIDConnect,
+			OpenIDConnectURL: "https://auth.mycloud.io/.well-known/openid-configuration",
+			ClientIDEnv:      "MY_OIDC_CLIENT_ID",
+		})
+		if ac.ClientIDEnv != "MY_OIDC_CLIENT_ID" {
+			t.Errorf("client_id_env = %q, want preserved MY_OIDC_CLIENT_ID (M-5)", ac.ClientIDEnv)
+		}
+	})
+}
+
 // TestConvertLogging covers the N-68 reverse mapping: nil IR -> nil config (a
 // run without logging declares no logging section), and a LoggingIR with a log
 // file inverts back to Enabled+FilePath so the emitted section round-trips.
@@ -1168,5 +1240,40 @@ func TestWalkSchema_VisitsUnionVariants(t *testing.T) {
 		if names[i] != w {
 			t.Errorf("names[%d] = %q, want %q", i, names[i], w)
 		}
+	}
+}
+
+// TestOAuth2TokenURL covers every branch of oauth2TokenURL: nil flows, each
+// SelectedFlow, the priority-order fallback, and the empty return.
+func TestOAuth2TokenURL(t *testing.T) {
+	flow := func(url string) *ir.OAuthFlowIR { return &ir.OAuthFlowIR{TokenURL: url} }
+	all := &ir.OAuthFlowsIR{
+		Implicit:          flow("https://implicit"),
+		Password:          flow("https://password"),
+		ClientCredentials: flow("https://client"),
+		AuthorizationCode: flow("https://authcode"),
+	}
+
+	cases := []struct {
+		name   string
+		scheme ir.SecuritySchemeIR
+		want   string
+	}{
+		{"nil-flows", ir.SecuritySchemeIR{}, ""},
+		{"selected-client-credentials", ir.SecuritySchemeIR{Flows: all, SelectedFlow: "client_credentials"}, "https://client"},
+		{"selected-password", ir.SecuritySchemeIR{Flows: all, SelectedFlow: "password"}, "https://password"},
+		{"selected-authorization-code", ir.SecuritySchemeIR{Flows: all, SelectedFlow: "authorization_code"}, "https://authcode"},
+		{"selected-implicit", ir.SecuritySchemeIR{Flows: all, SelectedFlow: "implicit"}, "https://implicit"},
+		{"selected-unknown-falls-back", ir.SecuritySchemeIR{Flows: all, SelectedFlow: "nope"}, "https://client"},
+		{"fallback-password-only", ir.SecuritySchemeIR{Flows: &ir.OAuthFlowsIR{Password: flow("https://pw")}}, "https://pw"},
+		{"fallback-authcode-only", ir.SecuritySchemeIR{Flows: &ir.OAuthFlowsIR{AuthorizationCode: flow("https://ac")}}, "https://ac"},
+		{"no-flows-empty", ir.SecuritySchemeIR{Flows: &ir.OAuthFlowsIR{}}, ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := oauth2TokenURL(tc.scheme); got != tc.want {
+				t.Errorf("oauth2TokenURL() = %q, want %q", got, tc.want)
+			}
+		})
 	}
 }

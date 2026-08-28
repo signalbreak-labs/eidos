@@ -186,12 +186,31 @@ func httpAuthStmts(scheme ir.SecuritySchemeIR, byName map[string]ir.AttributeIR,
 // this priority order wins — client_credentials, password, authorization_code —
 // so exactly one interceptor is registered per scheme (a second
 // WithSchemeInterceptor for the same name would silently replace the first).
-// The implicit flow has no generated interceptor: it requires an interactive
-// browser redirect and is deprecated in OAuth 2.1, so it contributes nothing
-// here and stays fail-loud via unsupportedAuthSchemeWarning.
+// A generator.yaml `auth:` flow selection (carried on the scheme as
+// SelectedFlow) overrides the priority order when the scheme declares that
+// flow; an override naming an undeclared flow falls back to the priority order
+// (the mismatch is surfaced as a Warning by transformer.ApplyAuthOverrides at
+// transform time, M-5). The implicit flow has no generated interceptor: it
+// requires an interactive browser redirect and is deprecated in OAuth 2.1, so
+// it contributes nothing here and stays fail-loud via
+// unsupportedAuthSchemeWarning.
 func oauth2Stmts(scheme ir.SecuritySchemeIR, byName map[string]ir.AttributeIR) []ast.Stmt {
 	if scheme.Flows == nil {
 		return nil
+	}
+	switch scheme.SelectedFlow {
+	case "client_credentials":
+		if scheme.Flows.ClientCredentials != nil {
+			return oauth2ClientCredentialsStmts(scheme, byName)
+		}
+	case "password":
+		if scheme.Flows.Password != nil {
+			return oauth2PasswordStmts(scheme, byName)
+		}
+	case "authorization_code":
+		if scheme.Flows.AuthorizationCode != nil {
+			return oauth2AuthorizationCodeRefreshStmts(scheme, byName)
+		}
 	}
 	switch {
 	case scheme.Flows.ClientCredentials != nil:

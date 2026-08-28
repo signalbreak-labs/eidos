@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"go/ast"
 	"go/token"
-	"path/filepath"
+	"path"
 	"strings"
 
 	"github.com/signalbreak-labs/eidos/pkg/generator/astgen"
@@ -19,7 +19,7 @@ import (
 // clientImport is the import path of the generated internal/client package,
 // used when the Invoke body is wired to the API client.
 func ActionFile(a ir.ActionIR, clientImport string) File {
-	path := filepath.Join("internal", "provider", fmt.Sprintf("action_%s.go", naming.SnakeCase(a.Name)))
+	path := path.Join("internal", "provider", fmt.Sprintf("action_%s.go", naming.SnakeCase(a.Name)))
 	file, err := renderEntitySafely(func() (*ast.File, error) {
 		return generateActionFile(a, clientImport), nil
 	})

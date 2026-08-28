@@ -2,7 +2,7 @@ package generator
 
 import (
 	"fmt"
-	"path/filepath"
+	"path"
 
 	"github.com/signalbreak-labs/eidos/pkg/generator/internal/naming"
 	"github.com/signalbreak-labs/eidos/pkg/generator/internal/schema"
@@ -25,7 +25,7 @@ func TerraformTestFile(pir ir.ProviderIR, r ir.ResourceIR, _ BuildConfig) File {
 // the resource's required primitive attributes, and emits the resource under
 // test along with an output for its identifier.
 func TerraformTestModuleFile(pir ir.ProviderIR, r ir.ResourceIR, cfg BuildConfig) File {
-	path := filepath.Join("tests", "modules", naming.SnakeCase(r.Name), "main.tf")
+	path := path.Join("tests", "modules", naming.SnakeCase(r.Name), "main.tf")
 	return staticFile(path, generateTerraformTestModuleHCL(pir, r, cfg))
 }
 

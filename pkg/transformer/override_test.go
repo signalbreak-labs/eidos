@@ -1216,7 +1216,7 @@ func TestApplyOverrides_ListResourceConfigSchema(t *testing.T) {
 			Resource: "pets",
 			ConfigSchema: []config.ListConfigSchema{
 				{Name: "status", Type: "string", Description: "Filter by status"},
-				{Name: "limit", Type: "integer", Optional: true},
+				{Name: "limit", Type: "integer", Optional: boolPtr(true)},
 				{Name: "enabled", Type: "boolean"},
 			},
 		}},
@@ -1276,7 +1276,7 @@ func TestApplyOverrides_ListResourceConfigSchemaUpdatesExisting(t *testing.T) {
 		ListResourceOverrides: []config.ListResourceOverride{{
 			Resource: "pets",
 			ConfigSchema: []config.ListConfigSchema{
-				{Name: "status", Type: "string", Optional: true, Description: "Filter by status"},
+				{Name: "status", Type: "string", Optional: boolPtr(true), Description: "Filter by status"},
 			},
 		}},
 	}
@@ -1297,6 +1297,97 @@ func TestApplyOverrides_ListResourceConfigSchemaUpdatesExisting(t *testing.T) {
 	}
 }
 
+// TestApplyOverrides_ListResourceConfigSchemaDescriptionOnlyPreservesOptional
+// locks in the M-7 fix: a config_schema entry that sets only `description` (no
+// `optional:` key) must not flip an existing spec-optional filter to Required.
+// Before the fix `required := !override.Optional` on a bare bool treated the
+// omitted key as `optional: false` and unconditionally overwrote
+// Required/Optional on the in-place update.
+func TestApplyOverrides_ListResourceConfigSchemaDescriptionOnlyPreservesOptional(t *testing.T) {
+	provider := &ir.ProviderIR{
+		ListResources: []ir.ListResourceIR{{
+			Name:     "pets",
+			TypeName: "pets",
+			ConfigSchema: ir.ObjectSchemaIR{
+				Attributes: []ir.AttributeIR{
+					// Spec-optional filter, as inferred from the OpenAPI query
+					// parameter.
+					{Name: "status", Schema: ir.SchemaIR{Type: ir.TypeString}, Optional: true, Description: "spec text"},
+				},
+			},
+		}},
+	}
+	cfg := &config.Config{
+		Provider: config.ProviderConfig{Name: "test", Version: "0.0.1"},
+		ListResourceOverrides: []config.ListResourceOverride{{
+			Resource: "pets",
+			ConfigSchema: []config.ListConfigSchema{
+				// Description-only override: `optional` omitted.
+				{Name: "status", Type: "string", Description: "Filter by status"},
+			},
+		}},
+	}
+
+	if err := ApplyOverrides(provider, cfg); err != nil {
+		t.Fatalf("ApplyOverrides() = %v, want nil", err)
+	}
+
+	attrs := provider.ListResources[0].ConfigSchema.Attributes
+	if len(attrs) != 1 {
+		t.Fatalf("attribute count = %d, want 1", len(attrs))
+	}
+	if attrs[0].Required {
+		t.Errorf("description-only override flipped existing optional filter to Required (M-7)")
+	}
+	if !attrs[0].Optional {
+		t.Errorf("existing attribute Optional = false, want true (M-7)")
+	}
+	if attrs[0].Description != "Filter by status" {
+		t.Errorf("existing attribute Description = %q, want %q", attrs[0].Description, "Filter by status")
+	}
+}
+
+// TestApplyOverrides_ListResourceConfigSchemaExplicitOptionalFalse locks in the
+// M-7 counterpart: an explicit `optional: false` still flips the existing
+// attribute to Required — the pointer distinguishes "omitted" from "false".
+func TestApplyOverrides_ListResourceConfigSchemaExplicitOptionalFalse(t *testing.T) {
+	provider := &ir.ProviderIR{
+		ListResources: []ir.ListResourceIR{{
+			Name:     "pets",
+			TypeName: "pets",
+			ConfigSchema: ir.ObjectSchemaIR{
+				Attributes: []ir.AttributeIR{
+					{Name: "status", Schema: ir.SchemaIR{Type: ir.TypeString}, Optional: true, Description: "spec text"},
+				},
+			},
+		}},
+	}
+	cfg := &config.Config{
+		Provider: config.ProviderConfig{Name: "test", Version: "0.0.1"},
+		ListResourceOverrides: []config.ListResourceOverride{{
+			Resource: "pets",
+			ConfigSchema: []config.ListConfigSchema{
+				{Name: "status", Type: "string", Optional: boolPtr(false)},
+			},
+		}},
+	}
+
+	if err := ApplyOverrides(provider, cfg); err != nil {
+		t.Fatalf("ApplyOverrides() = %v, want nil", err)
+	}
+
+	attrs := provider.ListResources[0].ConfigSchema.Attributes
+	if len(attrs) != 1 {
+		t.Fatalf("attribute count = %d, want 1", len(attrs))
+	}
+	if !attrs[0].Required {
+		t.Errorf("explicit optional: false must flip existing attribute to Required")
+	}
+	if attrs[0].Optional {
+		t.Errorf("explicit optional: false must clear Optional")
+	}
+}
+
 func TestApplyOverrides_ListResourceByOperation(t *testing.T) {
 	provider := &ir.ProviderIR{
 		ListResources: []ir.ListResourceIR{
@@ -1312,7 +1403,7 @@ func TestApplyOverrides_ListResourceByOperation(t *testing.T) {
 				Style: "cursor",
 			},
 			ConfigSchema: []config.ListConfigSchema{
-				{Name: "query", Type: "string", Optional: true},
+				{Name: "query", Type: "string", Optional: boolPtr(true)},
 			},
 		}},
 	}
@@ -2096,12 +2187,15 @@ func polymorphicPetResource() ir.ResourceIR {
 						Union: &ir.UnionType{
 							Kind: ir.OneOf,
 							Variants: []ir.SchemaIR{
+								// Variant attributes are snake_cased by the schema
+								// conversion, as in the live pipeline; the raw
+								// discriminator PropertyName stays camelCase.
 								{Name: "Cat", Attributes: []ir.AttributeIR{
-									{Name: "petType", Schema: ir.SchemaIR{Type: ir.TypeString}},
+									{Name: "pet_type", Schema: ir.SchemaIR{Type: ir.TypeString}},
 									{Name: "lives_remaining", Schema: ir.SchemaIR{Type: ir.TypeInt}},
 								}},
 								{Name: "Dog", Attributes: []ir.AttributeIR{
-									{Name: "petType", Schema: ir.SchemaIR{Type: ir.TypeString}},
+									{Name: "pet_type", Schema: ir.SchemaIR{Type: ir.TypeString}},
 									{Name: "bark_volume", Schema: ir.SchemaIR{Type: ir.TypeInt}},
 								}},
 							},
@@ -2245,7 +2339,7 @@ func TestOverrideDescriptionDoesNotEraseSpecText(t *testing.T) {
 		lr := &ir.ListResourceIR{ConfigSchema: ir.ObjectSchemaIR{Attributes: []ir.AttributeIR{
 			{Name: "limit", Description: specText, Schema: ir.SchemaIR{Type: ir.TypeInt}},
 		}}}
-		applyListResourceConfigSchema(lr, []config.ListConfigSchema{{Name: "limit", Type: "int64", Optional: true}})
+		applyListResourceConfigSchema(lr, []config.ListConfigSchema{{Name: "limit", Type: "int64", Optional: boolPtr(true)}})
 		attr, ok := findAttr(lr.ConfigSchema.Attributes, "limit")
 		if !ok {
 			t.Fatal("limit attribute not found")
@@ -2259,7 +2353,7 @@ func TestOverrideDescriptionDoesNotEraseSpecText(t *testing.T) {
 		lr := &ir.ListResourceIR{ConfigSchema: ir.ObjectSchemaIR{Attributes: []ir.AttributeIR{
 			{Name: "limit", Description: specText, Schema: ir.SchemaIR{Type: ir.TypeInt}},
 		}}}
-		applyListResourceConfigSchema(lr, []config.ListConfigSchema{{Name: "limit", Type: "int64", Optional: true, Description: "Override wins."}})
+		applyListResourceConfigSchema(lr, []config.ListConfigSchema{{Name: "limit", Type: "int64", Optional: boolPtr(true), Description: "Override wins."}})
 		attr, _ := findAttr(lr.ConfigSchema.Attributes, "limit")
 		if attr.Description != "Override wins." {
 			t.Errorf("description = %q, want the override text", attr.Description)
