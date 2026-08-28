@@ -43,7 +43,7 @@
     {
       "path": "docs/list-resources/list_items.md",
       "reason": "documentation for list resource list_items",
-      "body_hash": "2df3db5cc77153fe"
+      "body_hash": "a24115fbd1e4b964"
     },
     {
       "path": "examples/actions/delete_item/action.tf",
@@ -63,7 +63,7 @@
     {
       "path": "generator.yaml",
       "reason": "generated generator configuration",
-      "body_hash": "fc821951565f5bb4"
+      "body_hash": "bdd0dc7ee1f3c552"
     },
     {
       "path": "go.mod",
@@ -143,7 +143,7 @@
     {
       "path": "internal/provider/list_list_items.go",
       "reason": "list resource parameter-types-api_list_items",
-      "body_hash": "7967d1e76c05c837"
+      "body_hash": "57cbef66c3a09d00"
     },
     {
       "path": "internal/provider/provider.go",

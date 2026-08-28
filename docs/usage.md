@@ -1243,6 +1243,18 @@ keep previews self-contained.
 
 Pass `--force` to replace an existing `generator.yaml`.
 
+### Warning: required readOnly property cannot be both input and output-only
+
+The spec lists a property in `required` and also marks it `readOnly`. A
+readOnly property is not a practitioner input, so eidos cannot honor the
+required constraint on the request body. The generated schema treats that
+body field as Computed.
+
+If the same name is also a required query or header parameter on create,
+read, update, or delete, the Terraform attribute is Required so the generated
+request can send it. Otherwise, fix the spec: drop the property from
+`required`, or drop `readOnly` if practitioners must supply it.
+
 ### Duplicate operationIds fail generation
 
 Two operations that share an `operationId` (or whose `operationId`s normalize

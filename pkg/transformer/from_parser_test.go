@@ -1416,6 +1416,210 @@ func TestUnwrapResponseEnvelope(t *testing.T) {
 	}
 }
 
+// TestUnwrapResponseEnvelope_CollectionContext locks in issue #40: a collection
+// response shaped {<items>: [...], context: {...}} is an envelope, not a
+// two-field resource. Unwrap it to the item array so list resources can wire.
+// {object, context} stays wrapped — that is a real two-field resource.
+func TestUnwrapResponseEnvelope_CollectionContext(t *testing.T) {
+	item := &SchemaSpec{
+		Type: "object",
+		Properties: map[string]SchemaSpec{
+			"id":   {Type: "string"},
+			"name": {Type: "string"},
+		},
+	}
+	mapsArray := SchemaSpec{Type: "array", Items: item}
+	contextObj := SchemaSpec{
+		Type:       "object",
+		Properties: map[string]SchemaSpec{"offset": {Type: "integer"}},
+	}
+
+	t.Run("{maps, context} unwraps to the maps array", func(t *testing.T) {
+		spec := &SchemaSpec{
+			Type: "object",
+			Properties: map[string]SchemaSpec{
+				"maps":    mapsArray,
+				"context": contextObj,
+			},
+		}
+		got, key := UnwrapResponseEnvelope(spec, nil)
+		if key != "maps" {
+			t.Errorf("envelope key = %q, want %q", key, "maps")
+		}
+		if got == nil || !strings.EqualFold(got.Type, "array") {
+			t.Fatalf("unwrapped type = %v, want array", got)
+		}
+		if got.Items == nil || len(got.Items.Properties) != 2 {
+			t.Errorf("unwrapped array items should expose the map object, got %+v", got.Items)
+		}
+	})
+
+	t.Run("{maps, context, meta} unwraps (meta is a companion)", func(t *testing.T) {
+		spec := &SchemaSpec{
+			Type: "object",
+			Properties: map[string]SchemaSpec{
+				"maps":    mapsArray,
+				"context": contextObj,
+				"meta":    {Type: "object", Properties: map[string]SchemaSpec{"total": {Type: "integer"}}},
+			},
+		}
+		got, key := UnwrapResponseEnvelope(spec, nil)
+		if key != "maps" {
+			t.Errorf("envelope key = %q, want %q", key, "maps")
+		}
+		if got == nil || !strings.EqualFold(got.Type, "array") {
+			t.Fatalf("unwrapped type = %v, want array", got)
+		}
+	})
+
+	t.Run("{data, context} unwraps to the data array", func(t *testing.T) {
+		spec := &SchemaSpec{
+			Type: "object",
+			Properties: map[string]SchemaSpec{
+				"data":    mapsArray,
+				"context": contextObj,
+			},
+		}
+		got, key := UnwrapResponseEnvelope(spec, nil)
+		if key != "data" {
+			t.Errorf("envelope key = %q, want %q", key, "data")
+		}
+		if got == nil || !strings.EqualFold(got.Type, "array") {
+			t.Fatalf("unwrapped type = %v, want array", got)
+		}
+	})
+
+	t.Run("{agent, context} is NOT unwrapped (object payload, not a collection)", func(t *testing.T) {
+		spec := &SchemaSpec{
+			Type: "object",
+			Properties: map[string]SchemaSpec{
+				"agent":   innerObjectSpec(),
+				"context": contextObj,
+			},
+		}
+		got, key := UnwrapResponseEnvelope(spec, nil)
+		if key != "" {
+			t.Errorf("envelope key = %q, want empty (real two-field resource)", key)
+		}
+		if got != spec {
+			t.Errorf("spec should be returned unchanged, got %+v", got)
+		}
+	})
+
+	t.Run("{maps, clusters, context} is NOT unwrapped (two arrays)", func(t *testing.T) {
+		spec := &SchemaSpec{
+			Type: "object",
+			Properties: map[string]SchemaSpec{
+				"maps":     mapsArray,
+				"clusters": mapsArray,
+				"context":  contextObj,
+			},
+		}
+		got, key := UnwrapResponseEnvelope(spec, nil)
+		if key != "" {
+			t.Errorf("envelope key = %q, want empty (ambiguous collection)", key)
+		}
+		if got != spec {
+			t.Errorf("spec should be returned unchanged, got %+v", got)
+		}
+	})
+}
+
+func innerObjectSpec() SchemaSpec {
+	return SchemaSpec{
+		Type: "object",
+		Properties: map[string]SchemaSpec{
+			"uuid": {Type: "string"},
+			"name": {Type: "string"},
+		},
+	}
+}
+
+// TestOperationsFromSpec_RequiredReadOnlyPropertyWarns locks in issue #40's
+// spec-hygiene diagnostic: a property listed in required that is also
+// readOnly is a contradiction. Fail loud so spec authors see it instead of
+// silently resolving the conflict to Computed or Required.
+func TestOperationsFromSpec_RequiredReadOnlyPropertyWarns(t *testing.T) {
+	spec := &parser.Spec{
+		Paths: map[string]*parser.PathItem{
+			"/clients": {
+				Post: &parser.Operation{
+					OperationID: "createClient",
+					RequestBody: &parser.RequestBody{
+						Content: map[string]*parser.MediaType{
+							"application/json": {Schema: &parser.Schema{
+								Type:     "object",
+								Required: []string{"clusterId", "name"},
+								Properties: map[string]*parser.Schema{
+									"clusterId": {Type: "string", ReadOnly: true},
+									"name":      {Type: "string"},
+								},
+							}},
+						},
+					},
+					Responses: map[string]*parser.Response{
+						"201": {Description: "created"},
+					},
+				},
+			},
+		},
+	}
+
+	_, diags := OperationsFromSpecWithDiagnostics(spec)
+	var saw bool
+	for _, d := range diags {
+		if d.Severity == diagnostics.Warning &&
+			strings.Contains(d.Summary, "required") &&
+			strings.Contains(strings.ToLower(d.Summary), "readonly") {
+			saw = true
+			if !strings.Contains(d.Detail, "clusterId") {
+				t.Errorf("warning detail should name clusterId, got: %s", d.Detail)
+			}
+		}
+	}
+	if !saw {
+		t.Errorf("expected a required+readOnly warning, got diagnostics: %+v", diags)
+	}
+}
+
+// TestOperationsFromSpec_RequiredReadOnlyAbsentWhenNotBoth asserts a required
+// writable property, or a readOnly property that is not required, does not
+// emit the required+readOnly warning.
+func TestOperationsFromSpec_RequiredReadOnlyAbsentWhenNotBoth(t *testing.T) {
+	spec := &parser.Spec{
+		Paths: map[string]*parser.PathItem{
+			"/clients": {
+				Post: &parser.Operation{
+					OperationID: "createClient",
+					RequestBody: &parser.RequestBody{
+						Content: map[string]*parser.MediaType{
+							"application/json": {Schema: &parser.Schema{
+								Type:     "object",
+								Required: []string{"name"},
+								Properties: map[string]*parser.Schema{
+									"clusterId": {Type: "string", ReadOnly: true},
+									"name":      {Type: "string"},
+								},
+							}},
+						},
+					},
+					Responses: map[string]*parser.Response{
+						"201": {Description: "created"},
+					},
+				},
+			},
+		},
+	}
+
+	_, diags := OperationsFromSpecWithDiagnostics(spec)
+	for _, d := range diags {
+		if strings.Contains(strings.ToLower(d.Summary), "readonly") &&
+			strings.Contains(d.Summary, "required") {
+			t.Errorf("did not expect a required+readOnly warning, got: %+v", d)
+		}
+	}
+}
+
 // TestMergeAllOfSpecProperties_Descriptions covers the interaction between the
 // allOf first-wins property merge and property descriptions: prose alone must
 // not read as a structural conflict (at any depth), a documented member must

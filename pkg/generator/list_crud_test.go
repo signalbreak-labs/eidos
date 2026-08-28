@@ -86,6 +86,28 @@ func TestPlanListResourceWiring(t *testing.T) {
 			t.Fatal("plan.wired = true, want false (required query param with no matching attribute)")
 		}
 	})
+
+	t.Run("required query param with matching config attribute wires", func(t *testing.T) {
+		lr := wiredListResourceIR()
+		lr.ConfigSchema.Attributes = append(lr.ConfigSchema.Attributes, ir.AttributeIR{
+			Name:     "cluster_id",
+			Required: true,
+			Schema:   ir.SchemaIR{Type: ir.TypeString},
+		})
+		lr.ListMapping.QueryParams = append(lr.ListMapping.QueryParams, ir.ParamIR{
+			Name:     "clusterId",
+			In:       "query",
+			Required: true,
+			Schema:   ir.SchemaIR{Type: ir.TypeString},
+		})
+		plan := planListResourceWiring(lr)
+		if !plan.wired {
+			t.Fatal("plan.wired = false, want true (required clusterId maps to cluster_id)")
+		}
+		if !plan.hasConfigModel {
+			t.Fatal("plan.hasConfigModel = false, want true")
+		}
+	})
 }
 
 // TestListIdentityKeys locks in the identity-key probing order: the wire name

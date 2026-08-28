@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.3](https://github.com/signalbreak-labs/eidos/compare/v0.5.2...v0.5.3) (2026-08-26)
+
+
+### Bug Fixes
+
+* correct acceptance-test generation against real-world schemas ([#41](https://github.com/signalbreak-labs/eidos/issues/41)) ([b13663d](https://github.com/signalbreak-labs/eidos/commit/b13663d33a9f2c477df727daabc51e55b66ff420))
+* **transformer:** keep required query params on schema ([#43](https://github.com/signalbreak-labs/eidos/issues/43)) ([7039542](https://github.com/signalbreak-labs/eidos/commit/7039542fa3378ab3ae9f954c64bb6b13ef7a523c))
+
 ## [0.5.2](https://github.com/signalbreak-labs/eidos/compare/v0.5.1...v0.5.2) (2026-08-25)
 
 

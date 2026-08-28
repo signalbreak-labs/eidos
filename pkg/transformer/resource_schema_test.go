@@ -1003,3 +1003,212 @@ func TestResultSchemaFromResponseDedupsSnakeCaseCollisions(t *testing.T) {
 		t.Errorf("expected a duplicate-attribute Warning, got %v", diags)
 	}
 }
+
+// TestManagedResourceSchema_RequiredQueryParamForcesRequired locks in that a
+// required query parameter that shares a name with a response/body property
+// must be Required on the managed resource, not Optional+Computed. Specs
+// commonly declare a parent-scope id (clusterId, tenantId, accountId) as a
+// required query param on create while the body property is readOnly and not
+// in the body's required list.
+func TestManagedResourceSchema_RequiredQueryParamForcesRequired(t *testing.T) {
+	c := mapCRUDWithClusterQuery(true)
+	schema, _ := ManagedResourceSchema(c)
+
+	clusterID, ok := findAttr(schema.Attributes, "cluster_id")
+	if !ok {
+		t.Fatalf("no cluster_id attribute in schema: %+v", schema.Attributes)
+	}
+	if !clusterID.Required || clusterID.Optional || clusterID.Computed {
+		t.Errorf("cluster_id must be Required (required query param), got Required=%v Optional=%v Computed=%v",
+			clusterID.Required, clusterID.Optional, clusterID.Computed)
+	}
+	name, ok := findAttr(schema.Attributes, "name")
+	if !ok {
+		t.Fatal("no name attribute in schema")
+	}
+	if !name.Required || name.Computed || name.Optional {
+		t.Errorf("name must stay Required (body required), got Required=%v Optional=%v Computed=%v",
+			name.Required, name.Optional, name.Computed)
+	}
+}
+
+// TestManagedResourceSchema_RequiredQueryParamAppended locks in that a required
+// query parameter with no matching body/response property is added as a
+// Required attribute so the generated request can send it.
+func TestManagedResourceSchema_RequiredQueryParamAppended(t *testing.T) {
+	c := mapCRUDWithClusterQuery(true)
+	// Drop clusterId from the body and response so it exists only as a query param.
+	c.Create.RequestSchema = &SchemaSpec{
+		Type:     "object",
+		Required: []string{"name"},
+		Properties: map[string]SchemaSpec{
+			"name": {Type: "string"},
+		},
+	}
+	c.Read.ResponseSchema = &SchemaSpec{
+		Type: "object",
+		Properties: map[string]SchemaSpec{
+			"id":   {Type: "string"},
+			"name": {Type: "string"},
+		},
+	}
+
+	schema, _ := ManagedResourceSchema(c)
+	clusterID, ok := findAttr(schema.Attributes, "cluster_id")
+	if !ok {
+		t.Fatalf("required query param clusterId was dropped from the schema: %+v", schema.Attributes)
+	}
+	if !clusterID.Required || clusterID.Optional || clusterID.Computed {
+		t.Errorf("appended cluster_id must be Required, got Required=%v Optional=%v Computed=%v",
+			clusterID.Required, clusterID.Optional, clusterID.Computed)
+	}
+	if clusterID.WireName != "clusterId" {
+		t.Errorf("cluster_id WireName = %q, want clusterId", clusterID.WireName)
+	}
+	if clusterID.Description != "id of the defining cluster" {
+		t.Errorf("cluster_id description = %q, want the query param's description", clusterID.Description)
+	}
+}
+
+// TestManagedResourceSchema_OptionalQueryParamAppended locks in that an
+// optional query parameter with no matching body/response property is added
+// as Optional so it can be sent when the practitioner sets it.
+func TestManagedResourceSchema_OptionalQueryParamAppended(t *testing.T) {
+	c := mapCRUDWithClusterQuery(false)
+	c.Create.Parameters = []Parameter{
+		{Name: "page", In: "query", Type: "integer", Description: "page number"},
+	}
+
+	schema, _ := ManagedResourceSchema(c)
+	page, ok := findAttr(schema.Attributes, "page")
+	if !ok {
+		t.Fatalf("optional query param page was dropped from the schema: %+v", schema.Attributes)
+	}
+	if !page.Optional || page.Required || page.Computed {
+		t.Errorf("appended page must be Optional, got Required=%v Optional=%v Computed=%v",
+			page.Required, page.Optional, page.Computed)
+	}
+}
+
+// TestManagedResourceSchema_RequiredQueryParamOnUpdateOnly still forces
+// Required when only the update operation declares the required query param.
+func TestManagedResourceSchema_RequiredQueryParamOnUpdateOnly(t *testing.T) {
+	c := mapCRUDWithClusterQuery(false)
+	c.Update = &Operation{
+		Method: MethodPut,
+		Path:   "/maps/{id}",
+		Parameters: []Parameter{
+			{Name: "clusterId", In: "query", Required: true, Type: "string"},
+		},
+	}
+
+	schema, _ := ManagedResourceSchema(c)
+	clusterID, ok := findAttr(schema.Attributes, "cluster_id")
+	if !ok {
+		t.Fatalf("no cluster_id attribute in schema: %+v", schema.Attributes)
+	}
+	if !clusterID.Required || clusterID.Optional || clusterID.Computed {
+		t.Errorf("cluster_id must be Required (required on update), got Required=%v Optional=%v Computed=%v",
+			clusterID.Required, clusterID.Optional, clusterID.Computed)
+	}
+}
+
+// TestManagedResourceSchema_RequiredHeaderParamForcesRequired covers header
+// parameters the same way as query parameters: a required header that maps to
+// an existing attribute is Required, not Optional+Computed.
+func TestManagedResourceSchema_RequiredHeaderParamForcesRequired(t *testing.T) {
+	c := mapCRUDWithClusterQuery(false)
+	c.Create.Parameters = []Parameter{
+		{Name: "X-Cluster-Id", In: "header", Required: true, Type: "string", Description: "target cluster"},
+	}
+	c.Read.ResponseSchema.Properties["X-Cluster-Id"] = SchemaSpec{Type: "string"}
+
+	schema, _ := ManagedResourceSchema(c)
+	attr, ok := findAttr(schema.Attributes, "x_cluster_id")
+	if !ok {
+		t.Fatalf("no x_cluster_id attribute in schema: %+v", schema.Attributes)
+	}
+	if !attr.Required || attr.Optional || attr.Computed {
+		t.Errorf("x_cluster_id must be Required (required header), got Required=%v Optional=%v Computed=%v",
+			attr.Required, attr.Optional, attr.Computed)
+	}
+}
+
+// TestManagedResourceSchema_ReadOnlyBodyPropertyIsComputed locks in that a
+// readOnly request-body property is not a practitioner input. Without a
+// matching required query param it is Computed-only, not Optional+Computed.
+func TestManagedResourceSchema_ReadOnlyBodyPropertyIsComputed(t *testing.T) {
+	c := mapCRUDWithClusterQuery(false)
+	schema, _ := ManagedResourceSchema(c)
+	clusterID, ok := findAttr(schema.Attributes, "cluster_id")
+	if !ok {
+		t.Fatalf("no cluster_id attribute in schema: %+v", schema.Attributes)
+	}
+	if !clusterID.Computed || clusterID.Required || clusterID.Optional {
+		t.Errorf("readOnly cluster_id with no required query param must be Computed-only, got Required=%v Optional=%v Computed=%v",
+			clusterID.Required, clusterID.Optional, clusterID.Computed)
+	}
+}
+
+// TestManagedResourceSchema_OptionalQueryParamDoesNotDemoteRequired keeps a
+// body-required attribute Required when an optional query param collides
+// with the same sanitized name.
+func TestManagedResourceSchema_OptionalQueryParamDoesNotDemoteRequired(t *testing.T) {
+	c := mapCRUDWithClusterQuery(false)
+	c.Create.Parameters = []Parameter{
+		{Name: "name", In: "query", Type: "string"},
+	}
+	schema, _ := ManagedResourceSchema(c)
+	name, ok := findAttr(schema.Attributes, "name")
+	if !ok {
+		t.Fatal("no name attribute in schema")
+	}
+	if !name.Required || name.Optional || name.Computed {
+		t.Errorf("name must stay Required, got Required=%v Optional=%v Computed=%v",
+			name.Required, name.Optional, name.Computed)
+	}
+}
+
+// mapCRUDWithClusterQuery is a managed resource whose clusterId is a readOnly
+// body/response property (not in the body's required list). When requiredQuery
+// is true the create operation also declares clusterId as a required query
+// parameter — the same parent-scope query pattern many collection APIs use.
+func mapCRUDWithClusterQuery(requiredQuery bool) ResourceCRUD {
+	create := &Operation{
+		Method: MethodPost,
+		Path:   "/maps",
+		RequestSchema: &SchemaSpec{
+			Type:     "object",
+			Required: []string{"name"},
+			Properties: map[string]SchemaSpec{
+				"name":      {Type: "string"},
+				"clusterId": {Type: "string", ReadOnly: true, Description: "id of the defining cluster"},
+			},
+		},
+	}
+	if requiredQuery {
+		create.Parameters = []Parameter{
+			{Name: "clusterId", In: "query", Required: true, Type: "string", Description: "id of the defining cluster"},
+		}
+	}
+	return ResourceCRUD{
+		Name:           "map",
+		CollectionPath: "/maps",
+		InstancePath:   "/maps/{id}",
+		Create:         create,
+		Read: &Operation{
+			Method: MethodGet,
+			Path:   "/maps/{id}",
+			ResponseSchema: &SchemaSpec{
+				Type: "object",
+				Properties: map[string]SchemaSpec{
+					"id":        {Type: "string"},
+					"name":      {Type: "string"},
+					"clusterId": {Type: "string", ReadOnly: true, Description: "id of the defining cluster"},
+				},
+			},
+		},
+		Delete: &Operation{Method: MethodDelete, Path: "/maps/{id}"},
+		ID:     IDInfo{Kind: IDSimple, ParameterNames: []string{"id"}, AttributeName: "id", ImportFormat: "%s"},
+	}
+}

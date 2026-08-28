@@ -380,6 +380,11 @@ func ManagedResourceSchemaWithDiagnostics(c ResourceCRUD, diags *diagnostics.Dia
 	// wraps its payload (e.g. library elements: {result: {...}}) exposes no
 	// writable attributes and cannot be configured.
 	attrs = appendRequestOnlyAttributes(attrs, requestSpec, requestRequired, stateSpec)
+	// Query and header parameters on create/read/update/delete are inputs the
+	// generated request always sends when required. Fold them into the schema
+	// so a required query or header param is Required rather than silently
+	// Optional+Computed from a readOnly body echo of the same name.
+	attrs = reconcileOperationParameters(attrs, c)
 
 	resolvedID := idAttribute
 	if hasID {
@@ -574,6 +579,9 @@ func appendRequestOnlyAttributes(attrs []ir.AttributeIR, requestSpec *SchemaSpec
 	}
 	sort.Strings(names)
 	for _, name := range names {
+		if requestSpec.Properties[name].ReadOnly {
+			continue // readOnly request fields are not practitioner inputs
+		}
 		if _, inState := stateSpec.Properties[name]; inState {
 			continue // already reconciled from the state shape
 		}
@@ -604,6 +612,117 @@ func appendRequestOnlyAttributes(attrs []ir.AttributeIR, requestSpec *SchemaSpec
 	return attrs
 }
 
+// reconcileOperationParameters folds query and header parameters from the
+// resource's CRUD operations into the schema. A required parameter that
+// matches an existing attribute is forced Required (Optional and Computed
+// are cleared) so the practitioner must supply the value the generated
+// request always sends. A parameter with no matching attribute is appended
+// as Required or Optional. Path parameters are identifiers already handled
+// by the id-attribute logic and are skipped.
+func reconcileOperationParameters(attrs []ir.AttributeIR, c ResourceCRUD) []ir.AttributeIR {
+	merged := collectOperationParameters(c)
+	names := make([]string, 0, len(merged))
+	for name := range merged {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	byName := make(map[string]int, len(attrs))
+	for i, a := range attrs {
+		byName[a.Name] = i
+	}
+	for _, snake := range names {
+		p := merged[snake]
+		if idx, ok := byName[snake]; ok {
+			attrs[idx] = applyParamFlags(attrs[idx], p)
+			continue
+		}
+		attrs = append(attrs, newAttributeFromParam(snake, p))
+		byName[snake] = len(attrs) - 1
+	}
+	return attrs
+}
+
+type operationParamFlags struct {
+	required    bool
+	description string
+	typ         string
+	itemsType   string
+	style       string
+	in          string
+	wireName    string
+}
+
+func collectOperationParameters(c ResourceCRUD) map[string]*operationParamFlags {
+	merged := map[string]*operationParamFlags{}
+	for _, op := range []*Operation{c.Create, c.Read, c.Update, c.Delete} {
+		if op == nil {
+			continue
+		}
+		for _, p := range op.Parameters {
+			in := strings.ToLower(p.In)
+			if in != "query" && in != "header" {
+				continue
+			}
+			snake := SanitizeAttributeName(p.Name)
+			existing, ok := merged[snake]
+			if !ok {
+				existing = &operationParamFlags{
+					description: p.Description,
+					typ:         p.Type,
+					itemsType:   p.ItemsType,
+					style:       p.Style,
+					in:          p.In,
+					wireName:    p.Name,
+				}
+				merged[snake] = existing
+			}
+			if p.Required {
+				existing.required = true
+			}
+			if existing.description == "" {
+				existing.description = p.Description
+			}
+		}
+	}
+	return merged
+}
+
+func applyParamFlags(attr ir.AttributeIR, p *operationParamFlags) ir.AttributeIR {
+	if p.required {
+		attr.Required = true
+		attr.Optional = false
+		attr.Computed = false
+		if attr.Description == "" {
+			attr.Description = p.description
+		}
+		return attr
+	}
+	if !attr.Required {
+		// Optional query/header param on a Computed-only attribute: the
+		// practitioner may set it, and the provider may populate it from the
+		// response.
+		attr.Optional = true
+		attr.Computed = true
+	}
+	return attr
+}
+
+func newAttributeFromParam(snake string, p *operationParamFlags) ir.AttributeIR {
+	attr := ir.AttributeIR{
+		Name:        snake,
+		WireName:    p.wireName,
+		Schema:      paramSchemaIR(p.in, p.typ, p.itemsType, p.style, nil, p.wireName),
+		Description: p.description,
+	}
+	if p.required {
+		attr.Required = true
+	} else {
+		attr.Optional = true
+	}
+	return attr
+}
+
 // requestPropertySets builds the request-property membership and required
 // sets reconciled against the response schema: the Create request body's
 // properties, plus formData parameters (OpenAPI 2.0 form-encoded create
@@ -616,10 +735,16 @@ func requestPropertySets(requestSpec *SchemaSpec, formData []Parameter) (map[str
 	requestProps := map[string]struct{}{}
 	requestRequired := map[string]bool{}
 	if requestSpec != nil {
-		for name := range requestSpec.Properties {
+		for name, prop := range requestSpec.Properties {
+			if prop.ReadOnly {
+				continue
+			}
 			requestProps[name] = struct{}{}
 		}
 		for _, name := range requestSpec.Required {
+			if prop, ok := requestSpec.Properties[name]; ok && prop.ReadOnly {
+				continue
+			}
 			requestRequired[name] = true
 		}
 	}
