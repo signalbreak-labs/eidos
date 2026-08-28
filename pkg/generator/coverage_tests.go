@@ -17,6 +17,7 @@ import (
 	"go/ast"
 	"go/token"
 	"path"
+	"strings"
 
 	"github.com/signalbreak-labs/eidos/pkg/generator/astgen"
 	"github.com/signalbreak-labs/eidos/pkg/generator/internal/naming"
@@ -473,21 +474,29 @@ func buildResourceCoverageCases(r ir.ResourceIR, plan resourceWiringPlan, info i
 		})
 	}
 	if info.found && info.primitive == ir.TypeString {
+		// createRemote's Location fallback extracts the trailing path segment
+		// from the header (M-8), so the test must expect that segment, not the
+		// full URL. Mirror the extraction here so the two cannot drift.
 		loc := "http://example.test/folders/example-id"
+		want := loc
+		want = strings.TrimRight(want, "/")
+		if i := strings.LastIndex(want, "/"); i >= 0 {
+			want = want[i+1:]
+		}
 		cases = append(cases, coverageCase{suffix: "Create_LocationFallback", method: "createRemote", resp: "CreateResponse",
-			intent: "success status with no body id but a Location header sets the string identifier from the header",
+			intent: "success status with no body id but a Location header sets the string identifier from the header's trailing path segment",
 			client: astgen.Call(astgen.Ident("newMockClientWithLocation"), astgen.Ident("t"), astgen.IntLit(happyStatus(plan.create)), astgen.Lit(loc), astgen.Lit(`{}`)),
 			asserts: []ast.Stmt{
 				requireNoErrorsStmt(),
 				astgen.If(
 					astgen.NotEqual(
 						astgen.Call(astgen.Selector(astgen.Selector(astgen.Ident("m"), info.field), "ValueString")),
-						astgen.Lit(loc),
+						astgen.Lit(want),
 					),
 					astgen.ExprStmt(astgen.Call(astgen.Selector(astgen.Ident("t"), "Fatalf"),
 						astgen.Lit("identifier = %q, want %q"),
 						astgen.Call(astgen.Selector(astgen.Selector(astgen.Ident("m"), info.field), "ValueString")),
-						astgen.Lit(loc),
+						astgen.Lit(want),
 					)),
 				),
 			},

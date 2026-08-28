@@ -113,7 +113,7 @@
     {
       "path": "internal/provider/resource_alarm_remote_test.go",
       "reason": "coverage tests for resource alarm remote helpers",
-      "body_hash": "3f51458e8dfc383f"
+      "body_hash": "a9f075aaf91246df"
     },
     {
       "path": "internal/provider/resource_alarm_test.go",
