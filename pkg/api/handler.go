@@ -2250,6 +2250,25 @@ func applyResourceCreationOverrides(preview *ir.ProviderIR, spec *parser.Spec, p
 			Update:         updateOp,
 			Delete:         deleteOp,
 		}
+		// The identifier comes from the instance path, mirroring how
+		// buildResourceCRUD derives it from the deepest parameterized path. For an
+		// override-created resource the read may be a collection GET (e.g.
+		// intent_policy's GET /intent/policies filtered by a name query param)
+		// with no path parameters, so the identity is taken from the first of
+		// read/update/delete whose path carries parameters. Without this, g.ID
+		// stays zero-valued and resourceFromOverrideCRUD cannot wire an import
+		// even when the update/delete path parameter maps to a real schema
+		// attribute (e.g. {name} → name) — the "many resources are missing
+		// imports" gap.
+		for _, p := range []string{readPath, updatePath, deletePath} {
+			if p == "" {
+				continue
+			}
+			if id := transformer.DetectIDFromPath(p); len(id.ParameterNames) > 0 {
+				g.ID = id
+				break
+			}
+		}
 		res := resourceFromOverrideCRUD(spec, providerName, g, diags)
 		if res == nil {
 			continue
@@ -2337,6 +2356,16 @@ func resourceFromOverrideCRUD(spec *parser.Spec, providerName string, g transfor
 	schema, idAttr := transformer.ManagedResourceSchemaWithDiagnostics(g, diags)
 	res.Schema = schema
 	res.IDAttribute = idAttr
+	// Import wiring for override-created resources, mirroring the grouped path
+	// (buildGroupedResources). An override-created resource is importable when
+	// its identifier attribute(s) are real schema attributes the import can
+	// populate; groupedImportFormat returns ok=false otherwise and the resource
+	// stays honestly non-importable. An explicit import_format override applied
+	// later (applyResourceImportFormatOverride) supersedes this inferred format.
+	if importFmt, ok := groupedImportFormat(g, schema, idAttr); ok {
+		res.ImportIDFormat = importFmt
+		res.Importable = true
+	}
 	res.OverrideCreated = true
 	return &res
 }
@@ -2460,6 +2489,18 @@ func groupedImportFormat(g transformer.ResourceCRUD, schema ir.ObjectSchemaIR, i
 		}
 		return strings.Join(parts, ":"), true
 	default: // IDSimple
+		// The import must populate the attribute the read substitutes into the
+		// path placeholder. When a schema attribute carries the raw path
+		// parameter name (e.g. {name} → name), that attribute is what the read
+		// uses; the resolved ID attribute (e.g. "id" from a response echo) may be
+		// a different field the read does not substitute — importing by it would
+		// set the wrong attribute and the follow-up read would 404 (e.g.
+		// intent_policy's {name} path with an "id" response property). Fall back
+		// to the resolved ID attribute only when no attribute matches the path
+		// parameter name.
+		if len(g.ID.ParameterNames) > 0 && hasAttr(g.ID.ParameterNames[0]) {
+			return "{" + g.ID.ParameterNames[0] + "}", true
+		}
 		effective := idAttr
 		if effective == "" {
 			effective = "id"
