@@ -50,122 +50,121 @@ func Validate(root Node, spec *Spec, version Version) []Diagnostic {
 // These were previously unchecked despite the validateRequired docstring
 // claiming "nested requirements" (M-1). $ref parameters and responses are
 // skipped here; their definitions are validated at their own site.
+// nestedRequiredValidator accumulates diagnostics for spec-mandated required
+// fields below the document root. It is a struct (rather than closures) so each
+// per-site check stays below the gocognit threshold.
+type nestedRequiredValidator struct {
+	diags   []Diagnostic
+	version Version
+}
+
+func (v *nestedRequiredValidator) checkParameter(p *Parameter, where string) {
+	if p == nil || p.Ref != "" {
+		return
+	}
+	if p.Name == "" {
+		v.diags = append(v.diags, Diagnostic{
+			Severity:       SeverityError,
+			Summary:        "Missing required field",
+			Detail:         fmt.Sprintf("Parameter in %s is missing the required 'name' field.", where),
+			SourceLocation: &p.SourceLocation,
+		})
+	}
+	if p.In == "" {
+		v.diags = append(v.diags, Diagnostic{
+			Severity:       SeverityError,
+			Summary:        "Missing required field",
+			Detail:         fmt.Sprintf("Parameter %q in %s is missing the required 'in' field.", p.Name, where),
+			SourceLocation: &p.SourceLocation,
+		})
+	}
+	if p.In == "path" && !p.Required {
+		v.diags = append(v.diags, Diagnostic{
+			Severity:       SeverityError,
+			Summary:        "Missing required field",
+			Detail:         fmt.Sprintf("Path parameter %q in %s must set required: true.", p.Name, where),
+			SourceLocation: &p.SourceLocation,
+		})
+	}
+}
+
+func (v *nestedRequiredValidator) checkResponse(r *Response, where string) {
+	if r == nil || r.Ref != "" {
+		return
+	}
+	// OpenAPI 3.1 (JSON Schema 2020-12) made response description optional;
+	// 2.0 and 3.0 require it.
+	if v.version != Version3_1 && r.Description == "" {
+		v.diags = append(v.diags, Diagnostic{
+			Severity:       SeverityError,
+			Summary:        "Missing required field",
+			Detail:         fmt.Sprintf("Response in %s is missing the required 'description' field.", where),
+			SourceLocation: &r.SourceLocation,
+		})
+	}
+}
+
+func (v *nestedRequiredValidator) checkOperation(op *Operation, where string) {
+	if op == nil {
+		return
+	}
+	if len(op.Responses) == 0 {
+		v.diags = append(v.diags, Diagnostic{
+			Severity:       SeverityError,
+			Summary:        "Missing required field",
+			Detail:         fmt.Sprintf("Operation %s is missing the required 'responses' object.", where),
+			SourceLocation: &op.SourceLocation,
+		})
+	}
+	for i := range op.Parameters {
+		v.checkParameter(&op.Parameters[i], where)
+	}
+	for _, r := range op.Responses {
+		v.checkResponse(r, where)
+	}
+}
+
+func (v *nestedRequiredValidator) checkPathItem(pi *PathItem, where string) {
+	if pi == nil {
+		return
+	}
+	for i := range pi.Parameters {
+		v.checkParameter(&pi.Parameters[i], where)
+	}
+	for _, m := range []struct {
+		method string
+		op     *Operation
+	}{
+		{"GET", pi.Get},
+		{"PUT", pi.Put},
+		{"POST", pi.Post},
+		{"DELETE", pi.Delete},
+		{"OPTIONS", pi.Options},
+		{"HEAD", pi.Head},
+		{"PATCH", pi.Patch},
+		{"TRACE", pi.Trace},
+	} {
+		v.checkOperation(m.op, fmt.Sprintf("%s %s", m.method, where))
+	}
+}
+
 func validateNestedRequired(spec *Spec, version Version) []Diagnostic {
-	var diags []Diagnostic
-
-	checkParameter := func(p *Parameter, where string) {
-		if p == nil || p.Ref != "" {
-			return
-		}
-		if p.Name == "" {
-			diags = append(diags, Diagnostic{
-				Severity:       SeverityError,
-				Summary:        "Missing required field",
-				Detail:         fmt.Sprintf("Parameter in %s is missing the required 'name' field.", where),
-				SourceLocation: &p.SourceLocation,
-			})
-		}
-		if p.In == "" {
-			diags = append(diags, Diagnostic{
-				Severity:       SeverityError,
-				Summary:        "Missing required field",
-				Detail:         fmt.Sprintf("Parameter %q in %s is missing the required 'in' field.", p.Name, where),
-				SourceLocation: &p.SourceLocation,
-			})
-		}
-		if p.In == "path" && !p.Required {
-			diags = append(diags, Diagnostic{
-				Severity:       SeverityError,
-				Summary:        "Missing required field",
-				Detail:         fmt.Sprintf("Path parameter %q in %s must set required: true.", p.Name, where),
-				SourceLocation: &p.SourceLocation,
-			})
-		}
-	}
-
-	checkResponse := func(r *Response, where string) {
-		if r == nil || r.Ref != "" {
-			return
-		}
-		// OpenAPI 3.1 (JSON Schema 2020-12) made response description optional;
-		// 2.0 and 3.0 require it.
-		if version != Version3_1 && r.Description == "" {
-			diags = append(diags, Diagnostic{
-				Severity:       SeverityError,
-				Summary:        "Missing required field",
-				Detail:         fmt.Sprintf("Response in %s is missing the required 'description' field.", where),
-				SourceLocation: &r.SourceLocation,
-			})
-		}
-	}
-
-	checkOperation := func(op *Operation, where string) {
-		if op == nil {
-			return
-		}
-		if len(op.Responses) == 0 {
-			diags = append(diags, Diagnostic{
-				Severity:       SeverityError,
-				Summary:        "Missing required field",
-				Detail:         fmt.Sprintf("Operation %s is missing the required 'responses' object.", where),
-				SourceLocation: &op.SourceLocation,
-			})
-		}
-		for i := range op.Parameters {
-			checkParameter(&op.Parameters[i], where)
-		}
-		for _, r := range op.Responses {
-			checkResponse(r, where)
-		}
-	}
-
-	checkPathItem := func(pi *PathItem, where string) {
-		if pi == nil {
-			return
-		}
-		for i := range pi.Parameters {
-			checkParameter(&pi.Parameters[i], where)
-		}
-		for _, method := range []string{"GET", "PUT", "POST", "DELETE", "OPTIONS", "HEAD", "PATCH", "TRACE"} {
-			var op *Operation
-			switch method {
-			case "GET":
-				op = pi.Get
-			case "PUT":
-				op = pi.Put
-			case "POST":
-				op = pi.Post
-			case "DELETE":
-				op = pi.Delete
-			case "OPTIONS":
-				op = pi.Options
-			case "HEAD":
-				op = pi.Head
-			case "PATCH":
-				op = pi.Patch
-			case "TRACE":
-				op = pi.Trace
-			}
-			checkOperation(op, fmt.Sprintf("%s %s", method, where))
-		}
-	}
-
+	v := &nestedRequiredValidator{version: version}
 	for path, pi := range spec.Paths {
-		checkPathItem(pi, path)
+		v.checkPathItem(pi, path)
 	}
 	for name, pi := range spec.Webhooks {
-		checkPathItem(pi, "webhook "+name)
+		v.checkPathItem(pi, "webhook "+name)
 	}
 	if spec.Components != nil {
 		for name, p := range spec.Components.Parameters {
-			checkParameter(p, "components.parameters."+name)
+			v.checkParameter(p, "components.parameters."+name)
 		}
 		for name, r := range spec.Components.Responses {
-			checkResponse(r, "components.responses."+name)
+			v.checkResponse(r, "components.responses."+name)
 		}
 	}
-
-	return diags
+	return v.diags
 }
 
 // validateDuplicateKeys walks the raw AST and emits a warning for every mapping

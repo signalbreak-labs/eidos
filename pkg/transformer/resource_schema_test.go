@@ -446,9 +446,9 @@ func TestDataSourceSchema_UniqueItemsIsSet(t *testing.T) {
 	}
 }
 
-// TestDataSourceSchema_DeprecatedParameter verifies M-10: a parameter declared
-// deprecated: true surfaces as a deprecated input attribute so the flag reaches
-// the generated schema.
+// TestDataSourceSchema_DeprecatedParameter verifies M-10: a parameter whose
+// spec marks it deprecated surfaces as a deprecated input attribute so the flag
+// reaches the generated schema.
 func TestDataSourceSchema_DeprecatedParameter(t *testing.T) {
 	op := Operation{
 		Method: MethodGet,
@@ -924,9 +924,9 @@ func TestManagedResourceSchemaDedupsSnakeCaseCollisions(t *testing.T) {
 			ResponseSchema: &SchemaSpec{
 				Type: "object",
 				Properties: map[string]SchemaSpec{
-					"fooBar": {Type: "string"},
+					"fooBar":  {Type: "string"},
 					"foo_bar": {Type: "string"},
-					"id":     {Type: "string"},
+					"id":      {Type: "string"},
 				},
 			},
 		},
@@ -961,7 +961,7 @@ func TestObjectSchemaFromSpecDedupsSnakeCaseCollisions(t *testing.T) {
 	obj := ObjectSchemaFromSpecWithDiagnostics(&SchemaSpec{
 		Type: "object",
 		Properties: map[string]SchemaSpec{
-			"fooBar": {Type: "string"},
+			"fooBar":  {Type: "string"},
 			"foo_bar": {Type: "string"},
 		},
 	}, &diags)
@@ -986,7 +986,7 @@ func TestResultSchemaFromResponseDedupsSnakeCaseCollisions(t *testing.T) {
 	obj := ResultSchemaFromResponseWithDiagnostics(&SchemaSpec{
 		Type: "object",
 		Properties: map[string]SchemaSpec{
-			"fooBar": {Type: "string"},
+			"fooBar":  {Type: "string"},
 			"foo_bar": {Type: "string"},
 		},
 	}, &diags)

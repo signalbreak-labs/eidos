@@ -1930,7 +1930,7 @@ func TestWarnUnmappedCallbacks(t *testing.T) {
 	op := &parser.Operation{
 		OperationID: "subscribeToStream",
 		Callbacks: map[string]parser.Callback{
-			"onData": {},
+			"onData":  {},
 			"onError": {},
 		},
 	}

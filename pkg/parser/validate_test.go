@@ -2,6 +2,7 @@ package parser
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -59,7 +60,7 @@ paths:
 	}
 
 	diags := Validate(root, spec, version)
-	all := append(convertDiags, diags...)
+	all := slices.Concat(convertDiags, diags)
 
 	var missing []string
 	for _, d := range all {
@@ -117,7 +118,7 @@ paths:
 	}
 
 	diags := Validate(root, spec, version)
-	all := append(convertDiags, diags...)
+	all := slices.Concat(convertDiags, diags)
 	for _, d := range all {
 		if d.Severity == SeverityError && d.Summary == "Missing required field" {
 			t.Errorf("unexpected missing-required diagnostic in 3.1: %s", d.Detail)
@@ -152,7 +153,7 @@ components:
 		t.Fatalf("ConvertV30: %v", err)
 	}
 	diags := Validate(root, spec, version)
-	all := append(convertDiags, diags...)
+	all := slices.Concat(convertDiags, diags)
 
 	var warned bool
 	for _, d := range all {
@@ -207,7 +208,7 @@ definitions:
 		t.Fatalf("ConvertV2: %v", err)
 	}
 	diags := Validate(root, spec, version)
-	all := append(convertDiags, diags...)
+	all := slices.Concat(convertDiags, diags)
 
 	var warned int
 	for _, d := range all {
@@ -251,7 +252,7 @@ components:
 		t.Fatalf("ConvertV31: %v", err)
 	}
 	diags := Validate(root, spec, version)
-	all := append(convertDiags, diags...)
+	all := slices.Concat(convertDiags, diags)
 
 	for _, d := range all {
 		if d.Severity == SeverityWarning && strings.Contains(d.Summary, "examples") {
@@ -295,7 +296,7 @@ components:
 		t.Fatalf("ConvertV30: %v", err)
 	}
 	diags := Validate(root, spec, version)
-	all := append(convertDiags, diags...)
+	all := slices.Concat(convertDiags, diags)
 	for _, d := range all {
 		if d.Severity == SeverityError {
 			t.Errorf("unexpected error diagnostic: %s", d.String())
@@ -339,7 +340,7 @@ components:
 	}
 
 	diags := Validate(root, spec, version)
-	all := append(convertDiags, diags...)
+	all := slices.Concat(convertDiags, diags)
 
 	var dupWarnings int
 	for _, d := range all {

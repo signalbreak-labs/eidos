@@ -138,7 +138,7 @@ func TestYAMLFoldedBlockTrailingBlank(t *testing.T) {
 }
 
 // TestYAMLQuotedScalarEscapedSingleQuote drives the escaped-quote branch of
-// quotedScalarRaw ('' inside a single-quoted scalar).
+// quotedScalarRaw (” inside a single-quoted scalar).
 func TestYAMLQuotedScalarEscapedSingleQuote(t *testing.T) {
 	node, err := LoadFileAsYAML("spec.yaml", []byte("a: 'it''s'\n"))
 	if err != nil {
@@ -419,7 +419,7 @@ func TestYAMLQuotedScalarSingleChar(t *testing.T) {
 
 // TestYAMLQuotedScalarMultilineSingle drives the escaped-quote branch of
 // quotedScalarRaw: a multi-line single-quoted scalar containing an escaped
-// quote ('').
+// quote (”).
 func TestYAMLQuotedScalarMultilineSingle(t *testing.T) {
 	node, err := LoadFileAsYAML("spec.yaml", []byte("a: 'it''s\n  fine'\n"))
 	if err != nil {

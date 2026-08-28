@@ -15,8 +15,8 @@ import (
 // ResourceExampleFile returns the generated examples/resources/<name>/resource.tf
 // file for a single Terraform managed resource built from the supplied ResourceIR.
 func ResourceExampleFile(r ir.ResourceIR) File {
-	path := path.Join("examples", "resources", naming.SnakeCase(r.Name), "resource.tf")
-	return staticFile(path, generateResourceExampleHCL(r))
+	relPath := path.Join("examples", "resources", naming.SnakeCase(r.Name), "resource.tf")
+	return staticFile(relPath, generateResourceExampleHCL(r))
 }
 
 // ResourceExampleFiles returns the generated resource example files for every
@@ -33,8 +33,8 @@ func ResourceExampleFiles(resources []ir.ResourceIR) []File {
 // DataSourceExampleFile returns the generated examples/data-sources/<name>/data-source.tf
 // file for a single Terraform data source built from the supplied DataSourceIR.
 func DataSourceExampleFile(ds ir.DataSourceIR) File {
-	path := path.Join("examples", "data-sources", naming.SnakeCase(ds.Name), "data-source.tf")
-	return staticFile(path, generateDataSourceExampleHCL(ds))
+	relPath := path.Join("examples", "data-sources", naming.SnakeCase(ds.Name), "data-source.tf")
+	return staticFile(relPath, generateDataSourceExampleHCL(ds))
 }
 
 // DataSourceExampleFiles returns the generated data source example files for every
@@ -51,8 +51,8 @@ func DataSourceExampleFiles(dataSources []ir.DataSourceIR) []File {
 // examples/ephemeral-resources/<name>/ephemeral-resource.tf file for a single
 // Terraform ephemeral resource built from the supplied EphemeralResourceIR.
 func EphemeralResourceExampleFile(er ir.EphemeralResourceIR) File {
-	path := path.Join("examples", "ephemeral-resources", naming.SnakeCase(er.Name), "ephemeral-resource.tf")
-	return staticFile(path, generateEphemeralResourceExampleHCL(er))
+	relPath := path.Join("examples", "ephemeral-resources", naming.SnakeCase(er.Name), "ephemeral-resource.tf")
+	return staticFile(relPath, generateEphemeralResourceExampleHCL(er))
 }
 
 // EphemeralResourceExampleFiles returns the generated ephemeral resource example
@@ -68,8 +68,8 @@ func EphemeralResourceExampleFiles(ers []ir.EphemeralResourceIR) []File {
 // ActionExampleFile returns the generated examples/actions/<name>/action.tf file
 // for a single Terraform action built from the supplied ActionIR.
 func ActionExampleFile(a ir.ActionIR) File {
-	path := path.Join("examples", "actions", naming.SnakeCase(a.Name), "action.tf")
-	return staticFile(path, generateActionExampleHCL(a))
+	relPath := path.Join("examples", "actions", naming.SnakeCase(a.Name), "action.tf")
+	return staticFile(relPath, generateActionExampleHCL(a))
 }
 
 // ActionExampleFiles returns the generated action example files for every

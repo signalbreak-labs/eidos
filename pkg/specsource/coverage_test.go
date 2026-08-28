@@ -112,11 +112,11 @@ func TestDialContext_SplitHostPortError(t *testing.T) {
 // TestDialContext_Success drives the successful-dial branch of dialContext: a
 // hostname pinned to a live listener's IP connects through the pin map.
 func TestDialContext_Success(t *testing.T) {
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	ln, err := (&net.ListenConfig{}).Listen(context.Background(), "tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("listen: %v", err)
 	}
-	defer ln.Close()
+	defer ln.Close() //nolint:errcheck // test listener
 	go func() {
 		conn, err := ln.Accept()
 		if err != nil {
@@ -165,7 +165,7 @@ func TestFetchClientCredentialsToken_RequestError(t *testing.T) {
 // TestFetchClientCredentialsToken_DoError drives the client.Do failure branch:
 // a token URL pointing at a closed port fails to connect.
 func TestFetchClientCredentialsToken_DoError(t *testing.T) {
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	ln, err := (&net.ListenConfig{}).Listen(context.Background(), "tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("listen: %v", err)
 	}

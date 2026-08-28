@@ -131,7 +131,7 @@ func TestHandleGenerate_WriteModeStaleScanError(t *testing.T) {
 	if err := os.Chmod(locked, 0o000); err != nil {
 		t.Fatalf("chmod: %v", err)
 	}
-	defer os.Chmod(locked, 0o700) //nolint:errcheck // best-effort cleanup
+	defer os.Chmod(locked, 0o700) //nolint:errcheck,gosec // restore dir perms so t.TempDir cleanup can traverse it
 
 	_, out, err := HandleGenerate(context.Background(), nil, GenerateArgs{Spec: petStoreSpec, Output: outDir})
 	if err != nil {
@@ -310,7 +310,7 @@ func TestStaleFilesInOutput_ErrorPaths(t *testing.T) {
 	if err := os.Chmod(locked, 0o000); err != nil {
 		t.Fatalf("chmod: %v", err)
 	}
-	defer os.Chmod(locked, 0o700) //nolint:errcheck // best-effort cleanup
+	defer os.Chmod(locked, 0o700) //nolint:errcheck,gosec // restore dir perms so t.TempDir cleanup can traverse it
 	if _, err := staleFilesInOutput(dir2, nil, false); err == nil {
 		t.Error("unreadable subdir: expected a walk error")
 	}

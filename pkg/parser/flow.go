@@ -304,11 +304,11 @@ func (p *yamlFlowParser) parsePlain(loc SourceLocation, isKey bool) (Node, error
 	}
 	if alias, ok := splitAliasIndicator(token); ok {
 		if p.owner == nil {
-			return nil, fmt.Errorf("%w: %s", errFlowAliasResolution, p.errorf("unknown YAML alias *%s (no anchor table in flow context)", alias))
+			return nil, fmt.Errorf("%w: %s", errFlowAliasResolution, p.errorf("unknown YAML alias *%s (no anchor table in flow context)", alias).Error())
 		}
 		resolved, err := p.owner.resolveAliasNode(alias, loc)
 		if err != nil {
-			return nil, fmt.Errorf("%w: %s", errFlowAliasResolution, p.errorf("%s", err.Error()))
+			return nil, fmt.Errorf("%w: %s", errFlowAliasResolution, p.errorf("%s", err.Error()).Error())
 		}
 		return resolved, nil
 	}

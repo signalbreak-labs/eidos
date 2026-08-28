@@ -19,14 +19,14 @@ import (
 // than letting it crash the whole eidos generate run (N-23) — the documented
 // contract in harness.go applies to functions too.
 func FunctionFile(fn ir.FunctionIR) File {
-	path := path.Join("internal", "provider", fmt.Sprintf("function_%s.go", naming.SnakeCase(fn.Name)))
+	relPath := path.Join("internal", "provider", fmt.Sprintf("function_%s.go", naming.SnakeCase(fn.Name)))
 	file, err := renderEntitySafely(func() (*ast.File, error) {
 		return generateFunctionFile(fn), nil
 	})
 	if err != nil {
-		return ErrorFile(path, err)
+		return ErrorFile(relPath, err)
 	}
-	return GoCodeAST(path, file)
+	return GoCodeAST(relPath, file)
 }
 
 // FunctionFiles returns the generated function files for every FunctionIR in

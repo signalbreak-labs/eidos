@@ -19,14 +19,14 @@ import (
 // clientImport is the import path of the generated internal/client package,
 // used when the Invoke body is wired to the API client.
 func ActionFile(a ir.ActionIR, clientImport string) File {
-	path := path.Join("internal", "provider", fmt.Sprintf("action_%s.go", naming.SnakeCase(a.Name)))
+	relPath := path.Join("internal", "provider", fmt.Sprintf("action_%s.go", naming.SnakeCase(a.Name)))
 	file, err := renderEntitySafely(func() (*ast.File, error) {
 		return generateActionFile(a, clientImport), nil
 	})
 	if err != nil {
-		return ErrorFile(path, err)
+		return ErrorFile(relPath, err)
 	}
-	return GoCodeAST(path, file)
+	return GoCodeAST(relPath, file)
 }
 
 // ActionFiles returns the generated action files for every ActionIR in the

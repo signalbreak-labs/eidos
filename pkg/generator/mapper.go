@@ -12,6 +12,6 @@ import (
 // ModelFile. The providerImport argument is the canonical import path for the
 // generated provider package.
 func ValueMappersFile(resources []ir.ResourceIR, providerImport string) File {
-	path := path.Join("internal", "protocol", "value_mappers.go")
-	return GoCodeAST(path, schema.GenerateValueMappersFile(resources, providerImport))
+	relPath := path.Join("internal", "protocol", "value_mappers.go")
+	return GoCodeAST(relPath, schema.GenerateValueMappersFile(resources, providerImport))
 }

@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"io"
 	"os"
@@ -80,7 +81,7 @@ func TestMainFunction(t *testing.T) {
 		main()
 		return
 	}
-	cmd := exec.Command(os.Args[0], "-test.run=TestMainFunction")
+	cmd := exec.CommandContext(context.Background(), os.Args[0], "-test.run=TestMainFunction") //nolint:gosec // re-executing the test binary is the standard os.Exit wrapper pattern
 	cmd.Env = append(os.Environ(), "EIDOS_TEST_MAIN=1")
 	var stderr bytes.Buffer
 	cmd.Stdout = io.Discard

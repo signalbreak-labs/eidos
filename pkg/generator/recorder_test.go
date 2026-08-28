@@ -884,7 +884,7 @@ func TestRun_WriteModeOnlyBuildPreservesFullManifest(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(out, filepath.FromSlash(oldFile))); !os.IsNotExist(err) {
 		t.Errorf("stale %q was not removed by the second full run (M-3: only-build clobbered the full manifest)", oldFile)
 	}
-	if _, err := os.Stat(filepath.Join(out, "internal/provider/resource_cat.go")); err != nil {
+	if _, err := os.Stat(filepath.Join(out, "internal", "provider", "resource_cat.go")); err != nil {
 		t.Errorf("second full run did not write resource_cat.go: %v", err)
 	}
 }

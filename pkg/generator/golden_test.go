@@ -788,7 +788,7 @@ type captureT struct {
 	errText string
 }
 
-func (c *captureT) Errorf(format string, args ...any) {
+func (c *captureT) Errorf(formatStr string, args ...any) {
 	c.failed = true
-	c.errText += fmt.Sprintf(format, args...)
+	c.errText += fmt.Sprintf(formatStr, args...)
 }

@@ -441,7 +441,7 @@ func TestLocationIDExtraction(t *testing.T) {
 	}
 }
 `
-	if err := os.WriteFile(testPath, []byte(content), 0o640); err != nil {
+	if err := os.WriteFile(testPath, []byte(content), 0o600); err != nil {
 		t.Fatalf("write location id test: %v", err)
 	}
 
@@ -912,12 +912,12 @@ func timeoutsResourceIR() ir.ResourceIR {
 	create := 20 * time.Minute
 	read := 10 * time.Minute
 	update := 20 * time.Minute
-	delete := 10 * time.Minute
+	deleteTimeout := 10 * time.Minute
 	r.Timeouts = &ir.TimeoutConfigIR{
 		Create: &create,
 		Read:   &read,
 		Update: &update,
-		Delete: &delete,
+		Delete: &deleteTimeout,
 	}
 	return r
 }

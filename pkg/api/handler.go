@@ -1514,21 +1514,7 @@ func buildSecurityIR(spec *parser.Spec, cfg *config.Config, diags *diagnostics.D
 		selectedScheme = strings.TrimSpace(cfg.Security.Scheme)
 	}
 
-	// Carry the global security requirements into the IR so they are not
-	// silently dropped. Each parser.SecurityRequirement wraps a
-	// map[schemeName][]scopes; copy it into a fresh map to avoid aliasing the
-	// parser's storage. The requirements are consumed below to validate that
-	// every referenced scheme is declared.
-	for _, req := range spec.Security {
-		// An empty requirement object {} marks the API as allowing unauthenticated
-		// access; the copy below preserves it as an empty map. Copy into a fresh
-		// map to avoid aliasing the parser's storage.
-		reqCopy := make(map[string][]string, len(req.Requirements))
-		for schemeName, scopes := range req.Requirements {
-			reqCopy[schemeName] = scopes
-		}
-		security.DefaultRequirements = append(security.DefaultRequirements, reqCopy)
-	}
+	security.DefaultRequirements = copySecurityRequirements(spec.Security)
 
 	if len(spec.Security) > 1 && selectedScheme == "" {
 		// OR semantics: more than one global security requirement means any one
@@ -1553,12 +1539,46 @@ func buildSecurityIR(spec *parser.Spec, cfg *config.Config, diags *diagnostics.D
 		})
 	}
 
-	// Validate that every scheme referenced by the global security requirements
-	// is actually declared in components.securitySchemes. A requirement naming an
-	// undeclared scheme would otherwise be silently dropped — the generated
-	// client can only apply schemes it knows about — so surface it as a Warning
-	// (fail-loud). When generator.yaml selects a single scheme, requirements
-	// naming other schemes are intentionally not applied and are not validated.
+	warnUndeclaredSecuritySchemes(spec, selectedScheme, diags)
+
+	if spec.Components == nil {
+		return security
+	}
+	security.Schemes = buildSecuritySchemes(spec, selectedScheme)
+	// Apply generator.yaml `auth:` overrides so the documented auth section is
+	// actually consumed: header_name, token_url, discovery_url, flow, and the
+	// env-var hints override the auto-derived scheme configuration (M-5).
+	if cfg != nil && len(cfg.Auth) > 0 {
+		security.Schemes = transformer.ApplyAuthOverrides(security.Schemes, cfg.Auth, diags)
+	}
+	return security
+}
+
+// copySecurityRequirements carries the global security requirements into the IR
+// so they are not silently dropped. Each parser.SecurityRequirement wraps a
+// map[schemeName][]scopes; it is copied into a fresh map to avoid aliasing the
+// parser's storage. An empty requirement object {} marks the API as allowing
+// unauthenticated access; the copy preserves it as an empty map.
+func copySecurityRequirements(requirements []parser.SecurityRequirement) []map[string][]string {
+	out := make([]map[string][]string, 0, len(requirements))
+	for _, req := range requirements {
+		reqCopy := make(map[string][]string, len(req.Requirements))
+		for schemeName, scopes := range req.Requirements {
+			reqCopy[schemeName] = scopes
+		}
+		out = append(out, reqCopy)
+	}
+	return out
+}
+
+// warnUndeclaredSecuritySchemes validates that every scheme referenced by the
+// global security requirements is actually declared in
+// components.securitySchemes. A requirement naming an undeclared scheme would
+// otherwise be silently dropped — the generated client can only apply schemes
+// it knows about — so it is surfaced as a Warning (fail-loud). When
+// generator.yaml selects a single scheme, requirements naming other schemes are
+// intentionally not applied and are not validated.
+func warnUndeclaredSecuritySchemes(spec *parser.Spec, selectedScheme string, diags *diagnostics.Diagnostics) {
 	declaredSchemes := make(map[string]struct{})
 	if spec.Components != nil {
 		for name := range spec.Components.SecuritySchemes {
@@ -1590,10 +1610,13 @@ func buildSecurityIR(spec *parser.Spec, cfg *config.Config, diags *diagnostics.D
 			})
 		}
 	}
+}
 
-	if spec.Components == nil {
-		return security
-	}
+// buildSecuritySchemes converts every declared security scheme (optionally
+// filtered to the generator.yaml-selected scheme) into its IR form, sorted by
+// name for deterministic output.
+func buildSecuritySchemes(spec *parser.Spec, selectedScheme string) []ir.SecuritySchemeIR {
+	var schemes []ir.SecuritySchemeIR
 	for _, name := range sortedKeys(spec.Components.SecuritySchemes) {
 		if selectedScheme != "" && name != selectedScheme {
 			continue
@@ -1624,18 +1647,12 @@ func buildSecurityIR(spec *parser.Spec, cfg *config.Config, diags *diagnostics.D
 				irScheme.Flows.AuthorizationCode = oauthFlowToIR(scheme.Flows.AuthorizationCode)
 			}
 		}
-		security.Schemes = append(security.Schemes, irScheme)
+		schemes = append(schemes, irScheme)
 	}
-	sort.Slice(security.Schemes, func(i, j int) bool {
-		return security.Schemes[i].Name < security.Schemes[j].Name
+	sort.Slice(schemes, func(i, j int) bool {
+		return schemes[i].Name < schemes[j].Name
 	})
-	// Apply generator.yaml `auth:` overrides so the documented auth section is
-	// actually consumed: header_name, token_url, discovery_url, flow, and the
-	// env-var hints override the auto-derived scheme configuration (M-5).
-	if cfg != nil && len(cfg.Auth) > 0 {
-		security.Schemes = transformer.ApplyAuthOverrides(security.Schemes, cfg.Auth, diags)
-	}
-	return security
+	return schemes
 }
 
 // warnPerOpORSecurity emits a Warning for each operation that declares more than

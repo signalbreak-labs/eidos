@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"net/http"
 	"strings"
 	"testing"
 
@@ -288,7 +289,7 @@ func TestApplyGenerateDatasourceOverrides_PrefixAndDuplicate(t *testing.T) {
 	preview := &ir.ProviderIR{
 		Resources: []ir.ResourceIR{
 			{Name: "widget", TypeName: "acme_widget", FullName: "acme_widget",
-				CRUDMapping: ir.CRUDMappingIR{Read: ir.OperationMappingIR{Method: "GET", PathTemplate: "/widgets/{id}"}},
+				CRUDMapping:     ir.CRUDMappingIR{Read: ir.OperationMappingIR{Method: "GET", PathTemplate: "/widgets/{id}"}},
 				SourceOperation: "getWidget"},
 		},
 		DataSources: []ir.DataSourceIR{
@@ -634,7 +635,7 @@ func TestBuildGroupedResources_PartialUpdate(t *testing.T) {
 		"/widgets": {transformer.MethodPost: {Method: transformer.MethodPost, Path: "/widgets", OperationID: "createWidget"}},
 		"/widgets/{id}": {
 			transformer.MethodGet:    {Method: transformer.MethodGet, Path: "/widgets/{id}", OperationID: "getWidget"},
-			transformer.MethodPatch: {Method: transformer.MethodPatch, Path: "/widgets/{id}", OperationID: "patchWidget"},
+			transformer.MethodPatch:  {Method: transformer.MethodPatch, Path: "/widgets/{id}", OperationID: "patchWidget"},
 			transformer.MethodDelete: {Method: transformer.MethodDelete, Path: "/widgets/{id}", OperationID: "deleteWidget"},
 		},
 	}
@@ -643,7 +644,7 @@ func TestBuildGroupedResources_PartialUpdate(t *testing.T) {
 	if len(resources) != 1 {
 		t.Fatalf("expected 1 grouped resource, got %d", len(resources))
 	}
-	if resources[0].CRUDMapping.Update == nil || resources[0].CRUDMapping.Update.Method != "PATCH" {
+	if resources[0].CRUDMapping.Update == nil || resources[0].CRUDMapping.Update.Method != http.MethodPatch {
 		t.Errorf("update mapping = %+v, want PATCH", resources[0].CRUDMapping.Update)
 	}
 	if !isConsumed(consumed, "/widgets/{id}", "PATCH") {
@@ -767,7 +768,7 @@ func TestResourceFromOverrideCRUD_Update(t *testing.T) {
 	if res == nil {
 		t.Fatal("resourceFromOverrideCRUD returned nil")
 	}
-	if res.CRUDMapping.Update == nil || res.CRUDMapping.Update.Method != "PUT" {
+	if res.CRUDMapping.Update == nil || res.CRUDMapping.Update.Method != http.MethodPut {
 		t.Errorf("update mapping = %+v, want PUT", res.CRUDMapping.Update)
 	}
 	if !res.OverrideCreated {
@@ -875,11 +876,11 @@ func TestParserOp(t *testing.T) {
 func TestResourceFromOperation_MappingBranches(t *testing.T) {
 	op := &parser.Operation{OperationID: "updateWidget"}
 	res := resourceFromOperation(op, "acme", "/widgets/{id}", "PUT", nil)
-	if res.CRUDMapping.Update == nil || res.CRUDMapping.Update.Method != "PUT" {
+	if res.CRUDMapping.Update == nil || res.CRUDMapping.Update.Method != http.MethodPut {
 		t.Errorf("PUT mapping = %+v", res.CRUDMapping.Update)
 	}
-	res2 := resourceFromOperation(op, "acme", "/widgets/{id}", "DELETE", nil)
-	if res2.CRUDMapping.Delete.Method != "DELETE" {
+	res2 := resourceFromOperation(op, "acme", "/widgets/{id}", http.MethodDelete, nil)
+	if res2.CRUDMapping.Delete.Method != http.MethodDelete {
 		t.Errorf("DELETE mapping = %+v", res2.CRUDMapping.Delete)
 	}
 }

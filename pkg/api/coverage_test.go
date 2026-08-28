@@ -1,6 +1,7 @@
 package api
 
 import (
+	"net/http"
 	"strings"
 	"testing"
 
@@ -153,7 +154,7 @@ func TestApplyEphemeralOverrideExtras(t *testing.T) {
 	}
 	applyEphemeralOverrideExtras(e, eo)
 
-	if e.OpenMapping.Method != "POST" || e.OpenMapping.PathTemplate != "/sessions" {
+	if e.OpenMapping.Method != http.MethodPost || e.OpenMapping.PathTemplate != "/sessions" {
 		t.Errorf("OpenMapping not applied: %+v", e.OpenMapping)
 	}
 	if e.RenewMapping == nil || !e.HasRenew {
@@ -200,7 +201,7 @@ func TestResourceFromOperation(t *testing.T) {
 	if res.FullName != "petstore_create_pet" {
 		t.Errorf("expected full name petstore_create_pet, got %q", res.FullName)
 	}
-	if res.CRUDMapping.Create.Method != "POST" || res.CRUDMapping.Create.PathTemplate != "/pets" {
+	if res.CRUDMapping.Create.Method != http.MethodPost || res.CRUDMapping.Create.PathTemplate != "/pets" {
 		t.Errorf("Create mapping not wired: %+v", res.CRUDMapping.Create)
 	}
 	if res.SourceOperation != "createPet" {

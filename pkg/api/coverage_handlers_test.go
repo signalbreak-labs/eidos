@@ -2,6 +2,7 @@ package api
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -93,7 +94,7 @@ func TestApplyActionOverrideExtras(t *testing.T) {
 	if a.ModifyPlanMapping == nil || !a.ModifyPlan {
 		t.Errorf("modify_plan not wired: mapping=%+v flag=%v", a.ModifyPlanMapping, a.ModifyPlan)
 	}
-	if a.ModifyPlanMapping.Method != "POST" || a.ModifyPlanMapping.PathTemplate != "/pets/{id}/validate" {
+	if a.ModifyPlanMapping.Method != http.MethodPost || a.ModifyPlanMapping.PathTemplate != "/pets/{id}/validate" {
 		t.Errorf("modify_plan mapping = %+v", a.ModifyPlanMapping)
 	}
 	if a.ValidateConfigMapping == nil || a.ValidateConfigMapping.PathTemplate != "/pets/validate-config" {
@@ -155,7 +156,7 @@ func TestEphemeralFromOverride(t *testing.T) {
 	if er.SourceOperation != "open-session" || er.Description != "a session" {
 		t.Errorf("source/description = %+v", er)
 	}
-	if er.OpenMapping.Method != "POST" || er.OpenMapping.PathTemplate != "/sessions" {
+	if er.OpenMapping.Method != http.MethodPost || er.OpenMapping.PathTemplate != "/sessions" {
 		t.Errorf("open mapping = %+v", er.OpenMapping)
 	}
 	if er.RenewMapping == nil || !er.HasRenew {
@@ -375,7 +376,7 @@ func TestOAuth2FlowAndTokenURL(t *testing.T) {
 func TestNewValidateHandler_RequestBodyTooLarge(t *testing.T) {
 	h := NewValidateHandler()
 	big := bytes.Repeat([]byte("x"), maxRequestBodySize+1)
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/validate", bytes.NewReader(big))
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/api/v1/validate", bytes.NewReader(big))
 	rec := httptest.NewRecorder()
 	h(rec, req)
 	if rec.Code != http.StatusRequestEntityTooLarge {
@@ -568,7 +569,7 @@ func TestNewValidateHandler_ErrorPaths(t *testing.T) {
 
 	// Method not allowed with a failing writer → the inner slog error path.
 	rec := newFailingResponseWriter(errors.New("write failed"))
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/validate", nil)
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/api/v1/validate", http.NoBody)
 	h(rec, req)
 	if rec.status != http.StatusMethodNotAllowed {
 		t.Errorf("method-not-allowed status = %d, want 405", rec.status)
@@ -577,7 +578,7 @@ func TestNewValidateHandler_ErrorPaths(t *testing.T) {
 	// Oversized body with a failing writer → the 413 inner error path.
 	rec2 := newFailingResponseWriter(errors.New("write failed"))
 	big := bytes.Repeat([]byte("x"), maxRequestBodySize+1)
-	req2 := httptest.NewRequest(http.MethodPost, "/api/v1/validate", bytes.NewReader(big))
+	req2 := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/api/v1/validate", bytes.NewReader(big))
 	h(rec2, req2)
 	if rec2.status != http.StatusRequestEntityTooLarge {
 		t.Errorf("413 status = %d, want 413", rec2.status)
@@ -585,7 +586,7 @@ func TestNewValidateHandler_ErrorPaths(t *testing.T) {
 
 	// Erroring body with a failing writer → the 400 read + write error paths.
 	rec3 := newFailingResponseWriter(errors.New("write failed"))
-	req3 := httptest.NewRequest(http.MethodPost, "/api/v1/validate", erroringReader{})
+	req3 := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/api/v1/validate", erroringReader{})
 	h(rec3, req3)
 	if rec3.status != http.StatusBadRequest {
 		t.Errorf("400 status = %d, want 400", rec3.status)
@@ -593,7 +594,7 @@ func TestNewValidateHandler_ErrorPaths(t *testing.T) {
 
 	// Valid request with a failing writer → the response-body write error path.
 	rec4 := newFailingResponseWriter(errors.New("write failed"))
-	req4 := httptest.NewRequest(http.MethodPost, "/api/v1/validate", bytes.NewReader([]byte(minimalSpec)))
+	req4 := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/api/v1/validate", bytes.NewReader([]byte(minimalSpec)))
 	h(rec4, req4)
 	if rec4.status != http.StatusOK {
 		t.Errorf("ok status = %d, want 200", rec4.status)
