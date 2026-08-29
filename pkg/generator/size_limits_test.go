@@ -227,7 +227,7 @@ func TestHarnessGenerate_DocsFileOverLimit(t *testing.T) {
 		t.Fatalf("non-docs files must not be subject to the docs cap: %v", err)
 	}
 	// Sanity: the file was actually written.
-	if _, statErr := os.Stat(filepath.Join(tmp, "ok", "internal/provider/big.go")); statErr != nil {
+	if _, statErr := os.Stat(filepath.Join(tmp, "ok", "internal", "provider", "big.go")); statErr != nil {
 		t.Fatalf("expected the non-docs file to be written: %v", statErr)
 	}
 

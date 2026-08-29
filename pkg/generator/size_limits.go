@@ -228,7 +228,7 @@ func largestConstructs(p *ir.ProviderIR, n int) []string {
 		name  string
 		bytes int64
 	}
-	var all []sized
+	all := make([]sized, 0, len(p.Resources)+len(p.DataSources))
 	for i := range p.Resources {
 		all = append(all, sized{p.Resources[i].TypeName, estimateObjectSchema(p.Resources[i].Schema)})
 	}
@@ -252,13 +252,13 @@ func largestConstructs(p *ir.ProviderIR, n int) []string {
 // Long descriptions are the dominant driver of both schema size and docs
 // size, so this is the primary lever for fitting a large spec under the
 // Terraform platform limits (G39).
-func ApplyDescriptionLimit(p *ir.ProviderIR, max int) int {
-	if p == nil || max <= 0 {
+func ApplyDescriptionLimit(p *ir.ProviderIR, maxBytes int) int {
+	if p == nil || maxBytes <= 0 {
 		return 0
 	}
 	truncated := 0
 	trunc := func(s *string) {
-		if truncateDescription(s, max) {
+		if truncateDescription(s, maxBytes) {
 			truncated++
 		}
 	}
@@ -360,17 +360,17 @@ func traverseSchema(s *ir.SchemaIR, fn func(*string)) {
 // truncateDescription truncates s in place to at most max bytes on a UTF-8
 // rune boundary, appending an ellipsis when a cut happened. It reports whether
 // the string was truncated.
-func truncateDescription(s *string, max int) bool {
-	if max <= 0 || len(*s) <= max {
+func truncateDescription(s *string, maxBytes int) bool {
+	if maxBytes <= 0 || len(*s) <= maxBytes {
 		return false
 	}
 	const ellipsis = "…"
-	if max <= len(ellipsis) {
+	if maxBytes <= len(ellipsis) {
 		// Too small to fit an ellipsis; hard-cut instead of exceeding the cap.
-		*s = truncateRuneBoundary(*s, max)
+		*s = truncateRuneBoundary(*s, maxBytes)
 		return true
 	}
-	*s = truncateRuneBoundary(*s, max-len(ellipsis)) + ellipsis
+	*s = truncateRuneBoundary(*s, maxBytes-len(ellipsis)) + ellipsis
 	return true
 }
 

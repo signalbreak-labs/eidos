@@ -2569,65 +2569,95 @@ func groupedImportFormatWithDiagnostics(g transformer.ResourceCRUD, schema ir.Ob
 	var parts []string
 	switch g.ID.Kind {
 	case transformer.IDComposite:
-		if len(g.ID.ParameterNames) == 0 {
+		p, ok := compositeImportParts(g, userSettable, diags)
+		if !ok {
 			return "", false
 		}
-		parts = make([]string, 0, len(g.ID.ParameterNames))
-		for _, p := range g.ID.ParameterNames {
-			snake := transformer.ToSnakeCase(p)
-			if !userSettable(snake) {
-				warnNotImportable(diags, g.Name, snake, "composite path parameter")
-				return "", false
-			}
-			parts = append(parts, "{"+snake+"}")
-		}
+		parts = p
 	default: // IDSimple
-		// The import must populate the attribute the read substitutes into the
-		// path placeholder. When a schema attribute carries the raw path
-		// parameter name (e.g. {name} → name), that attribute is what the read
-		// uses; the resolved ID attribute (e.g. "id" from a response echo) may be
-		// a different field the read does not substitute — importing by it would
-		// set the wrong attribute and the follow-up read would 404 (e.g.
-		// intent_policy's {name} path with an "id" response property). Fall back
-		// to the resolved ID attribute only when no attribute matches the path
-		// parameter name.
-		base := ""
-		if len(g.ID.ParameterNames) > 0 {
-			if _, ok := findAttr(g.ID.ParameterNames[0]); ok {
-				base = g.ID.ParameterNames[0]
-			}
-		}
-		if base == "" {
-			base = idAttr
-			if base == "" {
-				base = "id"
-			}
-		}
-		if _, ok := findAttr(base); !ok {
+		p, ok := simpleImportBase(g, findAttr, userSettable, idAttr, diags)
+		if !ok {
 			return "", false
 		}
-		if !userSettable(base) {
-			warnNotImportable(diags, g.Name, base, "identifier")
-			return "", false
-		}
-		parts = []string{"{" + base + "}"}
+		parts = []string{"{" + p + "}"}
 	}
+	parts, ok := appendRequiredReadParams(g, parts, findAttr, userSettable, diags)
+	if !ok {
+		return "", false
+	}
+	return strings.Join(parts, ":"), true
+}
 
-	// A required query/header parameter on the READ is sent from state on the
-	// refresh that follows every import, so the import must populate it too —
-	// otherwise the generated read goes out with an empty value the API
-	// rejects (e.g. GigaVUE-FM's required clusterId query parameter on
-	// /portConfig/gigastreams/advHash/{slotId}) (G39). Parameters whose schema
-	// attribute is user-settable join the composite import format; a
-	// Computed-only one is not knowable by the practitioner, so the resource
-	// stays honestly non-importable with a warning.
+// compositeImportParts builds the {param} segments for a composite-identity
+// resource: every path parameter, sanitized, must be user-settable or the
+// resource is not importable (warnNotImportable fires via diags).
+func compositeImportParts(g transformer.ResourceCRUD, userSettable func(string) bool, diags *diagnostics.Diagnostics) ([]string, bool) {
+	if len(g.ID.ParameterNames) == 0 {
+		return nil, false
+	}
+	parts := make([]string, 0, len(g.ID.ParameterNames))
+	for _, p := range g.ID.ParameterNames {
+		snake := transformer.ToSnakeCase(p)
+		if !userSettable(snake) {
+			warnNotImportable(diags, g.Name, snake, "composite path parameter")
+			return nil, false
+		}
+		parts = append(parts, "{"+snake+"}")
+	}
+	return parts, true
+}
+
+// simpleImportBase resolves the single attribute an import populates for a
+// simple-identity resource.
+//
+// The import must populate the attribute the read substitutes into the path
+// placeholder. When a schema attribute carries the raw path parameter name
+// (e.g. {name} → name), that attribute is what the read uses; the resolved
+// ID attribute (e.g. "id" from a response echo) may be a different field the
+// read does not substitute — importing by it would set the wrong attribute
+// and the follow-up read would 404 (e.g. intent_policy's {name} path with an
+// "id" response property). Fall back to the resolved ID attribute only when
+// no attribute matches the path parameter name.
+func simpleImportBase(g transformer.ResourceCRUD, findAttr func(string) (ir.AttributeIR, bool), userSettable func(string) bool, idAttr string, diags *diagnostics.Diagnostics) (string, bool) {
+	base := ""
+	if len(g.ID.ParameterNames) > 0 {
+		if _, ok := findAttr(g.ID.ParameterNames[0]); ok {
+			base = g.ID.ParameterNames[0]
+		}
+	}
+	if base == "" {
+		base = idAttr
+		if base == "" {
+			base = "id"
+		}
+	}
+	if _, ok := findAttr(base); !ok {
+		return "", false
+	}
+	if !userSettable(base) {
+		warnNotImportable(diags, g.Name, base, "identifier")
+		return "", false
+	}
+	return base, true
+}
+
+// appendRequiredReadParams extends parts with the read operation's required
+// query/header parameters. A required query/header parameter on the READ is
+// sent from state on the refresh that follows every import, so the import must
+// populate it too — otherwise the generated read goes out with an empty value
+// the API rejects (e.g. GigaVUE-FM's required clusterId query parameter on
+// /portConfig/gigastreams/advHash/{slotId}) (G39). Parameters whose schema
+// attribute is user-settable join the composite import format; a Computed-only
+// one is not knowable by the practitioner, so the resource stays honestly
+// non-importable with a warning (ok reports whether the format survived).
+func appendRequiredReadParams(g transformer.ResourceCRUD, parts []string, findAttr func(string) (ir.AttributeIR, bool), userSettable func(string) bool, diags *diagnostics.Diagnostics) ([]string, bool) {
 	for _, p := range requiredReadParams(g.Read) {
 		if _, ok := findAttr(p); !ok {
 			continue // no schema attribute: the read is scaffolded anyway
 		}
 		if !userSettable(p) {
 			warnNotImportable(diags, g.Name, p, "required read parameter")
-			return "", false
+			return parts, false
 		}
 		dup := false
 		for _, existing := range parts {
@@ -2640,7 +2670,7 @@ func groupedImportFormatWithDiagnostics(g transformer.ResourceCRUD, schema ir.Ob
 			parts = append(parts, "{"+p+"}")
 		}
 	}
-	return strings.Join(parts, ":"), true
+	return parts, true
 }
 
 // requiredReadParams returns the sanitized names of the read operation's

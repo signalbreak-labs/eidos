@@ -1444,8 +1444,11 @@ func collectionReadSelectable(r ir.ResourceIR) bool {
 // than dropping the resource from state.
 func decodeAndApplyCollectionReadStmts(r ir.ResourceIR, summary, envelope string) []ast.Stmt {
 	info := resourceIDFieldInfo(r)
-	// Decode into data exactly as decodeAndApplyStmts does.
-	stmts := []ast.Stmt{
+	// Decode into data exactly as decodeAndApplyStmts does. The statement
+	// list grows across several appended branches below; the capacity keeps
+	// the decode/error-check block together with them without reallocation.
+	stmts := make([]ast.Stmt, 0, 7)
+	stmts = append(stmts,
 		astgen.DeclStmt(astgen.VarDeclGen(astgen.VarSpec(
 			"data",
 			astgen.MapType(astgen.Ident("string"), astgen.Ident("any")),
@@ -1471,7 +1474,7 @@ func decodeAndApplyCollectionReadStmts(r ir.ResourceIR, summary, envelope string
 				astgen.Return(),
 			),
 		},
-	}
+	)
 
 	// if v, ok := data[<envelope>]; ok {
 	//     if arr, ok := v.([]any); ok {
@@ -1640,9 +1643,7 @@ func decodeAndApplyCollectionReadStmts(r ir.ResourceIR, summary, envelope string
 				},
 			},
 		),
-	})
-
-	stmts = append(stmts,
+	},
 		astgen.AssignStmt(
 			[]ast.Expr{astgen.Ident("err")},
 			[]ast.Expr{astgen.Call(
@@ -1652,8 +1653,7 @@ func decodeAndApplyCollectionReadStmts(r ir.ResourceIR, summary, envelope string
 			)},
 			token.ASSIGN,
 		),
-		errCheckStmt(summary, "Could not map response to state: %s"),
-	)
+		errCheckStmt(summary, "Could not map response to state: %s"))
 	return stmts
 }
 
