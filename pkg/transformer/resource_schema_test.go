@@ -1477,3 +1477,72 @@ func TestManagedResourceSchema_TopLevelPathParameterWins(t *testing.T) {
 		t.Fatalf("top-level uid WirePath = %q, want empty", uid.WirePath)
 	}
 }
+
+func TestNestedPathPromotion_EdgeCases(t *testing.T) {
+	empty := &SchemaSpec{}
+	state, request, wirePaths, ambiguous := promoteNestedPathParameters(empty, nil, ResourceCRUD{}, nil)
+	if state != empty || request != nil || wirePaths != nil || ambiguous != nil {
+		t.Fatalf("empty schema promotion = (%p, %p, %v, %v), want unchanged empty result", state, request, wirePaths, ambiguous)
+	}
+
+	ambiguousState := &SchemaSpec{Properties: map[string]SchemaSpec{
+		"first":  {Properties: map[string]SchemaSpec{"uid": {Type: "string"}}},
+		"second": {Properties: map[string]SchemaSpec{"uid": {Type: "string"}}},
+	}}
+	_, _, wirePaths, ambiguous = promoteNestedPathParameters(
+		ambiguousState,
+		nil,
+		ResourceCRUD{ID: IDInfo{ParameterNames: []string{"uid"}}},
+		nil,
+	)
+	if wirePaths != nil || !ambiguous["uid"] {
+		t.Fatalf("ambiguous promotion = (%v, %v), want no wire path and uid ambiguity", wirePaths, ambiguous)
+	}
+
+	nonPrimitiveState := &SchemaSpec{Properties: map[string]SchemaSpec{
+		"metadata": {Properties: map[string]SchemaSpec{
+			"dynamic": {},
+			"object":  {Properties: map[string]SchemaSpec{"value": {Type: "string"}}},
+		}},
+	}}
+	_, _, wirePaths, ambiguous = promoteNestedPathParameters(
+		nonPrimitiveState,
+		nil,
+		ResourceCRUD{ID: IDInfo{ParameterNames: []string{"dynamic", "object"}}},
+		nil,
+	)
+	if wirePaths != nil || len(ambiguous) != 0 {
+		t.Fatalf("non-primitive promotion = (%v, %v), want no promotion", wirePaths, ambiguous)
+	}
+
+	if got := promoteNestedProperties(nil, nil); got != nil {
+		t.Fatalf("nil schema promotion = %#v, want nil", got)
+	}
+
+	original := &SchemaSpec{
+		Required: []string{"metadata", "uid"},
+		Properties: map[string]SchemaSpec{
+			"metadata": {
+				Required:   []string{"uid"},
+				Properties: map[string]SchemaSpec{"uid": {Type: "string"}},
+			},
+		},
+	}
+	promoted := promoteNestedProperties(original, map[string]nestedPathPromotion{
+		"missing-child":  {parent: "metadata", child: "missing"},
+		"missing-parent": {parent: "missing", child: "uid"},
+		"uid":            {parent: "metadata", child: "uid"},
+	})
+	if _, ok := promoted.Properties["metadata"]; ok {
+		t.Fatal("empty metadata wrapper was not removed")
+	}
+	if got, ok := promoted.Properties["uid"]; !ok || got.Type != "string" {
+		t.Fatalf("promoted uid = (%+v, %v), want string property", got, ok)
+	}
+	if len(promoted.Required) != 1 || promoted.Required[0] != "uid" {
+		t.Fatalf("promoted required fields = %v, want [uid]", promoted.Required)
+	}
+	if _, ok := original.Properties["metadata"].Properties["uid"]; !ok {
+		t.Fatal("promotion mutated the source schema")
+	}
+}
