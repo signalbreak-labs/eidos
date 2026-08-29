@@ -13,7 +13,7 @@ List Stacks
 
 ```terraform
 data "mycloud_list_stacks" "example" {
-  workspace = null
+  workspace = "example"
 }
 ```
 

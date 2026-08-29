@@ -65,9 +65,13 @@ func TestResourceDocsFile_Render(t *testing.T) {
 		"# mycloud_pet Resource",
 		"## Example Usage",
 		`resource "mycloud_pet" "example" {`,
-		"  name  = null",
-		"  tags  = []",
-		"  owner = {}",
+		"  name = \"example\"",
+		"  tag  = \"example\"",
+		"  age  = 0",
+		"  tags = [ \"example\" ]",
+		"  owner = {",
+		"    email = \"example\"",
+		"  }",
 		"## Schema",
 		"### Arguments",
 		"* `name` (String, required)",
@@ -250,8 +254,8 @@ func TestDataSourceDocsFile_NestedAttributes(t *testing.T) {
 }
 
 // TestRenderExampleArguments_CollectionsAndObjects verifies that collection and
-// object attributes are emitted as syntactically valid empty literals in the
-// example usage section instead of comment stubs.
+// object attributes are emitted as populated literals in the example usage
+// section instead of null/empty placeholders or comment stubs.
 func TestRenderExampleArguments_CollectionsAndObjects(t *testing.T) {
 	attrs := []ir.AttributeIR{
 		{
@@ -292,10 +296,14 @@ func TestRenderExampleArguments_CollectionsAndObjects(t *testing.T) {
 
 	got := renderExampleArguments(attrs)
 	want := []string{
-		"  name     = null",
-		"  tags     = []",
-		"  metadata = {}",
-		"  owner    = {}",
+		"  name = \"example\"",
+		"  tags = [ \"example\" ]",
+		"  metadata = {",
+		`    "metadata" = "example"`,
+		"  }",
+		"  owner = {",
+		"    email = \"example\"",
+		"  }",
 	}
 	for _, w := range want {
 		if !strings.Contains(got, w) {

@@ -13,8 +13,8 @@ List commits
 
 ```terraform
 data "mycloud_list_commits" "example" {
-  organization = null
-  project      = null
+  organization = "example"
+  project      = "example"
 }
 ```
 

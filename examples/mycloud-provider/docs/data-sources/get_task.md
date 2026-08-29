@@ -13,9 +13,9 @@ Get an task
 
 ```terraform
 data "mycloud_get_task" "example" {
-  organization = null
-  project      = null
-  task_number  = null
+  organization = "example"
+  project      = "example"
+  task_number  = 0
 }
 ```
 

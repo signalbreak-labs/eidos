@@ -371,49 +371,17 @@ In addition to all arguments above, the following attributes are exported:
 `
 
 // renderExampleArguments renders required and optional attributes as HCL-style
-// example arguments, indented by two spaces. Object attributes and collections
-// are emitted as empty literals (`{}` or `[]`) so the example remains
-// syntactically valid Terraform. Assignment `=` signs are aligned the way
-// `terraform fmt` aligns them, so the emitted example is fmt-clean.
+// example arguments, indented by two spaces. It delegates to writeHCLBody so the
+// docs example matches the generated examples/resources/*.tf files: primitives
+// get type-appropriate placeholders ("example", 0, true) and nested objects and
+// collections are expanded into populated literals rather than null/empty
+// placeholders. Assignment `=` signs are aligned the way `terraform fmt` aligns
+// them, so the emitted example is fmt-clean.
 func renderExampleArguments(attrs []ir.AttributeIR) string {
-	type row struct {
-		name  string
-		value string
-	}
-	var rows []row
-	for _, attr := range attrs {
-		if !attr.Required && !attr.Optional {
-			continue
-		}
-		var value string
-		switch {
-		case attr.Schema.Collection != nil:
-			switch attr.Schema.Collection.Kind {
-			case ir.Map:
-				value = "{}"
-			default:
-				value = "[]"
-			}
-		case schema.IsObjectLike(attr.Schema):
-			value = "{}"
-		default:
-			// Use null rather than "..." so the emitted example is syntactically
-			// valid, copy-pasteable HCL (L-33: "..." is not a valid HCL expression).
-			value = "null"
-		}
-		rows = append(rows, row{attr.Name, value})
-	}
-	width := 0
-	for _, r := range rows {
-		if len(r.name) > width {
-			width = len(r.name)
-		}
-	}
-	var b strings.Builder
-	for _, r := range rows {
-		fmt.Fprintf(&b, "  %-*s = %s\n", width, r.name, r.value)
-	}
-	return b.String()
+	var h hclBuilder
+	h.indent = 1
+	writeHCLBody(&h, ir.ObjectSchemaIR{Attributes: attrs})
+	return h.b.String()
 }
 
 // renderDocsSchema renders the schema reference for a resource or data source

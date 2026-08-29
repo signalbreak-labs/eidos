@@ -18,12 +18,12 @@ action "mycloud_create_task" "example" {
     body_organization = "example"
     body_project      = "example"
     html_url          = "example"
-    id                = 1
-    number            = 1
+    id                = 0
+    number            = 0
     organization      = "example"
     project           = "example"
     state             = "example"
-    task_number       = 1
+    task_number       = 0
     title             = "example"
   }
 }

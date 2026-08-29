@@ -18,12 +18,12 @@ action "mycloud_create_pull_request" "example" {
     body_organization = "example"
     body_project      = "example"
     html_url          = "example"
-    id                = 1
+    id                = 0
     merged            = true
-    number            = 1
+    number            = 0
     organization      = "example"
     project           = "example"
-    pull_number       = 1
+    pull_number       = 0
     state             = "example"
     title             = "example"
   }

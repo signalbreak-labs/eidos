@@ -335,6 +335,11 @@ func ResultSchemaFromResponseWithDiagnostics(spec *SchemaSpec, diags *diagnostic
 			seen[snake] = name
 			prop := spec.Properties[name]
 			schema := schemaIRFromSpec(prop)
+			// The request-body mapper produces Required/Optional nested
+			// attributes; a result schema is an output shape, so every nested
+			// attribute must be Computed (a Computed parent cannot carry
+			// Required children).
+			markResultSchemaComputed(&schema)
 			if prop.WriteOnly || strings.EqualFold(prop.Format, "password") {
 				schema.Sensitive = true
 			}
@@ -348,13 +353,32 @@ func ResultSchemaFromResponseWithDiagnostics(spec *SchemaSpec, diags *diagnostic
 		}
 		return ir.ObjectSchemaIR{Attributes: attrs}
 	default:
+		schema := schemaIRFromSpec(*spec)
+		markResultSchemaComputed(&schema)
 		return ir.ObjectSchemaIR{
 			Attributes: []ir.AttributeIR{{
 				Name:        "result",
-				Schema:      schemaIRFromSpec(*spec),
+				Schema:      schema,
 				Description: spec.Description,
 				Computed:    true,
 			}},
 		}
+	}
+}
+
+// markResultSchemaComputed recursively marks every nested attribute Computed,
+// for output shapes (ephemeral result schemas) where all fields are
+// provider-populated. The request-body mapper (schemaIRFromSpec) produces
+// Required/Optional nested attributes; result schemas must flip them to
+// Computed so a Computed parent does not carry Required children.
+func markResultSchemaComputed(s *ir.SchemaIR) {
+	for i := range s.Attributes {
+		s.Attributes[i].Computed = true
+		s.Attributes[i].Required = false
+		s.Attributes[i].Optional = false
+		markResultSchemaComputed(&s.Attributes[i].Schema)
+	}
+	if s.Collection != nil {
+		markResultSchemaComputed(&s.Collection.ElementType)
 	}
 }

@@ -87,15 +87,15 @@ func TestNetworkResource_Create_MissingID(t *testing.T) {
 	hasErrorContaining(t, resp.Diagnostics, "did not contain an identifier")
 }
 
-// TestNetworkResource_Create_LocationFallback exercises NetworkResource.createRemote against an httptest mock: success status with no body id but a Location header sets the string identifier from the header.
+// TestNetworkResource_Create_LocationFallback exercises NetworkResource.createRemote against an httptest mock: success status with no body id but a Location header sets the string identifier from the header's trailing path segment.
 func TestNetworkResource_Create_LocationFallback(t *testing.T) {
 	r := &NetworkResource{client: newMockClientWithLocation(t, 201, "http://example.test/folders/example-id", "{}")}
 	m := NetworkResourceModel{}
 	resp := &resource.CreateResponse{}
 	r.createRemote(context.Background(), &m, resp)
 	requireNoErrors(t, resp.Diagnostics)
-	if m.Id.ValueString() != "http://example.test/folders/example-id" {
-		t.Fatalf("identifier = %q, want %q", m.Id.ValueString(), "http://example.test/folders/example-id")
+	if m.Id.ValueString() != "example-id" {
+		t.Fatalf("identifier = %q, want %q", m.Id.ValueString(), "example-id")
 	}
 }
 

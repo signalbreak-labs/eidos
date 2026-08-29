@@ -6,7 +6,7 @@ resource "mycloud_network" "example" {
     ip_address = "example"
     ports = [{
       name     = "example"
-      port     = 1
+      port     = 0
       protocol = "example"
     }]
     selector = {
@@ -14,7 +14,7 @@ resource "mycloud_network" "example" {
     }
   }
   status = {
-    load_balancer = null
+    load_balancer = "example"
   }
   workspace = "example"
 }

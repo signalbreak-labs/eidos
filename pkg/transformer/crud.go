@@ -483,6 +483,15 @@ func detectID(segs []pathSegment) IDInfo {
 	return info
 }
 
+// DetectIDFromPath infers the identifier of a resource from its instance path
+// template (e.g. "/pets/{petId}" → IDSimple with AttributeName "pet_id"). It is
+// the exported entry point to parsePath+detectID so the API layer can populate
+// ResourceCRUD.ID for override-created resources, whose instance path is the
+// read operation's path rather than the deepest grouped path (G8).
+func DetectIDFromPath(path string) IDInfo {
+	return detectID(parsePath(path))
+}
+
 // cloneOp returns an isolated copy of the operation for method so that CRUD
 // inference can mutate Parameters/ResponseHeaders/Extensions without corrupting
 // the caller's pathOps. It reuses cloneOperation (the deep clone datasource.go

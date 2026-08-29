@@ -13,8 +13,8 @@ List pull requests
 
 ```terraform
 data "mycloud_list_pull_requests" "example" {
-  organization = null
-  project      = null
+  organization = "example"
+  project      = "example"
 }
 ```
 

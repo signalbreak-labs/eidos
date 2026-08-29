@@ -263,18 +263,22 @@ func writeHCLAttributeValue(attr ir.AttributeIR) (value string, single bool) {
 	s := attr.Schema
 
 	// A DynamicAttribute (primitive dynamic, or a collection degraded to dynamic
-	// because its element is/nests a dynamic) carries arbitrary JSON. Emit a
-	// scalar placeholder rather than a collection literal: a list literal on a
-	// DynamicAttribute parses as a Tuple whose element types the response mapping
-	// cannot reliably reproduce, so a user copying the example would hit "wrong
-	// final value type: tuple required" at apply (G18). A Required Dynamic needs a
-	// non-null value (null is rejected at plan time); an Optional Dynamic uses
-	// null, which round-trips as an omitted field.
+	// because its element is/nests a dynamic) carries arbitrary JSON. The IR
+	// still retains the collection shape for a degraded collection, so render a
+	// populated literal from it rather than a bare null: examples are
+	// documentation, and a null/empty placeholder reads as broken. (A collection
+	// literal on a DynamicAttribute can fail to round-trip at apply — G18 — but
+	// the example is illustrative, not a guarantee of apply-ability.) A bare
+	// primitive dynamic gets a scalar "example" placeholder for both Required and
+	// Optional so the example never shows null.
 	if schema.IsDynamicAttribute(s) {
-		if attr.Required {
-			return `"example"`, true
+		if s.Collection != nil {
+			if schema.IsObjectLike(s.Collection.ElementType) {
+				return "", false
+			}
+			return dynamicCollectionExampleValue(s.Collection), true
 		}
-		return "null", true
+		return `"example"`, true
 	}
 
 	if s.Collection != nil {
@@ -287,19 +291,19 @@ func writeHCLAttributeValue(attr ir.AttributeIR) (value string, single bool) {
 				return fmt.Sprintf("[ %s ]", primitiveExampleValue(elem.Type)), true
 			}
 			if !schema.IsObjectLike(elem) {
-				// Unsupported element (for example, a oneOf/anyOf union that
-				// degrades to dynamic): emit an empty literal so example generation
-				// degrades gracefully rather than panicking.
-				return "[]", true
+				// Unsupported element (for example, a degenerate empty schema):
+				// emit a populated placeholder so the example shows a real value
+				// rather than an empty literal.
+				return dynamicCollectionExampleValue(s.Collection), true
 			}
 			return "", false
 		case ir.Map:
 			if schema.IsPrimitiveSchema(elem) || schema.IsObjectLike(elem) {
 				return "", false
 			}
-			return "{}", true
+			return dynamicCollectionExampleValue(s.Collection), true
 		default:
-			return "[]", true
+			return dynamicCollectionExampleValue(s.Collection), true
 		}
 	}
 
@@ -313,10 +317,9 @@ func writeHCLAttributeValue(attr ir.AttributeIR) (value string, single bool) {
 		if schema.MergedDiscriminatedUnion(s) != nil {
 			return "", false
 		}
-		if attr.Required {
-			return `"example"`, true
-		}
-		return "null", true
+		// A non-discriminated union degrades to a DynamicAttribute; emit a
+		// scalar placeholder so the example shows a real value rather than null.
+		return `"example"`, true
 	}
 
 	if schema.IsObjectLike(s) {
@@ -507,6 +510,17 @@ func writeHCLBlock(h *hclBuilder, block ir.BlockIR) {
 	h.writeLinef("}")
 }
 
+// dynamicCollectionExampleValue returns a populated single-line literal for a
+// collection that degraded to a DynamicAttribute. The IR retains the collection
+// kind, so the placeholder matches the collection shape (a list/set literal for
+// List/Set, a map literal for Map) with a single "example" element.
+func dynamicCollectionExampleValue(c *ir.CollectionType) string {
+	if c.Kind == ir.Map {
+		return `{ "key" = "example" }`
+	}
+	return `[ "example" ]`
+}
+
 // primitiveExampleValue returns a placeholder HCL literal for a primitive type.
 // Unrecognized PrimitiveType constants fall back to a string placeholder so that
 // example generation does not fail silently; when adding a new PrimitiveType,
@@ -516,13 +530,13 @@ func primitiveExampleValue(t ir.PrimitiveType) string {
 	case ir.TypeString:
 		return `"example"`
 	case ir.TypeInt:
-		return "1"
+		return "0"
 	case ir.TypeFloat:
 		return "1.0"
 	case ir.TypeBool:
 		return "true"
 	case ir.TypeDynamic:
-		return "null"
+		return `"example"`
 	default:
 		return `"example"`
 	}

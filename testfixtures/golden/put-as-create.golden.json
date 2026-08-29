@@ -28,7 +28,7 @@
     {
       "path": "docs/resources/alarm.md",
       "reason": "documentation for resource alarm",
-      "body_hash": "1852cab7d1af19e2"
+      "body_hash": "470903d142b97d6e"
     },
     {
       "path": "examples/resources/alarm/resource.tf",
@@ -113,7 +113,7 @@
     {
       "path": "internal/provider/resource_alarm_remote_test.go",
       "reason": "coverage tests for resource alarm remote helpers",
-      "body_hash": "3f51458e8dfc383f"
+      "body_hash": "a9f075aaf91246df"
     },
     {
       "path": "internal/provider/resource_alarm_test.go",

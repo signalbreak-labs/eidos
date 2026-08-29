@@ -13,12 +13,24 @@ Read a Network
 
 ```terraform
 resource "mycloud_network" "example" {
-  api_version = null
-  kind        = null
-  name        = null
-  spec        = {}
-  status      = {}
-  workspace   = null
+  api_version = "example"
+  kind        = "example"
+  name        = "example"
+  spec = {
+    ip_address = "example"
+    ports = [{
+      name     = "example"
+      port     = 0
+      protocol = "example"
+    }]
+    selector = {
+      "selector" = "example"
+    }
+  }
+  status = {
+    load_balancer = "example"
+  }
+  workspace = "example"
 }
 ```
 

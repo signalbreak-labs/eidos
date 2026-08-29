@@ -13,7 +13,7 @@ List Configs
 
 ```terraform
 data "mycloud_list_configs" "example" {
-  workspace = null
+  workspace = "example"
 }
 ```
 

@@ -28,12 +28,12 @@
     {
       "path": "docs/resources/note.md",
       "reason": "documentation for resource note",
-      "body_hash": "72253e83d76b2e49"
+      "body_hash": "c681609c149e71b5"
     },
     {
       "path": "docs/resources/upload.md",
       "reason": "documentation for resource upload",
-      "body_hash": "a39ee7aad13fc610"
+      "body_hash": "8e6ef482652f57a1"
     },
     {
       "path": "examples/resources/note/resource.tf",
@@ -123,7 +123,7 @@
     {
       "path": "internal/provider/resource_note_remote_test.go",
       "reason": "coverage tests for resource note remote helpers",
-      "body_hash": "506023317aee2167"
+      "body_hash": "28e8b5e84ed8af73"
     },
     {
       "path": "internal/provider/resource_note_test.go",

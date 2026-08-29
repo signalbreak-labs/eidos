@@ -13,12 +13,14 @@ Read a Secret
 
 ```terraform
 resource "mycloud_secret" "example" {
-  api_version = null
-  data        = {}
-  kind        = null
-  name        = null
-  type        = null
-  workspace   = null
+  api_version = "example"
+  data = {
+    "data" = "example"
+  }
+  kind      = "example"
+  name      = "example"
+  type      = "example"
+  workspace = "example"
 }
 ```
 

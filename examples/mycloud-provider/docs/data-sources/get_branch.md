@@ -13,9 +13,9 @@ Get a branch
 
 ```terraform
 data "mycloud_get_branch" "example" {
-  branch       = null
-  organization = null
-  project      = null
+  branch       = "example"
+  organization = "example"
+  project      = "example"
 }
 ```
 

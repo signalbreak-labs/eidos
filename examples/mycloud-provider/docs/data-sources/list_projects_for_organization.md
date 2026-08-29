@@ -13,7 +13,7 @@ List organization projects
 
 ```terraform
 data "mycloud_list_projects_for_organization" "example" {
-  organization = null
+  organization = "example"
 }
 ```
 

@@ -24,7 +24,7 @@ func TestResourceExampleFile_Render(t *testing.T) {
 		`resource "mycloud_pet" "example" {`,
 		"name = \"example\"",
 		"tag  = \"example\"",
-		"age  = 1",
+		"age  = 0",
 		"tags = [ \"example\" ]",
 		"owner = {",
 		"email = \"example\"",
@@ -148,7 +148,7 @@ func TestEphemeralResourceExampleFile_Render(t *testing.T) {
 	wantSubstrings := []string{
 		`ephemeral "mycloud_token" "example" {`,
 		"user_id = \"example\"",
-		"ttl     = 1",
+		"ttl     = 0",
 		"}",
 	}
 	for _, want := range wantSubstrings {
@@ -385,20 +385,20 @@ func TestWriteHCLCollectionAttribute_MapKeyFromName(t *testing.T) {
 // collection whose element type is a oneOf/anyOf union degrades gracefully
 // instead of panicking. A union element normalizes to a dynamic element
 // (DynamicUnionElement), so the collection degrades to a DynamicAttribute and
-// the example writer emits a scalar null placeholder (not a collection literal,
-// which would parse as a Tuple and mismatch the response at apply — G18). This
-// is the H-5 regression: previously writeHCLCollectionAttribute panicked for
-// `array` with `items: {oneOf: ...}`, and the ExampleFiles call path had no
-// recover, crashing the whole CLI run.
+// the example writer emits a populated placeholder matching the collection shape
+// (a list/set literal or a map literal with a single "example" element) rather
+// than a bare null. This is the H-5 regression: previously
+// writeHCLCollectionAttribute panicked for `array` with `items: {oneOf: ...}`,
+// and the ExampleFiles call path had no recover, crashing the whole CLI run.
 func TestWriteHCLCollectionAttribute_UnionElementGraceful(t *testing.T) {
 	cases := []struct {
 		name string
 		kind ir.CollectionKind
 		want string
 	}{
-		{name: "list", kind: ir.List, want: "bad = null"},
-		{name: "set", kind: ir.Set, want: "bad = null"},
-		{name: "map", kind: ir.Map, want: "bad = null"},
+		{name: "list", kind: ir.List, want: `bad = [ "example" ]`},
+		{name: "set", kind: ir.Set, want: `bad = [ "example" ]`},
+		{name: "map", kind: ir.Map, want: `bad = { "key" = "example" }`},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -544,12 +544,124 @@ func TestWriteHCLDiscriminatedUnionAligned(t *testing.T) {
 		// run's max width with a single space; the shorter lives row pads to
 		// align the `=` signs at column 12 (fmt-clean).
 		`animal_type = "cat"`,
-		"bark_volume = 1",
-		"lives       = 1",
+		"bark_volume = 0",
+		"lives       = 0",
 		"}",
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("union example missing %q\n%s", want, got)
 		}
+	}
+}
+
+// TestWriteHCLAttributeValue_DynamicCollection covers the degraded-collection
+// and union branches of writeHCLAttributeValue: a dynamic collection whose
+// element is object-like renders as a block (single=false), a dynamic collection
+// with a non-object element renders a populated literal, an unknown collection
+// kind falls back to a populated literal, and a non-discriminated union renders
+// a scalar placeholder.
+func TestWriteHCLAttributeValue_DynamicCollection(t *testing.T) {
+	cases := []struct {
+		name   string
+		attr   ir.AttributeIR
+		want   string
+		single bool
+	}{
+		{
+			name: "dynamic list with object-like element renders as block",
+			attr: ir.AttributeIR{
+				Name: "bad",
+				Schema: ir.SchemaIR{
+					Collection: &ir.CollectionType{
+						Kind: ir.List,
+						ElementType: ir.SchemaIR{
+							Attributes: []ir.AttributeIR{
+								{Name: "x", Schema: ir.SchemaIR{Type: ir.TypeDynamic}},
+							},
+						},
+					},
+				},
+			},
+			want:   "",
+			single: false,
+		},
+		{
+			name: "list of nested collection renders populated literal",
+			attr: ir.AttributeIR{
+				Name: "bad",
+				Schema: ir.SchemaIR{
+					Collection: &ir.CollectionType{
+						Kind: ir.List,
+						ElementType: ir.SchemaIR{
+							Collection: &ir.CollectionType{Kind: ir.List, ElementType: ir.SchemaIR{Type: ir.TypeString}},
+						},
+					},
+				},
+			},
+			want:   `[ "example" ]`,
+			single: true,
+		},
+		{
+			name: "map of nested collection renders populated literal",
+			attr: ir.AttributeIR{
+				Name: "bad",
+				Schema: ir.SchemaIR{
+					Collection: &ir.CollectionType{
+						Kind: ir.Map,
+						ElementType: ir.SchemaIR{
+							Collection: &ir.CollectionType{Kind: ir.List, ElementType: ir.SchemaIR{Type: ir.TypeString}},
+						},
+					},
+				},
+			},
+			want:   `{ "key" = "example" }`,
+			single: true,
+		},
+		{
+			name: "unknown collection kind renders populated literal",
+			attr: ir.AttributeIR{
+				Name: "bad",
+				Schema: ir.SchemaIR{
+					Collection: &ir.CollectionType{
+						Kind:        ir.CollectionKind("tuple"),
+						ElementType: ir.SchemaIR{Type: ir.TypeString},
+					},
+				},
+			},
+			want:   `[ "example" ]`,
+			single: true,
+		},
+		{
+			name: "non-discriminated union renders scalar placeholder",
+			attr: ir.AttributeIR{
+				Name:   "bad",
+				Schema: ir.SchemaIR{Union: &ir.UnionType{}},
+			},
+			want:   `"example"`,
+			single: true,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, single := writeHCLAttributeValue(tc.attr)
+			if got != tc.want || single != tc.single {
+				t.Errorf("writeHCLAttributeValue(%s) = %q, %v; want %q, %v", tc.attr.Name, got, single, tc.want, tc.single)
+			}
+		})
+	}
+}
+
+// TestDynamicCollectionExampleValue covers the populated-literal placeholder for
+// a collection that degraded to a DynamicAttribute: a map literal for Map, a
+// list literal for List/Set.
+func TestDynamicCollectionExampleValue(t *testing.T) {
+	if got := dynamicCollectionExampleValue(&ir.CollectionType{Kind: ir.Map}); got != `{ "key" = "example" }` {
+		t.Errorf("map placeholder = %q, want { \"key\" = \"example\" }", got)
+	}
+	if got := dynamicCollectionExampleValue(&ir.CollectionType{Kind: ir.List}); got != `[ "example" ]` {
+		t.Errorf("list placeholder = %q, want [ \"example\" ]", got)
+	}
+	if got := dynamicCollectionExampleValue(&ir.CollectionType{Kind: ir.Set}); got != `[ "example" ]` {
+		t.Errorf("set placeholder = %q, want [ \"example\" ]", got)
 	}
 }

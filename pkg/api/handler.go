@@ -768,7 +768,11 @@ func buildIRPreview(spec *parser.Spec, version parser.Version, cfg *config.Confi
 	// classification unchanged. The transformer path-operation map is computed
 	// once and shared with the per-operation pass so data sources can build their
 	// schemas from the same resolved request/response shapes (REMAINING_GAPS §4).
-	groupedResources, consumed := buildGroupedResources(spec, name, pathOps, &previewDiags, usePutAsCreate)
+	var resourceOverrides []config.ResourceOverride
+	if cfg != nil {
+		resourceOverrides = cfg.ResourceOverrides
+	}
+	groupedResources, consumed := buildGroupedResources(spec, name, pathOps, resourceOverrides, &previewDiags, usePutAsCreate)
 	preview.Resources = append(preview.Resources, groupedResources...)
 	// Record which surviving grouped resources had their Create resolved from the
 	// instance-path PUT (PUT-as-create inference). The Info diagnostic for this
@@ -2044,7 +2048,7 @@ func warnUnwritableManagedResource(diags *diagnostics.Diagnostics, res ir.Resour
 // classification. This is the §3 fix: real specs with a collection POST plus an
 // instance GET/DELETE now yield a single wired resource instead of separate
 // partial resources.
-func buildGroupedResources(spec *parser.Spec, providerName string, pathOps map[string]map[transformer.HTTPMethod]transformer.Operation, diags *diagnostics.Diagnostics, usePutAsCreate bool) ([]ir.ResourceIR, map[string]map[string]bool) {
+func buildGroupedResources(spec *parser.Spec, providerName string, pathOps map[string]map[transformer.HTTPMethod]transformer.Operation, overrides []config.ResourceOverride, diags *diagnostics.Diagnostics, usePutAsCreate bool) ([]ir.ResourceIR, map[string]map[string]bool) {
 	if len(pathOps) == 0 {
 		return nil, nil
 	}
@@ -2107,7 +2111,15 @@ func buildGroupedResources(spec *parser.Spec, providerName string, pathOps map[s
 		res.CRUDMapping.Delete = resourceOperationMapping(spec, "DELETE", g.InstancePath, parserOp(spec, g.InstancePath, "DELETE"), envelopeOf(g.Delete))
 		res.CRUDMapping.Delete.MediaType = mediaTypeOf(g.Delete)
 
-		schema, idAttr := transformer.ManagedResourceSchemaWithDiagnostics(g, diags)
+		// An override that explicitly configures the identifier (id_attribute or
+		// import_format) disables the user-settable-identifier preference in the
+		// schema builder: the practitioner has chosen the ID attribute, so eidos
+		// must not guess a different one and leave the override referencing an
+		// attribute the schema no longer carries (e.g. archive_server's
+		// id_attribute: server_alias). The gate mirrors the one
+		// applyResourceCreationOverrides applies to override-created resources.
+		skipUserSettableID := resourceOverrideConfiguresID(overrides, res)
+		schema, idAttr := transformer.ManagedResourceSchemaWithDiagnostics(g, diags, skipUserSettableID)
 		res.Schema = schema
 		res.IDAttribute = idAttr
 		// Fail loud when a managed resource ends up with no practitioner-writable
@@ -2148,6 +2160,27 @@ func buildGroupedResources(spec *parser.Spec, providerName string, pathOps map[s
 
 	sort.Slice(resources, func(i, j int) bool { return resources[i].Name < resources[j].Name })
 	return resources, consumed
+}
+
+// resourceOverrideConfiguresID reports whether any resource override matching the
+// resource explicitly configures its identifier (id_attribute or import_format).
+// The schema builder's user-settable-identifier preference must be disabled in
+// that case: the practitioner has chosen the ID attribute, so eidos must not
+// guess a different one and leave the override referencing an attribute the
+// schema no longer carries (e.g. archive_server's id_attribute: server_alias).
+// Matching mirrors applyResourceOverrides (transformer.ResourceOverrideMatches),
+// so a grouped resource whose override sets the identifier is gated the same
+// way an override-created resource is in applyResourceCreationOverrides.
+func resourceOverrideConfiguresID(overrides []config.ResourceOverride, r ir.ResourceIR) bool {
+	for _, o := range overrides {
+		if !transformer.ResourceOverrideMatches(r, o) {
+			continue
+		}
+		if strings.TrimSpace(o.IDAttribute) != "" || strings.TrimSpace(o.ImportFormat) != "" {
+			return true
+		}
+	}
+	return false
 }
 
 // emitPutAsCreateInfoDiagnostics surfaces an Info diagnostic for each surviving
@@ -2216,62 +2249,101 @@ func resolveOperationByID(pathOps map[string]map[transformer.HTTPMethod]transfor
 // them as actions.
 func applyResourceCreationOverrides(preview *ir.ProviderIR, spec *parser.Spec, providerName string, pathOps map[string]map[transformer.HTTPMethod]transformer.Operation, overrides []config.ResourceOverride, consumed map[string]map[string]bool, diags *diagnostics.Diagnostics) {
 	for _, ro := range overrides {
-		gen := ro.GenerateResource != nil && *ro.GenerateResource
-		explicit := ro.CreateOperation != "" || ro.ReadOperation != "" || ro.UpdateOperation != "" || ro.DeleteOperation != ""
-		if !gen && !explicit {
-			continue
-		}
-		seed := ro.Operation
-		if seed == "" {
-			seed = ro.CreateOperation
-		}
-		if seed == "" {
-			continue
-		}
-		createPath, createMethod, createOp := resolveOperationByID(pathOps, seed)
-		if createOp == nil {
-			continue
-		}
-		// Skip if the seed operation is already consumed by an inferred resource
-		// (the existing applyResourceOverrides mutates those).
-		if isConsumed(consumed, createPath, createMethod) {
-			continue
-		}
-		readPath, _, readOp := resolveOperationByID(pathOps, ro.ReadOperation)
-		updatePath, updateMethod, updateOp := resolveOperationByID(pathOps, ro.UpdateOperation)
-		deletePath, deleteMethod, deleteOp := resolveOperationByID(pathOps, ro.DeleteOperation)
+		applyResourceCreationOverride(preview, spec, providerName, pathOps, ro, consumed, diags)
+	}
+}
 
-		g := transformer.ResourceCRUD{
-			Name:           resourceNameFromOverride(ro, createPath),
-			CollectionPath: createPath,
-			InstancePath:   readPath,
-			Create:         createOp,
-			Read:           readOp,
-			Update:         updateOp,
-			Delete:         deleteOp,
-		}
-		res := resourceFromOverrideCRUD(spec, providerName, g, diags)
-		if res == nil {
+// applyResourceCreationOverride promotes a single resource_override to a managed
+// resource when it targets an operation that inference classified as an action
+// (G8). The override may specify explicit read/update/delete operations for
+// entities whose create path differs from their read/delete path (e.g. MyCloud
+// dashboards: POST /dashboards/db vs GET|DELETE /dashboards/uid/{uid}). The
+// generated resource is wired to the resolved operations and its schema is
+// reconciled from the create request body and the read response. Operations the
+// override consumes are marked so the per-operation pass does not double-emit
+// them as actions.
+func applyResourceCreationOverride(preview *ir.ProviderIR, spec *parser.Spec, providerName string, pathOps map[string]map[transformer.HTTPMethod]transformer.Operation, ro config.ResourceOverride, consumed map[string]map[string]bool, diags *diagnostics.Diagnostics) {
+	gen := ro.GenerateResource != nil && *ro.GenerateResource
+	explicit := ro.CreateOperation != "" || ro.ReadOperation != "" || ro.UpdateOperation != "" || ro.DeleteOperation != ""
+	if !gen && !explicit {
+		return
+	}
+	seed := ro.Operation
+	if seed == "" {
+		seed = ro.CreateOperation
+	}
+	if seed == "" {
+		return
+	}
+	createPath, createMethod, createOp := resolveOperationByID(pathOps, seed)
+	if createOp == nil {
+		return
+	}
+	// Skip if the seed operation is already consumed by an inferred resource
+	// (the existing applyResourceOverrides mutates those).
+	if isConsumed(consumed, createPath, createMethod) {
+		return
+	}
+	readPath, _, readOp := resolveOperationByID(pathOps, ro.ReadOperation)
+	updatePath, updateMethod, updateOp := resolveOperationByID(pathOps, ro.UpdateOperation)
+	deletePath, deleteMethod, deleteOp := resolveOperationByID(pathOps, ro.DeleteOperation)
+
+	g := transformer.ResourceCRUD{
+		Name:           resourceNameFromOverride(ro, createPath),
+		CollectionPath: createPath,
+		InstancePath:   readPath,
+		Create:         createOp,
+		Read:           readOp,
+		Update:         updateOp,
+		Delete:         deleteOp,
+	}
+	// The identifier comes from the instance path, mirroring how
+	// buildResourceCRUD derives it from the deepest parameterized path. For an
+	// override-created resource the read may be a collection GET (e.g.
+	// intent_policy's GET /intent/policies filtered by a name query param)
+	// with no path parameters, so the identity is taken from the first of
+	// read/update/delete whose path carries parameters. Without this, g.ID
+	// stays zero-valued and resourceFromOverrideCRUD cannot wire an import
+	// even when the update/delete path parameter maps to a real schema
+	// attribute (e.g. {name} → name) — the "many resources are missing
+	// imports" gap.
+	for _, p := range []string{readPath, updatePath, deletePath} {
+		if p == "" {
 			continue
 		}
-		if strings.TrimSpace(ro.IDAttribute) != "" {
-			res.IDAttribute = ro.IDAttribute
+		if id := transformer.DetectIDFromPath(p); len(id.ParameterNames) > 0 {
+			g.ID = id
+			break
 		}
-		preview.Resources = append(preview.Resources, *res)
-		markConsumed(consumed, createPath, createMethod)
-		if readPath != "" {
-			markConsumed(consumed, readPath, "GET")
-		}
-		if updatePath != "" {
-			markConsumed(consumed, updatePath, updateMethod)
-		}
-		if deletePath != "" {
-			// The delete operation may be a non-DELETE method (e.g. SpaceTraders
-			// scraps a ship via POST /my/ships/{shipSymbol}/scrap); consume the
-			// actual method so the per-operation pass does not double-emit it as an
-			// action.
-			markConsumed(consumed, deletePath, deleteMethod)
-		}
+	}
+	// An override that explicitly configures the identifier (id_attribute or
+	// import_format) disables the user-settable-identifier preference in the
+	// schema builder: the practitioner has chosen the ID attribute, so eidos
+	// must not guess a different one and leave the override referencing an
+	// attribute the schema no longer carries (e.g. archive_server's
+	// id_attribute: server_alias).
+	skipUserSettableID := strings.TrimSpace(ro.IDAttribute) != "" || strings.TrimSpace(ro.ImportFormat) != ""
+	res := resourceFromOverrideCRUD(spec, providerName, g, diags, skipUserSettableID)
+	if res == nil {
+		return
+	}
+	if strings.TrimSpace(ro.IDAttribute) != "" {
+		res.IDAttribute = ro.IDAttribute
+	}
+	preview.Resources = append(preview.Resources, *res)
+	markConsumed(consumed, createPath, createMethod)
+	if readPath != "" {
+		markConsumed(consumed, readPath, "GET")
+	}
+	if updatePath != "" {
+		markConsumed(consumed, updatePath, updateMethod)
+	}
+	if deletePath != "" {
+		// The delete operation may be a non-DELETE method (e.g. SpaceTraders
+		// scraps a ship via POST /my/ships/{shipSymbol}/scrap); consume the
+		// actual method so the per-operation pass does not double-emit it as an
+		// action.
+		markConsumed(consumed, deletePath, deleteMethod)
 	}
 }
 
@@ -2294,7 +2366,13 @@ func resourceNameFromOverride(ro config.ResourceOverride, createPath string) str
 // resourceFromOverrideCRUD builds a managed ResourceIR from a CRUD group whose
 // operations were resolved from an override (G8). Unlike inferred groups, the
 // create/read/update/delete paths may differ (e.g. dashboards).
-func resourceFromOverrideCRUD(spec *parser.Spec, providerName string, g transformer.ResourceCRUD, diags *diagnostics.Diagnostics) *ir.ResourceIR {
+//
+// skipUserSettableID is true when the override explicitly configures the
+// identifier (id_attribute or import_format): the schema builder then keeps the
+// synthetic Computed placeholder named for the path parameter instead of
+// preferring a practitioner-supplied create-body attribute, so the override's
+// chosen attribute stays present in the schema.
+func resourceFromOverrideCRUD(spec *parser.Spec, providerName string, g transformer.ResourceCRUD, diags *diagnostics.Diagnostics, skipUserSettableID bool) *ir.ResourceIR {
 	// Normalize the CRUD group name to snake_case for the Terraform type name
 	// (camelCase is a convention violation; hyphens make the resource handle
 	// unreferenceable in HCL expressions). See the inferred-group counterpart
@@ -2334,9 +2412,19 @@ func resourceFromOverrideCRUD(spec *parser.Spec, providerName string, g transfor
 		res.CRUDMapping.Delete = resourceOperationMapping(spec, string(g.Delete.Method), g.Delete.Path, parserOp(spec, g.Delete.Path, string(g.Delete.Method)), envelopeOf(g.Delete))
 		res.CRUDMapping.Delete.MediaType = mediaTypeOf(g.Delete)
 	}
-	schema, idAttr := transformer.ManagedResourceSchemaWithDiagnostics(g, diags)
+	schema, idAttr := transformer.ManagedResourceSchemaWithDiagnostics(g, diags, skipUserSettableID)
 	res.Schema = schema
 	res.IDAttribute = idAttr
+	// Import wiring for override-created resources, mirroring the grouped path
+	// (buildGroupedResources). An override-created resource is importable when
+	// its identifier attribute(s) are real schema attributes the import can
+	// populate; groupedImportFormat returns ok=false otherwise and the resource
+	// stays honestly non-importable. An explicit import_format override applied
+	// later (applyResourceImportFormatOverride) supersedes this inferred format.
+	if importFmt, ok := groupedImportFormat(g, schema, idAttr); ok {
+		res.ImportIDFormat = importFmt
+		res.Importable = true
+	}
 	res.OverrideCreated = true
 	return &res
 }
@@ -2460,6 +2548,18 @@ func groupedImportFormat(g transformer.ResourceCRUD, schema ir.ObjectSchemaIR, i
 		}
 		return strings.Join(parts, ":"), true
 	default: // IDSimple
+		// The import must populate the attribute the read substitutes into the
+		// path placeholder. When a schema attribute carries the raw path
+		// parameter name (e.g. {name} → name), that attribute is what the read
+		// uses; the resolved ID attribute (e.g. "id" from a response echo) may be
+		// a different field the read does not substitute — importing by it would
+		// set the wrong attribute and the follow-up read would 404 (e.g.
+		// intent_policy's {name} path with an "id" response property). Fall back
+		// to the resolved ID attribute only when no attribute matches the path
+		// parameter name.
+		if len(g.ID.ParameterNames) > 0 && hasAttr(g.ID.ParameterNames[0]) {
+			return "{" + g.ID.ParameterNames[0] + "}", true
+		}
 		effective := idAttr
 		if effective == "" {
 			effective = "id"

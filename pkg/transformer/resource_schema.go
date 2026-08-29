@@ -261,7 +261,7 @@ func applyManagedAttributeFlags(
 // attribute of that name is added so the generator's ID-field lookup succeeds and
 // wired Read/Delete path substitution resolves.
 func ManagedResourceSchema(c ResourceCRUD) (ir.ObjectSchemaIR, string) {
-	return ManagedResourceSchemaWithDiagnostics(c, nil)
+	return ManagedResourceSchemaWithDiagnostics(c, nil, false)
 }
 
 // ManagedResourceSchemaWithDiagnostics is ManagedResourceSchema that appends
@@ -270,7 +270,15 @@ func ManagedResourceSchema(c ResourceCRUD) (ir.ObjectSchemaIR, string) {
 // to the same Terraform attribute name (e.g. "fooBar" and "foo_bar"), dropping
 // the later property so the generated schema never carries duplicate attributes
 // (H-3).
-func ManagedResourceSchemaWithDiagnostics(c ResourceCRUD, diags *diagnostics.Diagnostics) (ir.ObjectSchemaIR, string) {
+//
+// skipUserSettableID suppresses the user-settable-identifier preference
+// (userSettableIdentifier) so the synthetic Computed placeholder named for the
+// path parameter is always added. The API layer passes true when a
+// resource_override explicitly configures the identifier (id_attribute or
+// import_format): the practitioner has chosen the ID attribute, so eidos must
+// not guess a different one and leave the override referencing an attribute the
+// schema no longer carries.
+func ManagedResourceSchemaWithDiagnostics(c ResourceCRUD, diags *diagnostics.Diagnostics, skipUserSettableID bool) (ir.ObjectSchemaIR, string) {
 	stateSpec := resourceStateSpec(c)
 
 	// A "get one" read that returns a single-array response wrapper (e.g.
@@ -398,8 +406,9 @@ func ManagedResourceSchemaWithDiagnostics(c ResourceCRUD, diags *diagnostics.Dia
 		// "username" for {username}) is itself a top-level response property, that
 		// real attribute already supplies the identifier — do not add a duplicate
 		// synthetic. Only when no attribute with the identifier name exists do we
-		// add a synthetic Computed string so path substitution can resolve against
-		// an identifier populated via the create request or a Location header.
+		// consider a synthetic Computed string so path substitution can resolve
+		// against an identifier populated via the create request or a Location
+		// header.
 		alreadyPresent := false
 		for _, a := range attrs {
 			if a.Name == idAttribute {
@@ -408,11 +417,11 @@ func ManagedResourceSchemaWithDiagnostics(c ResourceCRUD, diags *diagnostics.Dia
 			}
 		}
 		if !alreadyPresent {
-			attrs = append(attrs, ir.AttributeIR{
-				Name:     idAttribute,
-				Schema:   ir.SchemaIR{Type: ir.TypeString},
-				Computed: true,
-			})
+			// Prefer a practitioner-supplied identifier over the synthetic
+			// placeholder (see resolveIdentifierAttribute). skipUserSettableID (an
+			// explicit id_attribute/import_format override) disables the preference
+			// so the override's chosen attribute stays in the schema.
+			resolvedID, attrs = resolveIdentifierAttribute(attrs, c, stateSpec, requestSpec, idAttribute, skipUserSettableID)
 		}
 	}
 
@@ -433,6 +442,134 @@ func ManagedResourceSchemaWithDiagnostics(c ResourceCRUD, diags *diagnostics.Dia
 
 	sort.Slice(attrs, func(i, j int) bool { return attrs[i].Name < attrs[j].Name })
 	return ir.ObjectSchemaIR{Attributes: attrs}, resolvedID
+}
+
+// resolveIdentifierAttribute decides how a resource whose response lacks an
+// attribute named for the path parameter gets its identifier. It prefers a
+// practitioner-supplied identifier: when the response echoes the identifier
+// under a different name than the path parameter (e.g. {serverAlias} with a
+// response "alias" field), the synthetic would never be populated by the create
+// response and the import would reference a value the practitioner cannot know.
+// If a top-level create-body attribute's name relates to the path parameter
+// (case-insensitive exact, suffix, or prefix match) and the response echoes it,
+// that attribute is the identifier the practitioner supplies; it is returned as
+// the resolved ID so the read substitutes it into the path and the import
+// references it. When no such attribute exists the synthetic Computed
+// placeholder named for the path parameter is appended (carrying the path
+// parameter's description when the spec documents it), keeping the resource
+// honest rather than guessing an identifier (e.g. a server-assigned id like
+// {policyId} with no matching input). skipUserSettableID (an explicit
+// id_attribute/import_format override) disables the preference so the
+// override's chosen attribute stays in the schema.
+func resolveIdentifierAttribute(attrs []ir.AttributeIR, c ResourceCRUD, stateSpec, requestSpec *SchemaSpec, idAttribute string, skipUserSettableID bool) (string, []ir.AttributeIR) {
+	idAttr := ""
+	if !skipUserSettableID {
+		idAttr = userSettableIdentifier(attrs, stateSpec, requestSpec, idAttribute)
+	}
+	if idAttr != "" {
+		return idAttr, attrs
+	}
+	// The synthetic Computed placeholder carries the path parameter's description
+	// when the spec documents it (e.g. {portId}'s "id of the target device Port
+	// (format: boxId_slotId_port, example: 1_1_c1)"). Without this the synthetic
+	// is a bare Computed string with no documentation even though the spec
+	// documents the identifier.
+	attrs = append(attrs, ir.AttributeIR{
+		Name:        idAttribute,
+		Schema:      ir.SchemaIR{Type: ir.TypeString},
+		Computed:    true,
+		Description: pathParamDescription(c, idAttribute),
+	})
+	return idAttribute, attrs
+}
+
+// userSettableIdentifier returns the name of a top-level create-body attribute
+// that the API uses as the resource identifier, or "" when none can be inferred.
+// It is consulted only when the response lacks an attribute named for the path
+// parameter (so a synthetic Computed placeholder would otherwise be added). The
+// identifier is the create-body attribute whose name relates to the path
+// parameter name — case-insensitive exact (e.g. {userName} ↔ username), suffix
+// (e.g. {serverAlias} ↔ alias), or prefix (e.g. {portId} ↔ port) — and that the
+// response echoes (so the create response can populate it) and is user-settable
+// (Required or Optional, not Computed-only). Exact matches win over suffix
+// matches, which win over prefix matches; within a category the longest name
+// wins so {serverAlias} prefers "alias" over a hypothetical shorter suffix. When
+// no such attribute exists the caller falls back to the synthetic placeholder,
+// keeping the resource honest rather than guessing an identifier (e.g. a
+// server-assigned id like {policyId} with no matching input).
+func userSettableIdentifier(attrs []ir.AttributeIR, stateSpec, requestSpec *SchemaSpec, idAttribute string) string {
+	if requestSpec == nil || stateSpec == nil {
+		return ""
+	}
+	// The response-echoed, user-settable top-level attributes, keyed by
+	// Terraform attribute name. attrs is built from the response properties
+	// (plus request-only inputs); a candidate must be echoed by the response to
+	// be the identifier, so it must be a stateSpec property.
+	echoed := make(map[string]bool, len(stateSpec.Properties))
+	for name := range stateSpec.Properties {
+		echoed[SanitizeAttributeName(name)] = true
+	}
+	settable := make(map[string]bool, len(attrs))
+	for _, a := range attrs {
+		if a.Computed && !a.Optional {
+			continue
+		}
+		settable[a.Name] = true
+	}
+	lower := strings.ToLower(idAttribute)
+	best := ""
+	bestKind := 0 // 3 = exact, 2 = suffix, 1 = prefix
+	bestLen := 0
+	for name := range requestSpec.Properties {
+		snake := SanitizeAttributeName(name)
+		if !settable[snake] || !echoed[snake] {
+			continue
+		}
+		n := strings.ToLower(name)
+		kind := 0
+		switch {
+		case n == lower:
+			kind = 3
+		case strings.HasSuffix(lower, n):
+			kind = 2
+		case strings.HasPrefix(lower, n):
+			kind = 1
+		}
+		if kind == 0 {
+			continue
+		}
+		if kind > bestKind || (kind == bestKind && len(n) > bestLen) {
+			best = snake
+			bestKind = kind
+			bestLen = len(n)
+		}
+	}
+	return best
+}
+
+// pathParamDescription returns the OpenAPI description of the path parameter
+// that names the resource identifier, so the synthetic Computed ID attribute
+// carries the same prose the spec gives the path placeholder (e.g. {portId}'s
+// "id of the target device Port (format: boxId_slotId_port, example: 1_1_c1)").
+// The path parameter lives on the instance-path operations (read/update/delete;
+// create for a PUT-as-create upsert), and its name sanitizes to the identifier
+// attribute name (portId → port_id). Empty when no path parameter documents the
+// identifier, which keeps the synthetic honest rather than inventing prose.
+func pathParamDescription(c ResourceCRUD, idAttribute string) string {
+	for _, op := range []*Operation{c.Read, c.Update, c.Delete, c.Create} {
+		if op == nil {
+			continue
+		}
+		for _, p := range op.Parameters {
+			if p.In != "path" {
+				continue
+			}
+			if SanitizeAttributeName(p.Name) == idAttribute {
+				return p.Description
+			}
+		}
+	}
+	return ""
 }
 
 // forcePutAsCreateIdentifiers marks every identifier attribute Required for a

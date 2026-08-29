@@ -13,12 +13,19 @@ Read a Stack
 
 ```terraform
 resource "mycloud_stack" "example" {
-  api_version = null
-  kind        = null
-  name        = null
-  spec        = {}
-  status      = {}
-  workspace   = null
+  api_version = "example"
+  kind        = "example"
+  name        = "example"
+  spec = {
+    replicas = 0
+    selector = {
+      "selector" = "example"
+    }
+  }
+  status = {
+    ready_replicas = 0
+  }
+  workspace = "example"
 }
 ```
 

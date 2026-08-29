@@ -28,12 +28,12 @@
     {
       "path": "docs/data-sources/get_item.md",
       "reason": "documentation for data source get_item",
-      "body_hash": "5c44980938778444"
+      "body_hash": "bd3ff874790bf6a3"
     },
     {
       "path": "docs/data-sources/list_items.md",
       "reason": "documentation for data source list_items",
-      "body_hash": "f08dc70e18e52899"
+      "body_hash": "ebea68bd5485aa11"
     },
     {
       "path": "docs/index.md",
@@ -43,7 +43,7 @@
     {
       "path": "docs/list-resources/list_items.md",
       "reason": "documentation for list resource list_items",
-      "body_hash": "a24115fbd1e4b964"
+      "body_hash": "b96668f0f52d7f36"
     },
     {
       "path": "examples/actions/delete_item/action.tf",
@@ -58,7 +58,7 @@
     {
       "path": "examples/data-sources/list_items/data-source.tf",
       "reason": "example for data source list_items",
-      "body_hash": "7e950b7063457393"
+      "body_hash": "569db260f8b2f2cd"
     },
     {
       "path": "generator.yaml",

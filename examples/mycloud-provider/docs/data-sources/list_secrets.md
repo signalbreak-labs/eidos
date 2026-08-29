@@ -13,7 +13,7 @@ List Secrets
 
 ```terraform
 data "mycloud_list_secrets" "example" {
-  workspace = null
+  workspace = "example"
 }
 ```
 

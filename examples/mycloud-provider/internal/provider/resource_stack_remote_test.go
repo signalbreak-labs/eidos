@@ -87,15 +87,15 @@ func TestStackResource_Create_MissingID(t *testing.T) {
 	hasErrorContaining(t, resp.Diagnostics, "did not contain an identifier")
 }
 
-// TestStackResource_Create_LocationFallback exercises StackResource.createRemote against an httptest mock: success status with no body id but a Location header sets the string identifier from the header.
+// TestStackResource_Create_LocationFallback exercises StackResource.createRemote against an httptest mock: success status with no body id but a Location header sets the string identifier from the header's trailing path segment.
 func TestStackResource_Create_LocationFallback(t *testing.T) {
 	r := &StackResource{client: newMockClientWithLocation(t, 201, "http://example.test/folders/example-id", "{}")}
 	m := StackResourceModel{}
 	resp := &resource.CreateResponse{}
 	r.createRemote(context.Background(), &m, resp)
 	requireNoErrors(t, resp.Diagnostics)
-	if m.Id.ValueString() != "http://example.test/folders/example-id" {
-		t.Fatalf("identifier = %q, want %q", m.Id.ValueString(), "http://example.test/folders/example-id")
+	if m.Id.ValueString() != "example-id" {
+		t.Fatalf("identifier = %q, want %q", m.Id.ValueString(), "example-id")
 	}
 }
 
