@@ -265,8 +265,72 @@ func applyResourceNameOverride(r *ir.ResourceIR, override config.ResourceOverrid
 
 func applyResourceIDOverride(r *ir.ResourceIR, override config.ResourceOverride, diags *diagnostics.Diagnostics) {
 	if strings.TrimSpace(override.IDAttribute) != "" {
+		old := r.IDAttribute
 		r.IDAttribute = override.IDAttribute
 		warnComputedOnlyImportTarget(r, "{"+r.IDAttribute+"}", diags)
+		dropSupersededIDAttribute(r, old, override.IDAttribute, diags)
+	}
+}
+
+// dropSupersededIDAttribute removes the previous identifier attribute when an
+// explicit id_attribute override supersedes it with a different, user-settable
+// attribute and the old one is the inferred synthetic placeholder: the
+// Computed-only attribute resolveIdentifierAttribute appends, named for the
+// path parameter (e.g. {serverAlias} → server_alias) with no WireName because
+// the response does not echo it. Left in place it renders as a dead,
+// always-null Computed attribute in the schema and docs (gigavuecore's
+// archive_server with id_attribute: alias). The removal is surfaced with a
+// Warning, never silent, and skipped when the old attribute is real
+// (response-derived attributes always carry a WireName), is itself
+// user-settable, is still referenced by a path template, or the new
+// identifier is not present and user-settable.
+func dropSupersededIDAttribute(r *ir.ResourceIR, old, newID string, diags *diagnostics.Diagnostics) {
+	if r == nil || old == "" || old == newID {
+		return
+	}
+	var oldAttr, newAttr *ir.AttributeIR
+	for i := range r.Schema.Attributes {
+		switch r.Schema.Attributes[i].Name {
+		case old:
+			oldAttr = &r.Schema.Attributes[i]
+		case newID:
+			newAttr = &r.Schema.Attributes[i]
+		}
+	}
+	if oldAttr == nil || newAttr == nil {
+		return
+	}
+	if !newAttr.Required && !newAttr.Optional {
+		return // the new identifier is not user-settable; keep the old attribute
+	}
+	if oldAttr.WireName != "" || !oldAttr.ComputedOnly() {
+		return // real (echoed or input) attribute, not the synthetic placeholder
+	}
+	templates := []string{r.CRUDMapping.Create.PathTemplate, r.CRUDMapping.Read.PathTemplate, r.CRUDMapping.Delete.PathTemplate}
+	if r.CRUDMapping.Update != nil {
+		templates = append(templates, r.CRUDMapping.Update.PathTemplate)
+	}
+	for _, tmpl := range templates {
+		if strings.Contains(tmpl, "{"+old+"}") {
+			return // a path still name-matches the old attribute; it stays load-bearing
+		}
+	}
+	kept := make([]ir.AttributeIR, 0, len(r.Schema.Attributes))
+	for _, a := range r.Schema.Attributes {
+		if a.Name != old {
+			kept = append(kept, a)
+		}
+	}
+	r.Schema.Attributes = kept
+	if diags != nil {
+		*diags = append(*diags, diagnostics.Diagnostic{
+			Severity: diagnostics.Warning,
+			Summary:  "id_attribute override drops the inferred placeholder attribute",
+			Detail: fmt.Sprintf(
+				"Resource %q: id_attribute %q supersedes the inferred Computed placeholder %q (named for the path parameter and never populated by the response), so %q is dropped from the schema.",
+				r.Name, newID, old, old,
+			),
+		})
 	}
 }
 
