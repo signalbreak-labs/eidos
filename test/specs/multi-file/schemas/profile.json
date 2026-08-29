@@ -1,0 +1,15 @@
+{
+  "$defs": {
+    "Profile": {
+      "type": "object",
+      "properties": {
+        "nickname": {
+          "type": "string"
+        },
+        "pet": {
+          "$ref": "./pet.yaml#/Pet"
+        }
+      }
+    }
+  }
+}

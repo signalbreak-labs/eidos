@@ -83,7 +83,7 @@ func HandleSuggestResources(ctx context.Context, req *sdkmcp.CallToolRequest, ar
 		Suggestions: []Suggestion{},
 	}
 
-	specBytes, err := normalizeSpec(ctx, args.Spec, rawArguments(req))
+	specSource, err := normalizeSpecSource(ctx, args.Spec, rawArguments(req))
 	if err != nil {
 		out = suggestResourcesErrorResult(err)
 		res, err = marshalToolResult(out)
@@ -104,13 +104,14 @@ func HandleSuggestResources(ctx context.Context, req *sdkmcp.CallToolRequest, ar
 	// Merge config into a copy for the config-aware IR preview (consumed set).
 	// The raw pathOps come from the un-merged spec so overrides never change the
 	// operations/schemas we group.
-	mergedBytes, err := mergeConfigIntoSpec(specBytes, configYAML)
+	mergedSource := specSource
+	mergedSource.data, err = mergeConfigIntoSpec(specSource.data, configYAML)
 	if err != nil {
 		out = suggestResourcesErrorResult(err)
 		res, err = marshalToolResult(out)
 		return res, out, err
 	}
-	resp := validateContext(ctx, mergedBytes)
+	resp := validateSpecContext(ctx, mergedSource)
 	result.Diagnostics = append(result.Diagnostics, nonNilDiags(resp.Diagnostics)...)
 
 	// usePutAsCreate mirrors the real pipeline so candidate grouping matches
@@ -136,7 +137,7 @@ func HandleSuggestResources(ctx context.Context, req *sdkmcp.CallToolRequest, ar
 		}
 	}
 
-	spec, parseDiags, err := api.ParseSpec(specBytes, "spec")
+	spec, parseDiags, err := parseNormalizedSpec(specSource)
 	if err != nil {
 		out = suggestResourcesErrorResult(err)
 		res, err = marshalToolResult(out)

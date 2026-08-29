@@ -12,6 +12,7 @@ import (
 	"github.com/signalbreak-labs/eidos/pkg/config"
 	"github.com/signalbreak-labs/eidos/pkg/diagnostics"
 	"github.com/signalbreak-labs/eidos/pkg/parser"
+	"github.com/signalbreak-labs/eidos/pkg/specsource"
 )
 
 type generateConfigFlags struct {
@@ -59,12 +60,8 @@ func runGenerateConfig(cmd *cobra.Command, flags *generateConfigFlags) error {
 	// The spec path written into the starter config is the absolute local path
 	// for a file spec, or the URL itself for a remote spec.
 	specDisplay := flags.spec
-	if !isRemoteSpecURL(flags.spec) {
-		absSpec, aerr := filepath.Abs(flags.spec)
-		if aerr != nil {
-			return fmt.Errorf("failed to resolve spec path: %w", aerr)
-		}
-		specDisplay = absSpec
+	if localPath, ok := specsource.LocalPath(flags.spec); ok {
+		specDisplay = localPath
 	}
 
 	output := flags.output

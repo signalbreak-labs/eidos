@@ -187,6 +187,57 @@ func TestNormalizeSpec_AbsoluteFilePath(t *testing.T) {
 	}
 }
 
+func TestHandleInspect_LocalMultiFileSpec(t *testing.T) {
+	dir := t.TempDir()
+	entry := filepath.Join(dir, "openapi.yaml")
+	paths := filepath.Join(dir, "paths.yaml")
+	schema := filepath.Join(dir, "pet.json")
+	if err := os.WriteFile(entry, []byte(`
+openapi: 3.0.3
+info: {title: Pets, version: 1.0.0}
+paths:
+  /pets:
+    $ref: ./paths.yaml#/pets
+`), 0o600); err != nil {
+		t.Fatalf("write entry spec: %v", err)
+	}
+	if err := os.WriteFile(paths, []byte(`
+pets:
+  get:
+    operationId: listPets
+    responses:
+      '200':
+        description: pets
+        content:
+          application/json:
+            schema:
+              type: array
+              items:
+                $ref: ./pet.json#/$defs/Pet
+`), 0o600); err != nil {
+		t.Fatalf("write path item: %v", err)
+	}
+	if err := os.WriteFile(schema, []byte(`{"$defs":{"Pet":{"type":"object","properties":{"name":{"type":"string"}}}}}`), 0o600); err != nil {
+		t.Fatalf("write schema: %v", err)
+	}
+
+	_, out, err := HandleInspect(context.Background(), nil, InspectArgs{Spec: entry})
+	if err != nil {
+		t.Fatalf("HandleInspect() error = %v", err)
+	}
+	if !out.Valid || out.Counts.DataSources != 1 {
+		t.Fatalf("inspect result = %+v, want one valid data source", out)
+	}
+
+	_, lookup, err := HandleLookup(context.Background(), nil, LookupArgs{Spec: entry, OperationID: "listPets"})
+	if err != nil {
+		t.Fatalf("HandleLookup() error = %v", err)
+	}
+	if !lookup.Valid || lookup.Operation == nil || lookup.Operation.Path != "/pets" {
+		t.Fatalf("lookup result = %+v, operation = %+v; want resolved /pets operation", lookup, lookup.Operation)
+	}
+}
+
 // TestNormalizeSpec_RelativeFilePath verifies a bare relative filename that
 // exists is read as a file reference.
 func TestNormalizeSpec_RelativeFilePath(t *testing.T) {

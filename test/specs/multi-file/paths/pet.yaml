@@ -1,0 +1,14 @@
+parameters:
+  - $ref: ../components/parameters.yaml#/PetID
+get:
+  operationId: getPet
+  summary: Read a pet
+  responses:
+    "200":
+      $ref: ../operations/pet.yaml#/response
+delete:
+  operationId: deletePet
+  summary: Delete a pet
+  responses:
+    "204":
+      description: Pet deleted.

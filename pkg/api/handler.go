@@ -10,6 +10,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"os"
 	"sort"
 	"strconv"
 	"strings"
@@ -172,7 +173,7 @@ func Validate(body []byte) ValidateResponse {
 // flow-style YAML documents that start with '{' or '[' from being routed to
 // the JSON parser when the caller declares an application/yaml media type.
 func ValidateWithContentType(body []byte, contentType string) ValidateResponse {
-	return validateContext(context.Background(), body, contentType)
+	return validateContext(context.Background(), body, contentType, "")
 }
 
 // ValidateContextWithContentType is like ValidateWithContentType but honors
@@ -180,7 +181,7 @@ func ValidateWithContentType(body []byte, contentType string) ValidateResponse {
 // context so a client disconnect or the server's WriteTimeout aborts the
 // pipeline (the body read is already context-aware via MaxBytesReader).
 func ValidateContextWithContentType(ctx context.Context, body []byte, contentType string) ValidateResponse {
-	return validateContext(ctx, body, contentType)
+	return validateContext(ctx, body, contentType, "")
 }
 
 // ValidateContext runs the same pipeline as Validate but honors cancellation on
@@ -188,10 +189,17 @@ func ValidateContextWithContentType(ctx context.Context, body []byte, contentTyp
 // return early when it is canceled; the current short pipeline at least
 // surfaces cancellation before doing work.
 func ValidateContext(ctx context.Context, body []byte) ValidateResponse {
-	return validateContext(ctx, body, "")
+	return validateContext(ctx, body, "", "")
 }
 
-func validateContext(ctx context.Context, body []byte, contentType string) ValidateResponse {
+// ValidateContextWithName validates a spec loaded from name. When name is an
+// existing local file, relative file references are resolved from its
+// directory. URL and synthetic names remain filesystem-isolated.
+func ValidateContextWithName(ctx context.Context, body []byte, name, contentType string) ValidateResponse {
+	return validateContext(ctx, body, contentType, name)
+}
+
+func validateContext(ctx context.Context, body []byte, contentType, name string) ValidateResponse {
 	var resp ValidateResponse
 
 	// checkCtx aborts the pipeline early when the caller's context is canceled
@@ -217,7 +225,13 @@ func validateContext(ctx context.Context, body []byte, contentType string) Valid
 		return resp
 	}
 
-	root, err := loadRequestBodyWithContentType(body, contentType)
+	var root parser.Node
+	var err error
+	if name == "" {
+		root, err = loadRequestBodyWithContentType(body, contentType)
+	} else {
+		root, err = loadRequestBodyWithName(body, contentType, name)
+	}
 	if err != nil {
 		resp.Diagnostics = append(resp.Diagnostics, DiagnosticJSON{
 			Severity: diagnostics.Error.String(),
@@ -249,6 +263,13 @@ func validateContext(ctx context.Context, body []byte, contentType string) Valid
 		})
 	} else {
 		resp.Diagnostics = append(resp.Diagnostics, toDiagnosticJSON(convertDiags)...)
+		if refErr := enableLocalReferences(spec, root, name, version); refErr != nil {
+			resp.Diagnostics = append(resp.Diagnostics, DiagnosticJSON{
+				Severity: diagnostics.Error.String(),
+				Summary:  "Failed to initialize local $ref resolution",
+				Detail:   refErr.Error(),
+			})
+		}
 		validationDiags := parser.Validate(root, spec, version)
 		resp.Diagnostics = append(resp.Diagnostics, toDiagnosticJSON(validationDiags)...)
 	}
@@ -462,18 +483,34 @@ func convertForVersion(root parser.Node, version parser.Version) (*parser.Spec, 
 	}
 }
 
-// ParseSpec parses raw OpenAPI spec bytes into a *parser.Spec without applying
-// a generator.yaml or building the grouped IR preview. It runs the same
-// normalize/detect/convert pipeline as validateContext, but stops short of
-// config extraction, override application, and IR grouping so callers that need
-// the raw operation/schema surface (eidos/lookup, eidos/suggest-resources) can
-// run transformer.OperationsFromSpecWithDiagnostics themselves.
-//
-// displayName attributes parse diagnostics to the caller's spec source (a path
-// or URL) so errors point at the real document. contentType is empty to let
-// loadRequestBody auto-detect JSON vs YAML by the first byte, matching the
-// no-content-type MCP path.
+func enableLocalReferences(spec *parser.Spec, root parser.Node, name string, version parser.Version) error {
+	if name == "" {
+		return nil
+	}
+	info, err := os.Stat(name)
+	if err != nil || info.IsDir() {
+		return nil
+	}
+	return parser.EnableLocalReferences(spec, root, name, version)
+}
+
+// ParseSpec parses raw OpenAPI bytes without authorizing filesystem references.
+// displayName is used only for diagnostics; use ParseSpecWithName when the bytes
+// came from a local file and relative references should resolve.
 func ParseSpec(specBytes []byte, displayName string) (*parser.Spec, diagnostics.Diagnostics, error) {
+	return parseSpec(specBytes, displayName, "")
+}
+
+// ParseSpecWithName parses bytes loaded from name. An existing local file name
+// authorizes bounded relative-file resolution; URLs remain filesystem-isolated.
+func ParseSpecWithName(specBytes []byte, name string) (*parser.Spec, diagnostics.Diagnostics, error) {
+	return parseSpec(specBytes, name, name)
+}
+
+func parseSpec(specBytes []byte, displayName, localName string) (*parser.Spec, diagnostics.Diagnostics, error) {
+	if displayName == "" {
+		displayName = "spec"
+	}
 	root, err := loadRequestBodyWithName(specBytes, "", displayName)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to parse spec: %w", err)
@@ -483,7 +520,12 @@ func ParseSpec(specBytes []byte, displayName string) (*parser.Spec, diagnostics.
 	if err != nil {
 		return nil, versionDiags, err
 	}
-	return spec, append(versionDiags, convertDiags...), nil
+	if err := enableLocalReferences(spec, root, localName, version); err != nil {
+		return nil, append(versionDiags, convertDiags...), err
+	}
+	allDiags := append(diagnostics.Diagnostics(versionDiags), convertDiags...)
+	allDiags = append(allDiags, parser.Validate(root, spec, version)...)
+	return spec, allDiags, nil
 }
 
 func toDiagnosticJSON(ds diagnostics.Diagnostics) []DiagnosticJSON {
@@ -690,6 +732,17 @@ func analyzeSchema(s *parser.Schema, seen map[*parser.Schema]struct{}, stats *sc
 	}
 }
 
+func resolvePathItemReferences(spec *parser.Spec, diags *diagnostics.Diagnostics) {
+	if spec == nil {
+		return
+	}
+	for _, path := range sortedKeys(spec.Paths) {
+		resolved, refDiags := spec.ResolvePathItemReference(spec.Paths[path])
+		spec.Paths[path] = resolved
+		*diags = append(*diags, refDiags...)
+	}
+}
+
 func buildIRPreview(spec *parser.Spec, version parser.Version, cfg *config.Config) (*ir.ProviderIR, diagnostics.Diagnostics) {
 	name := providerName(spec, cfg)
 	providerVersion := config.DefaultProviderVersion
@@ -745,12 +798,13 @@ func buildIRPreview(spec *parser.Spec, version parser.Version, cfg *config.Confi
 	// matching operations from the spec so CRUD grouping and the per-operation
 	// pass both exclude them. Both the CLI generate path and the MCP server
 	// funnel through this function, so the filter applies everywhere.
+	previewDiags := make(diagnostics.Diagnostics, 0, len(spec.Paths))
+	resolvePathItemReferences(spec, &previewDiags)
 	filterDiags := applyOperationFilters(spec, cfg)
 	pathOps, opsDiags := transformer.OperationsFromSpecWithDiagnostics(spec)
 	// Surface schema-conversion diagnostics (e.g. unrepresentable allOf/oneOf/
 	// anyOf composition in nested properties) instead of dropping them silently
 	// (L-97 / fail-loud). Warnings do not break Valid; Errors do.
-	previewDiags := make(diagnostics.Diagnostics, 0, len(opsDiags)+len(filterDiags))
 	previewDiags = append(previewDiags, filterDiags...)
 	previewDiags = append(previewDiags, opsDiags...)
 	// Resolve the PUT-as-create toggle: default-on when no config is supplied
@@ -1548,7 +1602,7 @@ func buildSecurityIR(spec *parser.Spec, cfg *config.Config, diags *diagnostics.D
 	if spec.Components == nil {
 		return security
 	}
-	security.Schemes = buildSecuritySchemes(spec, selectedScheme)
+	security.Schemes = buildSecuritySchemes(spec, selectedScheme, diags)
 	// Apply generator.yaml `auth:` overrides so the documented auth section is
 	// actually consumed: header_name, token_url, discovery_url, flow, and the
 	// env-var hints override the auto-derived scheme configuration (M-5).
@@ -1619,13 +1673,18 @@ func warnUndeclaredSecuritySchemes(spec *parser.Spec, selectedScheme string, dia
 // buildSecuritySchemes converts every declared security scheme (optionally
 // filtered to the generator.yaml-selected scheme) into its IR form, sorted by
 // name for deterministic output.
-func buildSecuritySchemes(spec *parser.Spec, selectedScheme string) []ir.SecuritySchemeIR {
+func buildSecuritySchemes(spec *parser.Spec, selectedScheme string, diags *diagnostics.Diagnostics) []ir.SecuritySchemeIR {
 	var schemes []ir.SecuritySchemeIR
 	for _, name := range sortedKeys(spec.Components.SecuritySchemes) {
 		if selectedScheme != "" && name != selectedScheme {
 			continue
 		}
-		scheme := spec.Components.SecuritySchemes[name]
+		scheme, refDiags := spec.ResolveSecuritySchemeReference(spec.Components.SecuritySchemes[name])
+		*diags = append(*diags, refDiags...)
+		spec.Components.SecuritySchemes[name] = scheme
+		if scheme == nil {
+			continue
+		}
 		irScheme := ir.SecuritySchemeIR{
 			Name:             name,
 			Type:             ir.SecuritySchemeType(scheme.Type),
@@ -3235,17 +3294,11 @@ func paramIR(p parser.Parameter) ir.ParamIR {
 // resolveParameter so path-level parameters referenced by $ref expose their
 // schema (and const/default/enum) to paramIR.
 func resolveParamRef(spec *parser.Spec, p parser.Parameter) *parser.Parameter {
-	if p.Ref == "" || spec == nil || spec.Components == nil {
+	if p.Ref == "" || spec == nil {
 		return &p
 	}
-	name := p.Ref
-	if idx := strings.LastIndex(name, "/"); idx >= 0 {
-		name = name[idx+1:]
-	}
-	if resolved, ok := spec.Components.Parameters[name]; ok && resolved != nil {
-		return resolved
-	}
-	return &p
+	resolved, _ := spec.ResolveParameterReference(&p)
+	return resolved
 }
 
 // pathParamIRs returns the in:path parameters declared on an operation, merging
@@ -3270,20 +3323,20 @@ func pathParamIRs(spec *parser.Spec, path string, op *parser.Operation) []ir.Par
 	// path-level parameter is skipped.
 	if op != nil {
 		for _, p := range op.Parameters {
-			if !strings.EqualFold(p.In, "path") {
+			r := resolveParamRef(spec, p)
+			if !strings.EqualFold(r.In, "path") {
 				continue
 			}
-			r := resolveParamRef(spec, p)
 			out = append(out, paramIR(*r))
 			seen[r.Name] = true
 		}
 	}
 	if pi != nil {
 		for _, p := range pi.Parameters {
-			if !strings.EqualFold(p.In, "path") {
+			r := resolveParamRef(spec, p)
+			if !strings.EqualFold(r.In, "path") {
 				continue
 			}
-			r := resolveParamRef(spec, p)
 			if seen[r.Name] {
 				continue
 			}
@@ -4117,14 +4170,14 @@ func buildProviderIR(spec []byte, name, contentType string, cfg *config.Config) 
 	if err != nil {
 		return nil, version, append(diagnostics.Diagnostics(versionDiags), convertDiags...), fmt.Errorf("failed to convert OpenAPI spec: %w", err)
 	}
+	if err := enableLocalReferences(sp, root, name, version); err != nil {
+		return nil, version, append(diagnostics.Diagnostics(versionDiags), convertDiags...), fmt.Errorf("failed to initialize local $ref resolution: %w", err)
+	}
 
 	allDiags := append(diagnostics.Diagnostics(versionDiags), convertDiags...)
-	// Run the same structural and $ref validation the HTTP /validate endpoint
-	// applies (parser.Validate). The converter records a schema's $ref string but
-	// never resolves it; only Validate rejects non-local refs and unresolvable
-	// local pointers. Without it, `eidos generate` silently dropped dangling
-	// external refs (e.g. a bundled spec's sibling schema files) and emitted
-	// empty-schema resources instead of failing loud.
+	// Run the same structural and document-aware $ref validation the HTTP
+	// /validate endpoint applies. Without it, generation could silently drop a
+	// dangling reference and emit an empty-schema resource instead of failing.
 	allDiags = append(allDiags, parser.Validate(root, sp, version)...)
 	preview, previewDiags := buildIRPreview(sp, version, cfg)
 	allDiags = append(allDiags, previewDiags...)

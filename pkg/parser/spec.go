@@ -39,6 +39,7 @@ type Spec struct {
 	ExternalDocs      *ExternalDocs         `json:"externalDocs,omitempty"`
 	SourceLocation    SourceLocation        `json:"sourceLocation,omitempty"`
 	Extensions        map[string]any        `json:"-"`
+	localRefs         *localRefResolver
 }
 
 // Info corresponds to the OpenAPI info object.

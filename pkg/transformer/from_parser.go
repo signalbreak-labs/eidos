@@ -38,6 +38,10 @@ func OperationsFromSpecWithDiagnostics(spec *parser.Spec) (map[string]map[HTTPMe
 	// regardless of map iteration seed (L-3).
 	for _, path := range sortedKeys(spec.Paths) {
 		pi := spec.Paths[path]
+		var refDiags diagnostics.Diagnostics
+		pi, refDiags = spec.ResolvePathItemReference(pi)
+		diags = append(diags, refDiags...)
+		spec.Paths[path] = pi
 		if pi == nil {
 			continue
 		}
@@ -65,7 +69,7 @@ func operationFromParser(spec *parser.Spec, path string, method HTTPMethod, op *
 		Method:      method,
 		Path:        path,
 		OperationID: op.OperationID,
-		Parameters:  parametersFromParser(spec, pi, op),
+		Parameters:  parametersFromParser(spec, pi, op, diags),
 		Extensions:  shallowCopyExtensions(op.Extensions),
 	}
 	// formData parameters (OpenAPI 2.0 form-encoded request bodies) cannot be
@@ -75,11 +79,11 @@ func operationFromParser(spec *parser.Spec, path string, method HTTPMethod, op *
 	warnFormDataParameters(diags, op, pi)
 
 	if op.RequestBody != nil {
-		rb := resolveRequestBody(spec, op.RequestBody)
+		rb := resolveRequestBody(spec, op.RequestBody, diags)
 		out.RequestBody = rb != nil && len(rb.Content) > 0
 		out.RequestMediaType = selectMediaType(rb.Content)
 		if s := firstContentSchema(rb.Content); s != nil {
-			out.RequestSchema = schemaSpecFromParser(spec, resolveSchemaRef(spec, s), diags)
+			out.RequestSchema = schemaSpecFromParser(spec, resolveSchemaRef(spec, s, diags), diags)
 			// resolveSchemaRef drops the $ref, so restore the referenced schema
 			// name for union wrapper naming (D1).
 			if out.RequestSchema != nil && out.RequestSchema.RefName == "" {
@@ -110,7 +114,7 @@ func operationFromParser(spec *parser.Spec, path string, method HTTPMethod, op *
 	if resp := successfulResponse(spec, op.OperationID, op.Responses, diags); resp != nil {
 		out.ResponseBody = len(resp.Content) > 0
 		if s := firstContentSchema(resp.Content); s != nil {
-			out.ResponseSchema = schemaSpecFromParser(spec, resolveSchemaRef(spec, s), diags)
+			out.ResponseSchema = schemaSpecFromParser(spec, resolveSchemaRef(spec, s, diags), diags)
 			// resolveSchemaRef drops the $ref, so restore the referenced schema
 			// name for union wrapper naming (D1).
 			if out.ResponseSchema != nil && out.ResponseSchema.RefName == "" {
@@ -175,7 +179,7 @@ func warnUnmappedLinks(diags *diagnostics.Diagnostics, spec *parser.Spec, op *pa
 	}
 	var names []string
 	for _, code := range sortedKeys(op.Responses) {
-		r := resolveResponse(spec, op.Responses[code])
+		r := resolveResponse(spec, op.Responses[code], diags)
 		if r == nil || len(r.Links) == 0 {
 			continue
 		}
@@ -232,12 +236,12 @@ func piServers(pi *parser.PathItem) []parser.Server {
 	return pi.Servers
 }
 
-func parametersFromParser(spec *parser.Spec, pi *parser.PathItem, op *parser.Operation) []Parameter {
+func parametersFromParser(spec *parser.Spec, pi *parser.PathItem, op *parser.Operation, diags *diagnostics.Diagnostics) []Parameter {
 	type key struct{ name, in string }
 	seen := make(map[key]bool)
 	var params []Parameter
 	add := func(p parser.Parameter) {
-		resolved := resolveParameter(spec, p)
+		resolved := resolveParameter(spec, p, diags)
 		k := key{resolved.Name, resolved.In}
 		if seen[k] {
 			return
@@ -336,7 +340,7 @@ func successfulResponse(spec *parser.Spec, operationID string, responses map[str
 	// lowest 2xx (its headers may still be meaningful for pagination).
 	var fallback *parser.Response
 	for _, k := range keys {
-		r := resolveResponse(spec, responses[k.key])
+		r := resolveResponse(spec, responses[k.key], diags)
 		if r == nil {
 			continue
 		}
@@ -380,26 +384,26 @@ func isRangeWildcard(code string) bool {
 	return (code[1] == 'X' || code[1] == 'x') && (code[2] == 'X' || code[2] == 'x')
 }
 
-func resolveResponse(spec *parser.Spec, r *parser.Response) *parser.Response {
-	if r == nil || r.Ref == "" || spec == nil || spec.Components == nil {
+func resolveResponse(spec *parser.Spec, r *parser.Response, diags *diagnostics.Diagnostics) *parser.Response {
+	if r == nil || r.Ref == "" || spec == nil {
 		return r
 	}
-	name := refName(r.Ref)
-	if resolved, ok := spec.Components.Responses[name]; ok && resolved != nil {
-		return resolved
+	resolved, refDiags := spec.ResolveResponseReference(r)
+	if diags != nil {
+		*diags = append(*diags, refDiags...)
 	}
-	return r
+	return resolved
 }
 
-func resolveRequestBody(spec *parser.Spec, rb *parser.RequestBody) *parser.RequestBody {
-	if rb == nil || rb.Ref == "" || spec == nil || spec.Components == nil {
+func resolveRequestBody(spec *parser.Spec, rb *parser.RequestBody, diags *diagnostics.Diagnostics) *parser.RequestBody {
+	if rb == nil || rb.Ref == "" || spec == nil {
 		return rb
 	}
-	name := refName(rb.Ref)
-	if resolved, ok := spec.Components.RequestBodies[name]; ok && resolved != nil {
-		return resolved
+	resolved, refDiags := spec.ResolveRequestBodyReference(rb)
+	if diags != nil {
+		*diags = append(*diags, refDiags...)
 	}
-	return rb
+	return resolved
 }
 
 // resolveSchemaRef follows a content schema's $ref to the component schema it
@@ -408,20 +412,23 @@ func resolveRequestBody(spec *parser.Spec, rb *parser.RequestBody) *parser.Reque
 // instead of an empty, unresolved-ref schema. It follows chained refs and stops
 // on a cycle (the parser marks cyclic component schemas Opaque, which
 // schemaSpecFromParser honors as an opaque boundary) or an unresolvable ref.
-func resolveSchemaRef(spec *parser.Spec, s *parser.Schema) *parser.Schema {
-	if s == nil || s.Ref == "" || spec == nil || spec.Components == nil {
+func resolveSchemaRef(spec *parser.Spec, s *parser.Schema, diags *diagnostics.Diagnostics) *parser.Schema {
+	if s == nil || s.Ref == "" || spec == nil {
 		return s
 	}
 	visited := map[string]bool{}
 	cur := s
 	for cur.Ref != "" {
-		if visited[cur.Ref] {
+		key := spec.ReferenceKey(cur.Ref, cur.SourceLocation)
+		if visited[key] {
 			return cur // cycle: stop at the boundary rather than looping forever
 		}
-		visited[cur.Ref] = true
-		name := refName(cur.Ref)
-		resolved, ok := spec.Components.Schemas[name]
-		if !ok || resolved == nil {
+		visited[key] = true
+		resolved, refDiags := spec.ResolveSchemaReference(cur)
+		if diags != nil {
+			*diags = append(*diags, refDiags...)
+		}
+		if resolved == nil || resolved == cur {
 			return cur // unresolvable: return the ref schema as-is
 		}
 		cur = resolved
@@ -443,15 +450,15 @@ func mergeSiblingDescription(out *SchemaSpec, s *parser.Schema) {
 	out.Description = s.Description
 }
 
-func resolveParameter(spec *parser.Spec, p parser.Parameter) *parser.Parameter {
-	if p.Ref == "" || spec == nil || spec.Components == nil {
+func resolveParameter(spec *parser.Spec, p parser.Parameter, diags *diagnostics.Diagnostics) *parser.Parameter {
+	if p.Ref == "" || spec == nil {
 		return &p
 	}
-	name := refName(p.Ref)
-	if resolved, ok := spec.Components.Parameters[name]; ok && resolved != nil {
-		return resolved
+	resolved, refDiags := spec.ResolveParameterReference(&p)
+	if diags != nil {
+		*diags = append(*diags, refDiags...)
 	}
-	return &p
+	return resolved
 }
 
 func firstContentSchema(content map[string]*parser.MediaType) *parser.Schema {
@@ -828,7 +835,7 @@ func schemaSpecFromParserDepth(spec *parser.Spec, s *parser.Schema, depth, cycle
 				applyConstraintsFromParser(cut, s)
 				return cut
 			}
-			resolved := resolveSchemaRef(spec, s)
+			resolved := resolveSchemaRef(spec, s, diags)
 			out := schemaSpecFromParserDepth(spec, resolved, depth+1, cycleDepth+1, visited, memo, diags)
 			if out != nil && out.RefName == "" {
 				out.RefName = refName
@@ -842,7 +849,8 @@ func schemaSpecFromParserDepth(spec *parser.Spec, s *parser.Schema, depth, cycle
 		// and descending would recurse to maxSchemaDepth and emit pathological
 		// nesting. Treat the boundary as opaque (scalar fields only, no descent),
 		// matching the Opaque handling below.
-		if visited[s.Ref] {
+		refKey := spec.ReferenceKey(s.Ref, s.SourceLocation)
+		if visited[refKey] {
 			cut := &SchemaSpec{
 				Type:        schemaTypeString(s.Type),
 				Description: s.Description,
@@ -859,9 +867,9 @@ func schemaSpecFromParserDepth(spec *parser.Spec, s *parser.Schema, depth, cycle
 		for k := range visited {
 			pathVisited[k] = true
 		}
-		pathVisited[s.Ref] = true
+		pathVisited[refKey] = true
 		visited = pathVisited
-		resolved := resolveSchemaRef(spec, s)
+		resolved := resolveSchemaRef(spec, s, diags)
 		out := schemaSpecFromParserDepth(spec, resolved, depth+1, cycleDepth, visited, memo, diags)
 		if out != nil && out.RefName == "" {
 			out.RefName = refName

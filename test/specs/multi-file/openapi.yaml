@@ -1,0 +1,12 @@
+openapi: 3.0.3
+info:
+  title: Multi File Pets
+  description: A modular API used to verify local file reference generation.
+  version: 1.0.0
+servers:
+  - url: https://pets.example.com
+paths:
+  /pets:
+    $ref: ./paths/pets.yaml
+  /pets/{id}:
+    $ref: ./paths/pet.yaml

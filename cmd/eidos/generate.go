@@ -17,6 +17,7 @@ import (
 	"github.com/signalbreak-labs/eidos/pkg/diagnostics"
 	"github.com/signalbreak-labs/eidos/pkg/generator"
 	"github.com/signalbreak-labs/eidos/pkg/ir"
+	"github.com/signalbreak-labs/eidos/pkg/specsource"
 )
 
 type generateFlags struct {
@@ -401,12 +402,8 @@ func resolveGenerateSpec(ctx context.Context, flags *generateFlags, cfg *config.
 		return nil, "", "", "", err
 	}
 	specDisplay := specPath
-	if !isRemoteSpecURL(specPath) {
-		absSpec, aerr := filepath.Abs(specPath)
-		if aerr != nil {
-			return nil, "", "", "", fmt.Errorf("failed to resolve spec path: %w", aerr)
-		}
-		specDisplay = absSpec
+	if localPath, ok := specsource.LocalPath(specPath); ok {
+		specDisplay = localPath
 	}
 	return specBytes, contentType, specPath, specDisplay, nil
 }
