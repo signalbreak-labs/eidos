@@ -28,7 +28,7 @@
     {
       "path": "docs/resources/pet.md",
       "reason": "documentation for resource pet",
-      "body_hash": "6d6e4e9a6020828f"
+      "body_hash": "8232d435adeee225"
     },
     {
       "path": "examples/resources/pet/resource.tf",
@@ -38,12 +38,12 @@
     {
       "path": "generator.yaml",
       "reason": "generated generator configuration",
-      "body_hash": "2d7eeee125e71a5d"
+      "body_hash": "c332fbfdb4753c3d"
     },
     {
       "path": "go.mod",
       "reason": "Go module definition",
-      "body_hash": "f1f7603a292fa740"
+      "body_hash": "9f0cfada999b29a3"
     },
     {
       "path": "internal/client/client.go",
