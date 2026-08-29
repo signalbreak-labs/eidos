@@ -135,7 +135,7 @@ func InspectTool() *sdkmcp.Tool {
 // HandleInspect implements eidos/inspect.
 func HandleInspect(ctx context.Context, req *sdkmcp.CallToolRequest, args InspectArgs) (res *sdkmcp.CallToolResult, out InspectResult, err error) {
 	defer recoverHandler("eidos/inspect", inspectErrorResult, &res, &out)
-	specBytes, err := normalizeSpec(ctx, args.Spec, rawArguments(req))
+	specSource, err := normalizeSpecSource(ctx, args.Spec, rawArguments(req))
 	if err != nil {
 		out = inspectErrorResult(err)
 		res, err = marshalToolResult(out)
@@ -152,13 +152,13 @@ func HandleInspect(ctx context.Context, req *sdkmcp.CallToolRequest, args Inspec
 		res, err = marshalToolResult(out)
 		return res, out, err
 	}
-	specBytes, err = mergeConfigIntoSpec(specBytes, configYAML)
+	specSource.data, err = mergeConfigIntoSpec(specSource.data, configYAML)
 	if err != nil {
 		out = inspectErrorResult(err)
 		res, err = marshalToolResult(out)
 		return res, out, err
 	}
-	resp := validateContext(ctx, specBytes)
+	resp := validateSpecContext(ctx, specSource)
 	result := InspectResult{
 		Valid:       resp.Valid,
 		Diagnostics: nonNilDiags(resp.Diagnostics),
@@ -299,7 +299,7 @@ func GenerateTool() *sdkmcp.Tool {
 // HandleGenerate implements eidos/generate.
 func HandleGenerate(ctx context.Context, req *sdkmcp.CallToolRequest, args GenerateArgs) (res *sdkmcp.CallToolResult, out GenerateResult, err error) {
 	defer recoverHandler("eidos/generate", generateErrorResult, &res, &out)
-	specBytes, err := normalizeSpec(ctx, args.Spec, rawArguments(req))
+	specSource, err := normalizeSpecSource(ctx, args.Spec, rawArguments(req))
 	if err != nil {
 		out = generateErrorResult(err)
 		res, err = marshalToolResult(out)
@@ -315,7 +315,7 @@ func HandleGenerate(ctx context.Context, req *sdkmcp.CallToolRequest, args Gener
 		res, err = marshalToolResult(out)
 		return res, out, err
 	}
-	specBytes, err = mergeConfigIntoSpec(specBytes, configYAML)
+	specSource.data, err = mergeConfigIntoSpec(specSource.data, configYAML)
 	if err != nil {
 		out = generateErrorResult(err)
 		res, err = marshalToolResult(out)
@@ -330,7 +330,7 @@ func HandleGenerate(ctx context.Context, req *sdkmcp.CallToolRequest, args Gener
 	// clobbering a hand-written source-of-truth config the CLI guards against
 	// (M-74).
 	genOpts := generateCollectOptions(configYAML)
-	resp := validateContext(ctx, specBytes)
+	resp := validateSpecContext(ctx, specSource)
 	result := GenerateResult{
 		Valid:       resp.Valid,
 		Diagnostics: nonNilDiags(resp.Diagnostics),
@@ -488,7 +488,7 @@ func ValidateSchemasTool() *sdkmcp.Tool {
 // HandleValidateSchemas implements eidos/validate-schemas.
 func HandleValidateSchemas(ctx context.Context, req *sdkmcp.CallToolRequest, args ValidateSchemasArgs) (res *sdkmcp.CallToolResult, out ValidateSchemasResult, err error) {
 	defer recoverHandler("eidos/validate-schemas", validateSchemasErrorResult, &res, &out)
-	specBytes, err := normalizeSpec(ctx, args.Spec, rawArguments(req))
+	specSource, err := normalizeSpecSource(ctx, args.Spec, rawArguments(req))
 	if err != nil {
 		out = validateSchemasErrorResult(err)
 		res, err = marshalToolResult(out)
@@ -504,13 +504,13 @@ func HandleValidateSchemas(ctx context.Context, req *sdkmcp.CallToolRequest, arg
 		res, err = marshalToolResult(out)
 		return res, out, err
 	}
-	specBytes, err = mergeConfigIntoSpec(specBytes, configYAML)
+	specSource.data, err = mergeConfigIntoSpec(specSource.data, configYAML)
 	if err != nil {
 		out = validateSchemasErrorResult(err)
 		res, err = marshalToolResult(out)
 		return res, out, err
 	}
-	resp := validateContext(ctx, specBytes)
+	resp := validateSpecContext(ctx, specSource)
 	result := ValidateSchemasResult{
 		Valid:       resp.Valid,
 		Diagnostics: nonNilDiags(resp.Diagnostics),
@@ -585,7 +585,7 @@ func OverridePreviewTool() *sdkmcp.Tool {
 // HandleOverridePreview implements eidos/override-preview.
 func HandleOverridePreview(ctx context.Context, req *sdkmcp.CallToolRequest, args OverridePreviewArgs) (res *sdkmcp.CallToolResult, out OverridePreviewResult, err error) {
 	defer recoverHandler("eidos/override-preview", overridePreviewErrorResult, &res, &out)
-	specBytes, err := normalizeSpec(ctx, args.Spec, rawArguments(req))
+	specSource, err := normalizeSpecSource(ctx, args.Spec, rawArguments(req))
 	if err != nil {
 		out = overridePreviewErrorResult(err)
 		res, err = marshalToolResult(out)
@@ -600,13 +600,13 @@ func HandleOverridePreview(ctx context.Context, req *sdkmcp.CallToolRequest, arg
 		res, err = marshalToolResult(out)
 		return res, out, err
 	}
-	merged, err := mergeConfigIntoSpec(specBytes, configYAML)
+	specSource.data, err = mergeConfigIntoSpec(specSource.data, configYAML)
 	if err != nil {
 		out = overridePreviewErrorResult(err)
 		res, err = marshalToolResult(out)
 		return res, out, err
 	}
-	resp := validateContext(ctx, merged)
+	resp := validateSpecContext(ctx, specSource)
 	result := OverridePreviewResult{
 		Valid:       resp.Valid,
 		Diagnostics: nonNilDiags(resp.Diagnostics),

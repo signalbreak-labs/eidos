@@ -165,6 +165,24 @@ func TestIsURL(t *testing.T) {
 	}
 }
 
+func TestLocalPath(t *testing.T) {
+	path := writeFile(t, "api.yaml", sampleSpec)
+	want, err := filepath.Abs(path)
+	if err != nil {
+		t.Fatalf("absolute path: %v", err)
+	}
+	for _, ref := range []string{path, "  " + path + "  ", (&url.URL{Scheme: "file", Path: path}).String()} {
+		if got, ok := LocalPath(ref); !ok || got != want {
+			t.Errorf("LocalPath(%q) = %q, %v; want %q, true", ref, got, ok, want)
+		}
+	}
+	for _, ref := range []string{"", "https://example.com/api.yaml", "ftp://example.com/api.yaml", filepath.Dir(path), filepath.Join(filepath.Dir(path), "missing.yaml"), "%"} {
+		if got, ok := LocalPath(ref); ok {
+			t.Errorf("LocalPath(%q) = %q, true; want false", ref, got)
+		}
+	}
+}
+
 // testFetchOptions returns Options that can reach an httptest server on
 // 127.0.0.1 (which the SSRF guard rejects): http allowed, host check skipped.
 func testFetchOptions() Options {

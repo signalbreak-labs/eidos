@@ -111,6 +111,37 @@ func IsURL(ref string) bool {
 	return false
 }
 
+// LocalPath returns the absolute, cleaned filesystem path named by ref. It returns
+// false for remote URLs, inline content, missing files, and directories.
+func LocalPath(ref string) (string, bool) {
+	ref = strings.TrimSpace(ref)
+	if ref == "" {
+		return "", false
+	}
+	path := ref
+	if u, err := url.Parse(ref); err == nil {
+		switch strings.ToLower(u.Scheme) {
+		case "http", "https":
+			return "", false
+		case "file":
+			path = fileURLPath(u)
+		case "":
+		default:
+			return "", false
+		}
+	}
+	path = expandHome(path)
+	info, err := os.Stat(path)
+	if err != nil || info.IsDir() {
+		return "", false
+	}
+	abs, err := filepath.Abs(filepath.Clean(path))
+	if err != nil {
+		return "", false
+	}
+	return abs, true
+}
+
 // LoadSpec resolves ref to spec bytes: a local file path, a file:// URL, or an
 // http(s):// URL. It returns ErrNotASourceRef when the string is not a source
 // reference and InlineFallback is set, so the caller can fall back to

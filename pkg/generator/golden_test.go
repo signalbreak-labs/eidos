@@ -2,6 +2,7 @@ package generator_test
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"go/format"
@@ -41,6 +42,7 @@ var goldenCases = []struct {
 	{"swagger-formdata", "../../test/specs/swagger-formdata.yaml"},
 	{"put-as-create", "../../test/specs/put-as-create.yaml"},
 	{"put-as-create-composite", "../../test/specs/put-as-create-composite.yaml"},
+	{"multi-file", "../../test/specs/multi-file/openapi.yaml"},
 }
 
 // scaffoldMarkers are the honest, unconditional "not wired" messages that
@@ -130,7 +132,7 @@ func TestGoldenFiles(t *testing.T) {
 				t.Fatalf("read spec %s: %v", tc.spec, err)
 			}
 
-			resp := api.Validate(data)
+			resp := api.ValidateContextWithName(context.Background(), data, tc.spec, "")
 			if !resp.Valid {
 				var summaries []string
 				for _, d := range resp.Diagnostics {
@@ -234,6 +236,7 @@ var corpusWiringTargets = map[string]map[string]int{
 	"swagger-formdata":        {"resource": 2},
 	"put-as-create":           {"resource": 1},
 	"put-as-create-composite": {"resource": 1},
+	"multi-file":              {"resource": 1},
 }
 
 // corpusInferenceTargets asserts minimum inferred-construct counts for specs

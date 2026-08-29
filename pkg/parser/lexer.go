@@ -7,14 +7,12 @@
 // indentation and key text uniqueness. This raw AST is the input for the
 // higher-level OpenAPI spec conversion code.
 //
-// Security note: the pipeline resolves only local (same-document) JSON Pointer
-// $ref values (ref_local.go); external $ref values pointing at other files or
-// URLs are rejected with an error diagnostic rather than fetched. There is
-// therefore no network or filesystem $ref resolution to misuse for SSRF or
-// path traversal, and no need to restrict schemes or sandbox file access
-// (L-83: a previous external-ref resolver existed in the package but was never
-// wired into the pipeline; it has been removed in favor of the local-only
-// behavior the pipeline actually implements).
+// Security note: same-document JSON Pointers are always supported. Relative
+// file $ref values are supported only when the entry document was explicitly
+// loaded from a local path; inline and remotely fetched entries have no local
+// base and reject them. Reference URLs and absolute paths are never fetched or
+// read, and local traversal is bounded by document-count, byte, and depth
+// limits in ref_file.go.
 //
 // Lexer limitations:
 //   - YAML block keys containing an unquoted colon followed by whitespace are

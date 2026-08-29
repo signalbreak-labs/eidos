@@ -1,0 +1,8 @@
+post:
+  operationId: createPet
+  summary: Create a pet
+  requestBody:
+    $ref: ../operations/pet.yaml#/requestBody
+  responses:
+    "201":
+      $ref: ../operations/pet.yaml#/response

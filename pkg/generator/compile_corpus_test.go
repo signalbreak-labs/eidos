@@ -36,7 +36,7 @@ func TestGoldenFiles_Compile(t *testing.T) {
 				t.Fatalf("read spec %s: %v", tc.spec, err)
 			}
 
-			resp := api.Validate(data)
+			resp := api.ValidateContextWithName(context.Background(), data, tc.spec, "")
 			if !resp.Valid {
 				t.Fatalf("spec %s produced invalid diagnostics", tc.spec)
 			}

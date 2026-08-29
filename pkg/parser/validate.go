@@ -34,7 +34,7 @@ func Validate(root Node, spec *Spec, version Version) []Diagnostic {
 	diags = append(diags, validateRequired(spec, version)...)
 	diags = append(diags, validateNestedRequired(spec, version)...)
 	if root != nil {
-		diags = append(diags, validateRefs(root)...)
+		diags = append(diags, validateRefs(root, spec)...)
 		diags = append(diags, validateUnsupportedKeywords(root, version)...)
 		diags = append(diags, validateTypes(root, version)...)
 		diags = append(diags, validateDuplicateKeys(root)...)
@@ -283,19 +283,22 @@ func validateRequired(spec *Spec, version Version) []Diagnostic {
 	return diags
 }
 
-// validateRefs scans the raw AST for local $ref values and verifies that each
-// one resolves against the document root. Non-local references are also reported
-// because only local JSON Pointer refs are supported by this parser.
+// validateRefs scans the raw AST for $ref values and verifies that each one
+// resolves. Relative files are followed only when a local entry document has
+// enabled the bounded resolver; other callers remain same-document only.
 type refValidator struct {
-	root  Node
-	seen  map[string]bool
-	diags []Diagnostic
+	root     Node
+	resolver *localRefResolver
+	seen     map[string]bool
+	walked   map[Node]bool
+	diags    []Diagnostic
 }
 
-func (rv *refValidator) walk(n Node) {
-	if n == nil {
+func (rv *refValidator) walk(n Node, depth int) {
+	if n == nil || rv.walked[n] {
 		return
 	}
+	rv.walked[n] = true
 	switch v := n.(type) {
 	case *MapNode:
 		for _, e := range v.Entries {
@@ -304,19 +307,19 @@ func (rv *refValidator) walk(n Node) {
 			}
 			key, _ := asString(e.Key)
 			if key == "$ref" {
-				rv.checkRef(e.Value)
+				rv.checkRef(e.Value, depth)
 				continue
 			}
-			rv.walk(e.Value)
+			rv.walk(e.Value, depth)
 		}
 	case *SequenceNode:
 		for _, item := range v.Items {
-			rv.walk(item)
+			rv.walk(item, depth)
 		}
 	}
 }
 
-func (rv *refValidator) checkRef(value Node) {
+func (rv *refValidator) checkRef(value Node, depth int) {
 	ref, ok := asString(value)
 	if !ok {
 		// A non-string $ref (e.g. `$ref: 123` or `$ref: {…}`) is invalid and
@@ -331,22 +334,45 @@ func (rv *refValidator) checkRef(value Node) {
 		})
 		return
 	}
-	if rv.seen[ref] {
+	var (
+		target Node
+		key    = ref
+		d      []Diagnostic
+	)
+	if rv.resolver == nil {
+		target, d = ResolveLocalRef(rv.root, ref, nodeLoc(value))
+	} else {
+		target, key, d = rv.resolver.resolve(ref, nodeLoc(value))
+	}
+	if rv.seen[key] {
 		return
 	}
-	rv.seen[ref] = true
-
-	_, d := ResolveLocalRef(rv.root, ref, nodeLoc(value))
+	rv.seen[key] = true
 	if len(d) > 0 {
 		// Preserve the source location of the $ref value, which
 		// ResolveLocalRef already provides.
 		rv.diags = append(rv.diags, d...)
+		return
 	}
+	if depth >= maxReferenceDepth {
+		loc := nodeLoc(value)
+		rv.diags = append(rv.diags, Diagnostic{
+			Severity:       SeverityError,
+			Summary:        "Reference depth limit exceeded",
+			Detail:         fmt.Sprintf("Local references may be nested at most %d levels.", maxReferenceDepth),
+			SourceLocation: &loc,
+		})
+		return
+	}
+	rv.walk(target, depth+1)
 }
 
-func validateRefs(root Node) []Diagnostic {
-	rv := &refValidator{root: root, seen: make(map[string]bool)}
-	rv.walk(root)
+func validateRefs(root Node, spec *Spec) []Diagnostic {
+	rv := &refValidator{root: root, seen: make(map[string]bool), walked: make(map[Node]bool)}
+	if spec != nil {
+		rv.resolver = spec.localRefs
+	}
+	rv.walk(root, 0)
 	return rv.diags
 }
 
