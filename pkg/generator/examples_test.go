@@ -553,3 +553,115 @@ func TestWriteHCLDiscriminatedUnionAligned(t *testing.T) {
 		}
 	}
 }
+
+// TestWriteHCLAttributeValue_DynamicCollection covers the degraded-collection
+// and union branches of writeHCLAttributeValue: a dynamic collection whose
+// element is object-like renders as a block (single=false), a dynamic collection
+// with a non-object element renders a populated literal, an unknown collection
+// kind falls back to a populated literal, and a non-discriminated union renders
+// a scalar placeholder.
+func TestWriteHCLAttributeValue_DynamicCollection(t *testing.T) {
+	cases := []struct {
+		name   string
+		attr   ir.AttributeIR
+		want   string
+		single bool
+	}{
+		{
+			name: "dynamic list with object-like element renders as block",
+			attr: ir.AttributeIR{
+				Name: "bad",
+				Schema: ir.SchemaIR{
+					Collection: &ir.CollectionType{
+						Kind: ir.List,
+						ElementType: ir.SchemaIR{
+							Attributes: []ir.AttributeIR{
+								{Name: "x", Schema: ir.SchemaIR{Type: ir.TypeDynamic}},
+							},
+						},
+					},
+				},
+			},
+			want:   "",
+			single: false,
+		},
+		{
+			name: "list of nested collection renders populated literal",
+			attr: ir.AttributeIR{
+				Name: "bad",
+				Schema: ir.SchemaIR{
+					Collection: &ir.CollectionType{
+						Kind: ir.List,
+						ElementType: ir.SchemaIR{
+							Collection: &ir.CollectionType{Kind: ir.List, ElementType: ir.SchemaIR{Type: ir.TypeString}},
+						},
+					},
+				},
+			},
+			want:   `[ "example" ]`,
+			single: true,
+		},
+		{
+			name: "map of nested collection renders populated literal",
+			attr: ir.AttributeIR{
+				Name: "bad",
+				Schema: ir.SchemaIR{
+					Collection: &ir.CollectionType{
+						Kind: ir.Map,
+						ElementType: ir.SchemaIR{
+							Collection: &ir.CollectionType{Kind: ir.List, ElementType: ir.SchemaIR{Type: ir.TypeString}},
+						},
+					},
+				},
+			},
+			want:   `{ "key" = "example" }`,
+			single: true,
+		},
+		{
+			name: "unknown collection kind renders populated literal",
+			attr: ir.AttributeIR{
+				Name: "bad",
+				Schema: ir.SchemaIR{
+					Collection: &ir.CollectionType{
+						Kind:        ir.CollectionKind("tuple"),
+						ElementType: ir.SchemaIR{Type: ir.TypeString},
+					},
+				},
+			},
+			want:   `[ "example" ]`,
+			single: true,
+		},
+		{
+			name: "non-discriminated union renders scalar placeholder",
+			attr: ir.AttributeIR{
+				Name:   "bad",
+				Schema: ir.SchemaIR{Union: &ir.UnionType{}},
+			},
+			want:   `"example"`,
+			single: true,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, single := writeHCLAttributeValue(tc.attr)
+			if got != tc.want || single != tc.single {
+				t.Errorf("writeHCLAttributeValue(%s) = %q, %v; want %q, %v", tc.attr.Name, got, single, tc.want, tc.single)
+			}
+		})
+	}
+}
+
+// TestDynamicCollectionExampleValue covers the populated-literal placeholder for
+// a collection that degraded to a DynamicAttribute: a map literal for Map, a
+// list literal for List/Set.
+func TestDynamicCollectionExampleValue(t *testing.T) {
+	if got := dynamicCollectionExampleValue(&ir.CollectionType{Kind: ir.Map}); got != `{ "key" = "example" }` {
+		t.Errorf("map placeholder = %q, want { \"key\" = \"example\" }", got)
+	}
+	if got := dynamicCollectionExampleValue(&ir.CollectionType{Kind: ir.List}); got != `[ "example" ]` {
+		t.Errorf("list placeholder = %q, want [ \"example\" ]", got)
+	}
+	if got := dynamicCollectionExampleValue(&ir.CollectionType{Kind: ir.Set}); got != `[ "example" ]` {
+		t.Errorf("set placeholder = %q, want [ \"example\" ]", got)
+	}
+}
