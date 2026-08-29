@@ -429,6 +429,20 @@ func resolveSchemaRef(spec *parser.Spec, s *parser.Schema) *parser.Schema {
 	return cur
 }
 
+// mergeSiblingDescription carries a description written next to a $ref (the
+// "sibling description" idiom, common in Swagger 2.0 and hand-maintained specs
+// even though OpenAPI 3.x formally ignores $ref siblings) onto the resolved
+// schema. Without this, the ref resolution drops the description silently and
+// the generated provider documents the field with no text (G39: 1,331 dropped
+// descriptions in the gigavuecore audit). The target schema's own description
+// wins; the sibling only fills an empty one.
+func mergeSiblingDescription(out *SchemaSpec, s *parser.Schema) {
+	if out == nil || s == nil || s.Description == "" || out.Description != "" {
+		return
+	}
+	out.Description = s.Description
+}
+
 func resolveParameter(spec *parser.Spec, p parser.Parameter) *parser.Parameter {
 	if p.Ref == "" || spec == nil || spec.Components == nil {
 		return &p
@@ -760,6 +774,7 @@ func schemaSpecFromParserDepth(spec *parser.Spec, s *parser.Schema, depth, cycle
 			if out != nil && out.RefName == "" {
 				out.RefName = refName
 			}
+			mergeSiblingDescription(out, s)
 			return out
 		}
 		// An acyclic $ref. The visited set backstops cycles the parser did not
@@ -790,6 +805,7 @@ func schemaSpecFromParserDepth(spec *parser.Spec, s *parser.Schema, depth, cycle
 		if out != nil && out.RefName == "" {
 			out.RefName = refName
 		}
+		mergeSiblingDescription(out, s)
 		return out
 	}
 	// A non-ref schema the parser marked Opaque (e.g. an additionalProperties

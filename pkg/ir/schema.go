@@ -32,11 +32,27 @@ type AttributeIR struct {
 	Sensitive           bool             `json:"sensitive,omitempty"`
 	WriteOnly           bool             `json:"write_only,omitempty"` // writeOnly: true → not stored in state (Terraform 1.10+)
 	ForceNew            bool             `json:"force_new,omitempty"`  // x-terraform-force-new / forceNew marker
+	// RequestInput marks an attribute whose value the generated CRUD body
+	// sends to the API: a create/update request-body property, a formData
+	// field, or a path/query/header parameter fed from state. It guards the
+	// computed_attributes override: making such an attribute Computed-only
+	// would leave the request sending a value the practitioner can never
+	// supply (e.g. a required clusterId query param), breaking create and
+	// import (G39).
+	RequestInput        bool             `json:"request_input,omitempty"`
 	Deprecated          bool             `json:"deprecated,omitempty"`
 	DeprecationMessage  string           `json:"deprecation_message,omitempty"`
 	Default             *any             `json:"default,omitempty"`
 	PlanModifiers       []PlanModifierIR `json:"plan_modifiers,omitempty"`
 	Validators          []ValidatorIR    `json:"validators,omitempty"`
+}
+
+// ComputedOnly reports whether the attribute is server-populated and not
+// practitioner-settable: Computed with neither Required nor Optional. An
+// import ID must never target such an attribute — the practitioner cannot
+// know its value before the first read (G39).
+func (a AttributeIR) ComputedOnly() bool {
+	return a.Computed && !a.Required && !a.Optional
 }
 
 // BlockNestingMode describes how many block instances a Terraform block allows.

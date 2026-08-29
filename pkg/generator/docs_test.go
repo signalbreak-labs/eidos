@@ -5,6 +5,7 @@ import (
 	"sort"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/signalbreak-labs/eidos/pkg/ir"
 )
@@ -180,6 +181,17 @@ func TestResourceDocsFile_ImportFormat(t *testing.T) {
 		Description:    "A pet resource.",
 		Importable:     true,
 		ImportIDFormat: "{project_id}/{pet_id}",
+		// An import is only emitted for a wired resource (a scaffolded Read
+		// always fails, so the import could never succeed) (G39).
+		CRUDMapping: ir.CRUDMappingIR{
+			Create: ir.OperationMappingIR{Method: "POST", PathTemplate: "/pets"},
+			Read:   ir.OperationMappingIR{Method: "GET", PathTemplate: "/pets/{pet_id}"},
+			Delete: ir.OperationMappingIR{Method: "DELETE", PathTemplate: "/pets/{pet_id}"},
+		},
+		Schema: ir.ObjectSchemaIR{Attributes: []ir.AttributeIR{
+			{Name: "project_id", Required: true, Schema: ir.SchemaIR{Type: ir.TypeString}},
+			{Name: "pet_id", Required: true, Schema: ir.SchemaIR{Type: ir.TypeString}},
+		}},
 	}
 
 	file := ResourceDocsFile(r)
@@ -421,5 +433,124 @@ func TestBlockQualifier(t *testing.T) {
 		if got := blockQualifier(tc.block); got != tc.want {
 			t.Errorf("blockQualifier(%+v) = %q, want %q", tc.block, got, tc.want)
 		}
+	}
+}
+
+// TestResourceDocsFile_NestedSchemaGroupHeadersNotGlued locks in the nested-
+// schema markdown fix: a Required:/Optional:/Read-Only: group header (and every
+// <a id> anchor) must start its own block, separated from the previous group's
+// last bullet by a blank line. Without it, CommonMark parses the header as a
+// lazy continuation of the bullet and the Registry renders it glued to the
+// bullet text (e.g. "type (String) - Alert clear type Optional:") — the
+// alert_policy report (G39).
+func TestResourceDocsFile_NestedSchemaGroupHeadersNotGlued(t *testing.T) {
+	r := ir.ResourceIR{
+		Name:        "alert_policy",
+		TypeName:    "mycloud_alert_policy",
+		Description: "An alert policy resource.",
+		Schema: ir.ObjectSchemaIR{
+			Attributes: []ir.AttributeIR{
+				{
+					Name:     "clear_condition",
+					Required: true,
+					Schema: ir.SchemaIR{
+						Attributes: []ir.AttributeIR{
+							{Name: "type", Required: true, Description: "Alert clear type", Schema: ir.SchemaIR{Type: ir.TypeString}},
+							{Name: "threshold", Optional: true, Description: "Alert clear threshold definition", Schema: ir.SchemaIR{Type: ir.TypeString}},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	file := ResourceDocsFile(r)
+	var buf bytes.Buffer
+	if err := file.Render(&buf); err != nil {
+		t.Fatalf("Render() error = %v", err)
+	}
+	got := buf.String()
+
+	for _, glued := range []string{
+		"Alert clear type\nOptional:",
+		"Alert clear type Optional:",
+		"threshold definition\n<a id=",
+	} {
+		if strings.Contains(got, glued) {
+			t.Errorf("nested schema group header glued to the previous bullet (%q)\ncontent:\n%s", glued, got)
+		}
+	}
+	if !strings.Contains(got, "Alert clear type\n\nOptional:") {
+		t.Errorf("Optional: group header must be separated by a blank line\ncontent:\n%s", got)
+	}
+}
+
+// TestRenderDocsSections_OptionalComputedNotDuplicated locks in the G39 fix:
+// an Optional+Computed attribute is an argument the server also echoes, so it
+// is listed under Arguments (as optional) only — never duplicated under
+// Attributes. The Attributes section is reserved for Computed-only attributes.
+func TestRenderDocsSections_OptionalComputedNotDuplicated(t *testing.T) {
+	attrs := []ir.AttributeIR{
+		{Name: "name", Required: true, Schema: ir.SchemaIR{Type: ir.TypeString}},
+		{Name: "color", Optional: true, Computed: true, Schema: ir.SchemaIR{Type: ir.TypeString}},
+		{Name: "id", Computed: true, Schema: ir.SchemaIR{Type: ir.TypeString}},
+	}
+
+	arguments, attributes, _, _ := renderDocsSections(attrs, attrs, nil)
+
+	if !strings.Contains(arguments, "* `color` (String, optional)") {
+		t.Errorf("Optional+Computed attribute must be listed under Arguments\narguments:\n%s", arguments)
+	}
+	if strings.Contains(attributes, "`color`") {
+		t.Errorf("Optional+Computed attribute must not be duplicated under Attributes\nattributes:\n%s", attributes)
+	}
+	if !strings.Contains(attributes, "* `id` (String, computed)") {
+		t.Errorf("Computed-only attribute must stay under Attributes\nattributes:\n%s", attributes)
+	}
+	if !strings.Contains(arguments, "* `name` (String, required)") {
+		t.Errorf("Required attribute missing from Arguments\narguments:\n%s", arguments)
+	}
+}
+
+// TestResourceDocsFile_TimeoutsSection locks in the G39 fix: a resource with
+// configured CRUD timeouts documents its `timeouts` block — a Blocks-section
+// row linking to a "### Nested Schema for `timeouts`" section listing each
+// configured operation as an optional string — instead of the block being
+// silently absent from the docs.
+func TestResourceDocsFile_TimeoutsSection(t *testing.T) {
+	r := sampleResourceIR()
+	create := 20 * time.Minute
+	r.Timeouts = &ir.TimeoutConfigIR{Create: &create, Delete: &create}
+
+	file := ResourceDocsFile(r)
+	var buf bytes.Buffer
+	if err := file.Render(&buf); err != nil {
+		t.Fatalf("Render() error = %v", err)
+	}
+	got := buf.String()
+
+	for _, want := range []string{
+		"* `timeouts` (Block Single) (see [below for nested schema](#nestedatt--timeouts))",
+		"### Nested Schema for `timeouts`",
+		"* `create` (String) - A create timeout for this operation",
+		"* `delete` (String) - A delete timeout for this operation",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("timeouts documentation missing %q\ncontent:\n%s", want, got)
+		}
+	}
+	// Read was not configured: it must not be documented.
+	if strings.Contains(got, "* `read` (String)") {
+		t.Errorf("unconfigured read timeout must not be documented\ncontent:\n%s", got)
+	}
+
+	// A resource without configured timeouts must not grow a timeouts section.
+	plain := ResourceDocsFile(sampleResourceIR())
+	buf.Reset()
+	if err := plain.Render(&buf); err != nil {
+		t.Fatalf("Render() error = %v", err)
+	}
+	if strings.Contains(buf.String(), "timeouts") {
+		t.Errorf("resource without configured timeouts must not document a timeouts block\ncontent:\n%s", buf.String())
 	}
 }

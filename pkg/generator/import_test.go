@@ -387,6 +387,13 @@ func TestResourceFile_ImportState_IdenticalPascalNames(t *testing.T) {
 		{Name: "pet_id", Required: true, Schema: ir.SchemaIR{Type: ir.TypeInt}},
 		{Name: "petId", Required: true, Schema: ir.SchemaIR{Type: ir.TypeInt}},
 	}
+	// The replaced attributes no longer match the sample's composite path
+	// placeholders ({project_id}/{widget_id}), which would leave the resource
+	// unwired and suppress the import; retarget the lifecycle paths at the
+	// single {pet_id} placeholder.
+	r.CRUDMapping.Create.PathTemplate = "/pets"
+	r.CRUDMapping.Read.PathTemplate = "/pets/{pet_id}"
+	r.CRUDMapping.Delete.PathTemplate = "/pets/{pet_id}"
 
 	file := ResourceFile(r, testClientImport)
 	var buf bytes.Buffer
@@ -441,8 +448,16 @@ func sampleCompositeResourceIR() ir.ResourceIR {
 			},
 		},
 		CRUDMapping: ir.CRUDMappingIR{
+			Create: ir.OperationMappingIR{
+				Method:       "POST",
+				PathTemplate: "/projects/{project_id}/widgets",
+			},
 			Read: ir.OperationMappingIR{
 				Method:       "GET",
+				PathTemplate: "/projects/{project_id}/widgets/{widget_id}",
+			},
+			Delete: ir.OperationMappingIR{
+				Method:       "DELETE",
 				PathTemplate: "/projects/{project_id}/widgets/{widget_id}",
 			},
 		},

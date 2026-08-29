@@ -23,12 +23,12 @@
     {
       "path": "docs/actions/create_shipment.md",
       "reason": "documentation for action create_shipment",
-      "body_hash": "ca4080402adead76"
+      "body_hash": "ab1f3ca84d15770c"
     },
     {
       "path": "docs/data-sources/get_shipment.md",
       "reason": "documentation for data source get_shipment",
-      "body_hash": "7a3c79a0907aa7dc"
+      "body_hash": "b8bf81895604406c"
     },
     {
       "path": "docs/index.md",

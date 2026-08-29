@@ -2065,3 +2065,57 @@ func TestOperationsFromSpecWithDiagnostics_CallbackAndLinkWarnings(t *testing.T)
 		t.Errorf("diags[1] = %q, want link warning", diags[1].Summary)
 	}
 }
+
+// TestSchemaSpecFromParserMergesSiblingDescription locks in the G39 fix: a
+// description written next to a $ref (the "sibling description" idiom —
+// common in Swagger 2.0 and hand-maintained specs even though OpenAPI 3.x
+// formally ignores $ref siblings) must survive ref resolution instead of
+// being dropped silently. The target schema's own description wins; the
+// sibling only fills an empty one.
+func TestSchemaSpecFromParserMergesSiblingDescription(t *testing.T) {
+	component := &parser.Schema{
+		Type: "object",
+		Properties: map[string]*parser.Schema{
+			"name": {Type: "string"},
+		},
+	}
+	spec := &parser.Spec{
+		Components: &parser.Components{
+			Schemas: map[string]*parser.Schema{
+				// The target has no description of its own: the sibling fills it.
+				"Bare":    component,
+				// The target carries its own description: it must win.
+				"Described": {Type: "object", Description: "from the component", Properties: map[string]*parser.Schema{}},
+			},
+		},
+	}
+
+	got := schemaSpecFromParser(spec, &parser.Schema{
+		Ref:         "#/components/schemas/Bare",
+		Description: "sibling description of the ref",
+	}, nil)
+	if got == nil {
+		t.Fatal("expected non-nil SchemaSpec")
+	}
+	if got.Description != "sibling description of the ref" {
+		t.Errorf("empty target description must be filled by the $ref sibling, got %q", got.Description)
+	}
+
+	got = schemaSpecFromParser(spec, &parser.Schema{
+		Ref:         "#/components/schemas/Described",
+		Description: "sibling description of the ref",
+	}, nil)
+	if got.Description != "from the component" {
+		t.Errorf("component description must win over the $ref sibling, got %q", got.Description)
+	}
+
+	// A chained ref (ref → ref → schema) must still merge the outer sibling.
+	spec.Components.Schemas["Chained"] = &parser.Schema{Ref: "#/components/schemas/Bare"}
+	got = schemaSpecFromParser(spec, &parser.Schema{
+		Ref:         "#/components/schemas/Chained",
+		Description: "outer sibling",
+	}, nil)
+	if got.Description != "outer sibling" {
+		t.Errorf("chained ref must merge the outer sibling description, got %q", got.Description)
+	}
+}

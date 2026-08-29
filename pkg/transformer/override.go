@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/signalbreak-labs/eidos/pkg/config"
+	"github.com/signalbreak-labs/eidos/pkg/diagnostics"
 	"github.com/signalbreak-labs/eidos/pkg/ir"
 )
 
@@ -22,6 +23,18 @@ import (
 // the resource and stops processing later overrides for that resource, but any
 // earlier matching overrides have already been applied.
 func ApplyOverrides(provider *ir.ProviderIR, cfg *config.Config) error {
+	return ApplyOverridesWithDiagnostics(provider, cfg, nil)
+}
+
+// ApplyOverridesWithDiagnostics is ApplyOverrides that appends fail-loud
+// warnings to diags (a nil diags is allowed and simply suppresses emission).
+// It warns when a computed_attributes override targets an attribute the
+// generated CRUD body sends with a required value (e.g. a required query
+// parameter like clusterId): making it Computed-only would leave the request
+// sending a value the practitioner can never supply, so the override is
+// skipped for that attribute and the attribute keeps its Required semantics
+// (G39).
+func ApplyOverridesWithDiagnostics(provider *ir.ProviderIR, cfg *config.Config, diags *diagnostics.Diagnostics) error {
 	if provider == nil || cfg == nil {
 		return nil
 	}
@@ -32,7 +45,7 @@ func ApplyOverrides(provider *ir.ProviderIR, cfg *config.Config) error {
 	applyNamingOverrides(provider, cfg.Naming)
 
 	// Per-entity overrides.
-	if err := applyResourceOverrides(provider, cfg.ResourceOverrides); err != nil {
+	if err := applyResourceOverrides(provider, cfg.ResourceOverrides, diags); err != nil {
 		return err
 	}
 	applyDatasourceOverrides(provider, cfg.DatasourceOverrides)
@@ -96,7 +109,7 @@ func withPrefixSuffix(name, prefix, suffix string) string {
 // overrides, each matching override is applied sequentially. A skip override
 // removes the resource regardless of any prior mutations applied by earlier
 // matching overrides, and subsequent overrides for that resource are ignored.
-func applyResourceOverrides(provider *ir.ProviderIR, overrides []config.ResourceOverride) error {
+func applyResourceOverrides(provider *ir.ProviderIR, overrides []config.ResourceOverride, diags *diagnostics.Diagnostics) error {
 	if len(overrides) == 0 {
 		return nil
 	}
@@ -117,12 +130,12 @@ func applyResourceOverrides(provider *ir.ProviderIR, overrides []config.Resource
 			}
 
 			applyResourceNameOverride(r, override)
-			applyResourceIDOverride(r, override)
-			applyResourceImportFormatOverride(r, override)
+			applyResourceIDOverride(r, override, diags)
+			applyResourceImportFormatOverride(r, override, diags)
 			applyResourceTimeoutOverride(r, override)
 			applyResourceStateUpgradeOverride(r, override)
 			applyResourceDescriptionOverride(r, override)
-			if err := applyResourceAttributeOverrides(r, override); err != nil {
+			if err := applyResourceAttributeOverrides(r, override, diags); err != nil {
 				return err
 			}
 		}
@@ -250,9 +263,10 @@ func applyResourceNameOverride(r *ir.ResourceIR, override config.ResourceOverrid
 	r.FullName = toHumanName(override.ResourceName)
 }
 
-func applyResourceIDOverride(r *ir.ResourceIR, override config.ResourceOverride) {
+func applyResourceIDOverride(r *ir.ResourceIR, override config.ResourceOverride, diags *diagnostics.Diagnostics) {
 	if strings.TrimSpace(override.IDAttribute) != "" {
 		r.IDAttribute = override.IDAttribute
+		warnComputedOnlyImportTarget(r, "{"+r.IDAttribute+"}", diags)
 	}
 }
 
@@ -270,15 +284,93 @@ func applyResourceDescriptionOverride(r *ir.ResourceIR, override config.Resource
 // resource whenever ImportFormat is non-empty. Importable is gated by the
 // presence of a Read operation, but ImportIDFormat is always recorded so the
 // configured value is preserved even when the resource cannot be imported.
-func applyResourceImportFormatOverride(r *ir.ResourceIR, override config.ResourceOverride) {
+func applyResourceImportFormatOverride(r *ir.ResourceIR, override config.ResourceOverride, diags *diagnostics.Diagnostics) {
 	if strings.TrimSpace(override.ImportFormat) != "" {
 		r.ImportIDFormat = override.ImportFormat
+		warnComputedOnlyImportTarget(r, r.ImportIDFormat, diags)
+		warnMissingRequiredReadParams(r, r.ImportIDFormat, diags)
 		// Only mark the resource as importable when a Read operation is present;
 		// otherwise there is no GET-by-ID path to support import.
 		if r.CRUDMapping.Read.Method != "" || r.CRUDMapping.Read.PathTemplate != "" {
 			r.Importable = true
 		}
 	}
+}
+
+// warnComputedOnlyImportTarget surfaces a fail-loud warning when an explicit
+// id_attribute or import_format references a Computed-only attribute: the
+// practitioner cannot know that value before the first read, so the import
+// cannot succeed (G39). The override still applies (explicit configuration
+// wins) so a genuinely externally-knowable identifier can be configured, but
+// the risk is never silent.
+func warnComputedOnlyImportTarget(r *ir.ResourceIR, format string, diags *diagnostics.Diagnostics) {
+	if diags == nil || r == nil {
+		return
+	}
+	for _, attr := range importFormatAttrs(format) {
+		for _, a := range r.Schema.Attributes {
+			if a.Name == attr && a.ComputedOnly() {
+				*diags = append(*diags, diagnostics.Diagnostic{
+					Severity: diagnostics.Warning,
+					Summary:  "import target is computed-only",
+					Detail: fmt.Sprintf(
+						"The import format %q on resource %q targets attribute %q, which is Computed-only — the practitioner cannot know its value before the first read, so the import likely cannot succeed. Choose a user-settable identifier (required or optional in the request).",
+						format, r.Name, attr,
+					),
+				})
+			}
+		}
+	}
+}
+
+// warnMissingRequiredReadParams surfaces a fail-loud warning when the explicit
+// import format does not populate every required query/header parameter of the
+// read operation: the refresh that follows import sends those parameters from
+// state, and an unpopulated one leaves the request sending an empty value the
+// API rejects (e.g. GigaVUE-FM's required clusterId query parameter) (G39).
+func warnMissingRequiredReadParams(r *ir.ResourceIR, format string, diags *diagnostics.Diagnostics) {
+	if diags == nil || r == nil {
+		return
+	}
+	covered := map[string]bool{}
+	for _, attr := range importFormatAttrs(format) {
+		covered[attr] = true
+	}
+	for _, p := range r.CRUDMapping.Read.QueryParams {
+		if !p.Required {
+			continue
+		}
+		if covered[SanitizeAttributeName(p.Name)] {
+			continue
+		}
+		*diags = append(*diags, diagnostics.Diagnostic{
+			Severity: diagnostics.Warning,
+			Summary:  "import format omits a required read parameter",
+			Detail: fmt.Sprintf(
+				"The import format %q on resource %q does not populate the required read query parameter %q; the read after import will send an empty value. Extend the import format with the corresponding attribute (e.g. {%s}).",
+				format, r.Name, p.Name, SanitizeAttributeName(p.Name),
+			),
+		})
+	}
+}
+
+// importFormatAttrs extracts the brace-enclosed attribute names from an import
+// format string (e.g. "{slot_id}:{cluster_id}" → ["slot_id", "cluster_id"]).
+func importFormatAttrs(format string) []string {
+	var attrs []string
+	start := -1
+	for i, c := range format {
+		switch c {
+		case '{':
+			start = i + 1
+		case '}':
+			if start >= 0 && start < i {
+				attrs = append(attrs, format[start:i])
+			}
+			start = -1
+		}
+	}
+	return attrs
 }
 
 func applyResourceTimeoutOverride(r *ir.ResourceIR, override config.ResourceOverride) {
@@ -330,14 +422,14 @@ func applyResourceStateUpgradeOverride(r *ir.ResourceIR, override config.Resourc
 	r.StateUpgrades = upgrades
 }
 
-func applyResourceAttributeOverrides(r *ir.ResourceIR, override config.ResourceOverride) error {
+func applyResourceAttributeOverrides(r *ir.ResourceIR, override config.ResourceOverride, diags *diagnostics.Diagnostics) error {
 	if len(override.ForceNew) > 0 {
 		if err := setAttributeFlag(&r.Schema, override.ForceNew, "force_new"); err != nil {
 			return err
 		}
 	}
 	if len(override.ComputedAttributes) > 0 {
-		if err := setAttributeFlag(&r.Schema, override.ComputedAttributes, "computed"); err != nil {
+		if err := setAttributeFlagWithDiagnostics(&r.Schema, override.ComputedAttributes, "computed", r.Name, diags); err != nil {
 			return err
 		}
 	}
@@ -357,7 +449,24 @@ func applyResourceAttributeOverrides(r *ir.ResourceIR, override config.ResourceO
 // insensitively and ignoring underscores so that OpenAPI camelCase names and
 // Terraform snake_case names both match.
 func setAttributeFlag(obj *ir.ObjectSchemaIR, names []string, flag string) error {
-	return setAttributeFlagAtPath(obj, names, flag, nil)
+	return setAttributeFlagAtPath(obj, names, flag, nil, nil)
+}
+
+// setAttributeFlagWithDiagnostics is setAttributeFlag that warns (via diags,
+// nil-safe) when the "computed" flag is refused for an attribute the generated
+// CRUD body sends with a required value (G39).
+func setAttributeFlagWithDiagnostics(obj *ir.ObjectSchemaIR, names []string, flag, resourceName string, diags *diagnostics.Diagnostics) error {
+	return setAttributeFlagAtPath(obj, names, flag, nil, &computedOverrideContext{resourceName: resourceName, diags: diags})
+}
+
+// computedOverrideContext carries the warning channel for a computed_attributes
+// override: a request-input attribute that is Required keeps its Required
+// semantics (the request needs a practitioner-supplied value), so applying the
+// computed flag to it is refused and surfaced rather than silently breaking the
+// generated request.
+type computedOverrideContext struct {
+	resourceName string
+	diags        *diagnostics.Diagnostics
 }
 
 // setAttributeFlagAtPath sets the flag on matching attributes at any depth: the
@@ -366,7 +475,7 @@ func setAttributeFlag(obj *ir.ObjectSchemaIR, names []string, flag string) error
 // and dependent schemas). Without the nested-attribute recursion an override
 // like computed_attributes: ["nested_field"] for a field nested under an object
 // attribute matched nothing and returned nil silently (N-20).
-func setAttributeFlagAtPath(obj *ir.ObjectSchemaIR, names []string, flag string, path []string) error {
+func setAttributeFlagAtPath(obj *ir.ObjectSchemaIR, names []string, flag string, path []string, computed *computedOverrideContext) error {
 	if obj == nil {
 		return nil
 	}
@@ -383,6 +492,32 @@ func setAttributeFlagAtPath(obj *ir.ObjectSchemaIR, names []string, flag string,
 					// override claims a previously-Required attribute. Optional is
 					// preserved: Optional+Computed is valid (the practitioner may
 					// set the value and the server may also populate it).
+					//
+					// A request-input attribute that is Required is exempt (G39):
+					// the generated CRUD body sends its value (e.g. a required
+					// query parameter like clusterId, or a required create-body
+					// field), so making it Computed-only would leave the request
+					// sending a value the practitioner can never supply and break
+					// create and import. The override is refused for that
+					// attribute and surfaced with a Warning instead of silently
+					// breaking the request.
+					if obj.Attributes[i].RequestInput && obj.Attributes[i].Required {
+						if computed != nil && computed.diags != nil {
+							pathStr := strings.Join(path, ".")
+							if pathStr == "" {
+								pathStr = "<root>"
+							}
+							*computed.diags = append(*computed.diags, diagnostics.Diagnostic{
+								Severity: diagnostics.Warning,
+								Summary:  "computed_attributes override refused for a required request input",
+								Detail: fmt.Sprintf(
+									"The attribute %q on resource %q (path %q) is sent by the generated request with a required value, so marking it computed would make the resource uncreatable and unimportable. The computed_attributes entry is ignored for this attribute; remove it from generator.yaml or make the attribute optional in the spec.",
+									obj.Attributes[i].Name, computed.resourceName, pathStr,
+								),
+							})
+						}
+						break
+					}
 					obj.Attributes[i].Computed = true
 					obj.Attributes[i].Required = false
 				case "sensitive":
@@ -402,7 +537,7 @@ func setAttributeFlagAtPath(obj *ir.ObjectSchemaIR, names []string, flag string,
 	}
 
 	for j := range obj.Blocks {
-		if err := setAttributeFlagAtPath(&obj.Blocks[j].Schema, names, flag, append(path, obj.Blocks[j].Name)); err != nil {
+		if err := setAttributeFlagAtPath(&obj.Blocks[j].Schema, names, flag, append(path, obj.Blocks[j].Name), computed); err != nil {
 			return err
 		}
 	}
@@ -413,7 +548,7 @@ func setAttributeFlagAtPath(obj *ir.ObjectSchemaIR, names []string, flag string,
 	// already covers these nodes; the two walks must stay in step so every flag
 	// override and the write-only pass behave identically on nested schemas.
 	for i := range obj.Attributes {
-		if err := setAttributeFlagRecursiveSchema(&obj.Attributes[i].Schema, names, flag, append(path, obj.Attributes[i].Name)); err != nil {
+		if err := setAttributeFlagRecursiveSchema(&obj.Attributes[i].Schema, names, flag, append(path, obj.Attributes[i].Name), computed); err != nil {
 			return err
 		}
 	}
@@ -426,7 +561,7 @@ func setAttributeFlagAtPath(obj *ir.ObjectSchemaIR, names []string, flag string,
 // pattern/property-name/unevaluated nodes. It mirrors applyWriteOnlyRecursive so
 // computed/sensitive/force_new overrides reach the same nodes write-only
 // processing does (N-20).
-func setAttributeFlagRecursiveSchema(schema *ir.SchemaIR, names []string, flag string, path []string) error {
+func setAttributeFlagRecursiveSchema(schema *ir.SchemaIR, names []string, flag string, path []string, computed *computedOverrideContext) error {
 	if schema == nil {
 		return nil
 	}
@@ -437,7 +572,7 @@ func setAttributeFlagRecursiveSchema(schema *ir.SchemaIR, names []string, flag s
 			Blocks:            schema.Blocks,
 			DependentRequired: schema.DependentRequired,
 		}
-		if err := setAttributeFlagAtPath(&obj, names, flag, path); err != nil {
+		if err := setAttributeFlagAtPath(&obj, names, flag, path, computed); err != nil {
 			return err
 		}
 		schema.Attributes = obj.Attributes
@@ -454,7 +589,7 @@ func setAttributeFlagRecursiveSchema(schema *ir.SchemaIR, names []string, flag s
 			if c == nil {
 				continue
 			}
-			if err := setAttributeFlagRecursiveSchema(c, names, flag, path); err != nil {
+			if err := setAttributeFlagRecursiveSchema(c, names, flag, path, computed); err != nil {
 				return err
 			}
 		}

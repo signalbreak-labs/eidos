@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/signalbreak-labs/eidos/pkg/config"
+	"github.com/signalbreak-labs/eidos/pkg/diagnostics"
 	"github.com/signalbreak-labs/eidos/pkg/ir"
 )
 
@@ -2359,4 +2360,78 @@ func TestOverrideDescriptionDoesNotEraseSpecText(t *testing.T) {
 			t.Errorf("description = %q, want the override text", attr.Description)
 		}
 	})
+}
+
+// TestApplyOverrides_ComputedRefusedForRequiredRequestInput locks in the G39
+// guard: a computed_attributes entry naming an attribute the generated CRUD
+// body sends with a required value (e.g. a required query parameter like
+// clusterId, or a required create-body field) is refused for that attribute —
+// applying it would leave the request sending a value the practitioner can
+// never supply, breaking create and import. The attribute keeps its Required
+// semantics and a Warning is surfaced instead of silently breaking the request.
+func TestApplyOverrides_ComputedRefusedForRequiredRequestInput(t *testing.T) {
+	provider := &ir.ProviderIR{
+		Resources: []ir.ResourceIR{{
+			Name:     "adv_hash",
+			TypeName: "adv_hash",
+			Schema: ir.ObjectSchemaIR{
+				Attributes: []ir.AttributeIR{
+					// cluster_id feeds a required query parameter the wired
+					// read/create body sends from state.
+					{Name: "cluster_id", Required: true, RequestInput: true, Schema: ir.SchemaIR{Type: ir.TypeString}},
+					// slot_id is the path identifier, also a request input.
+					{Name: "slot_id", Required: true, RequestInput: true, Schema: ir.SchemaIR{Type: ir.TypeString}},
+					// fields is an optional request-body input: computed is
+					// still allowed (Optional+Computed keeps it settable).
+					{Name: "fields", Optional: true, RequestInput: true, Schema: ir.SchemaIR{Type: ir.TypeString}},
+					// cluster_name is response-only: computed applies freely.
+					{Name: "cluster_name", Required: false, Optional: false, Schema: ir.SchemaIR{Type: ir.TypeString}},
+				},
+			},
+		}},
+	}
+	cfg := &config.Config{
+		Provider: config.ProviderConfig{Name: "test", Version: "0.0.1"},
+		ResourceOverrides: []config.ResourceOverride{{
+			Schema:             "adv_hash",
+			ComputedAttributes: []string{"cluster_id", "slot_id", "fields", "cluster_name"},
+		}},
+	}
+
+	var diags diagnostics.Diagnostics
+	if err := ApplyOverridesWithDiagnostics(provider, cfg, &diags); err != nil {
+		t.Fatalf("ApplyOverridesWithDiagnostics() = %v, want nil", err)
+	}
+
+	attrs := provider.Resources[0].Schema.Attributes
+	for _, a := range attrs {
+		switch a.Name {
+		case "cluster_id", "slot_id":
+			if a.Computed {
+				t.Errorf("%s Computed = true, want false (required request input must keep Required semantics)", a.Name)
+			}
+			if !a.Required {
+				t.Errorf("%s Required = false, want true", a.Name)
+			}
+		case "fields":
+			if !a.Computed || !a.Optional {
+				t.Errorf("fields flags = (Computed=%v Optional=%v), want Optional+Computed", a.Computed, a.Optional)
+			}
+		case "cluster_name":
+			if !a.Computed {
+				t.Errorf("cluster_name Computed = false, want true (response-only attribute is freely computable)")
+			}
+		}
+	}
+
+	// Both refused attributes surface as fail-loud warnings.
+	warnings := 0
+	for _, d := range diags {
+		if d.Severity == diagnostics.Warning && strings.Contains(d.Summary, "computed_attributes override refused") {
+			warnings++
+		}
+	}
+	if warnings != 2 {
+		t.Errorf("refusal warnings = %d, want 2 (cluster_id and slot_id); diags: %+v", warnings, diags)
+	}
 }
