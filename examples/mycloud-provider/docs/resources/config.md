@@ -39,10 +39,7 @@ The following arguments are supported:
 
 In addition to all arguments above, the following computed attributes are exported:
 
-* `api_version` (String, computed)
-* `data` (Map of String, computed)
 * `id` (String, computed)
-* `kind` (String, computed)
 
 
 ## Import

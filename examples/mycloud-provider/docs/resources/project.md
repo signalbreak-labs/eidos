@@ -41,20 +41,6 @@ The following arguments are supported:
 * `private` (Boolean, optional)
 * `project` (String, optional)
 
-### Attributes
-
-In addition to all arguments above, the following computed attributes are exported:
-
-* `default_branch` (String, computed)
-* `description` (String, computed)
-* `full_name` (String, computed)
-* `html_url` (String, computed)
-* `id` (Number, computed)
-* `name` (String, computed)
-* `organization` (String, computed)
-* `private` (Boolean, computed)
-* `project` (String, computed)
-
 
 ## Import
 

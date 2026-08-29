@@ -42,6 +42,7 @@ Read-Only:
 * `spec` (Attributes) (see [below for nested schema](#nestedatt--items--spec))
 * `status` (Attributes) (see [below for nested schema](#nestedatt--items--status))
 * `workspace` (String)
+
 <a id="nestedatt--items--spec"></a>
 ### Nested Schema for `items.spec`
 
@@ -49,6 +50,7 @@ Read-Only:
 
 * `replicas` (Number)
 * `selector` (Map of String)
+
 <a id="nestedatt--items--status"></a>
 ### Nested Schema for `items.status`
 
