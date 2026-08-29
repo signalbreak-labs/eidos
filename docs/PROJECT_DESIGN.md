@@ -1644,6 +1644,11 @@ Eidos generates `ImportState` handlers for resources where:
 
 For composite import IDs, the handler splits the import string on the delimiter between brace-enclosed attributes and maps each segment to the corresponding attribute. Unbraced composite formats such as `project_id:resource_id` are rejected during generation; existing `generator.yaml` entries must be updated to use braces.
 
+Two behaviors refine explicit import formats at generation time (both surfaced as diagnostics, never silent):
+
+- **Required read parameters are auto-appended.** The refresh that follows an import sends the read operation's required query parameters from state, so a format that omits one would leave the read sending an empty value the API rejects. When an explicit `import_format` does not populate a required read query parameter and the parameter maps to a user-settable schema attribute, the format is extended with that attribute (e.g. `{alias}` → `{alias}/{cluster_id}` for GigaVUE-FM's required `clusterId`) and an Info diagnostic reports the extension. Parameters with no matching user-settable attribute remain a fail-loud Warning, because they need a config decision rather than an invented attribute.
+- **A superseded synthetic identifier is dropped.** When an explicit `id_attribute` names a real, user-settable attribute, the Computed-only placeholder that inference derived from the path parameter name (e.g. `{serverAlias}` → `server_alias`, never populated because the response does not echo that name) is removed from the schema instead of lingering as a dead, always-null attribute. Response-derived attributes always carry a `WireName`, so a genuine echo is never mistaken for the placeholder.
+
 ### 8.6 Provider-Defined Functions
 
 OpenAPI specs can define utility endpoints that don't map naturally to resources or data sources. Eidos can generate provider-defined functions for read-only compute/query endpoints:

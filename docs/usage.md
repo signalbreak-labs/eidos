@@ -475,7 +475,7 @@ resource_overrides:
 | `resource_name` | string | Generated resource name. |
 | `datasource_name` | string | Generated data source name. |
 | `id_attribute` | string | Name of the ID attribute. |
-| `import_format` | string | Import string format. |
+| `import_format` | string | Import ID format. Brace-enclosed attributes with a delimiter for composite IDs, e.g. `{alias}` or `{project_id}:{resource_id}`. Required read query parameters that map to a user-settable attribute and are not already in the format are appended automatically (e.g. `{alias}` → `{alias}/{cluster_id}` when the read requires `clusterId`), with an Info diagnostic. |
 | `timeouts` | TimeoutConfig | Per-resource CRUD timeouts. |
 | `force_new` | []string | Attributes that trigger replacement on change. |
 | `computed_attributes` | []string | Attributes forced to `Computed`. |
