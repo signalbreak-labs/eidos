@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.0](https://github.com/signalbreak-labs/eidos/compare/v0.5.5...v0.6.0) (2026-08-29)
+
+
+### Features
+
+* **parser:** resolve local multi-file refs ([#49](https://github.com/signalbreak-labs/eidos/issues/49)) ([08f836c](https://github.com/signalbreak-labs/eidos/commit/08f836c54b05b88be495d8dfc156c4e22c3dad1b))
+
 ## [0.5.5](https://github.com/signalbreak-labs/eidos/compare/v0.5.4...v0.5.5) (2026-08-29)
 
 
