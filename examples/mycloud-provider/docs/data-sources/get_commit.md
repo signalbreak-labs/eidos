@@ -13,9 +13,9 @@ Get a commit
 
 ```terraform
 data "mycloud_get_commit" "example" {
-  organization = null
-  project      = null
-  ref          = null
+  organization = "example"
+  project      = "example"
+  ref          = "example"
 }
 ```
 

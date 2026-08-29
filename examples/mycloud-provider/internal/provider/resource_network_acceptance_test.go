@@ -17,7 +17,7 @@ import (
 )
 
 func testAccNetworkResourceConfig(serverURL string, name string) string {
-	return fmt.Sprintf("provider \"mycloud\" {\n  endpoint = \"%s\"\n  bearer_token = \"example\"\n}\nresource \"mycloud_network\" \"example\" {\n  api_version = \"%s\"\n  kind = \"example\"\n  name = \"example\"\n  spec = {\n    ip_address = \"example\"\n    ports = [{\n      name = \"example\"\n      port = 1\n      protocol = \"example\"\n    }]\n    selector = {\n      \"key\" = \"example\"\n    }\n  }\n  status = {\n    load_balancer = null\n  }\n  workspace = \"example\"\n}\n", serverURL, name)
+	return fmt.Sprintf("provider \"mycloud\" {\n  endpoint = \"%s\"\n  bearer_token = \"example\"\n}\nresource \"mycloud_network\" \"example\" {\n  api_version = \"%s\"\n  kind = \"example\"\n  name = \"example\"\n  spec = {\n    ip_address = \"example\"\n    ports = [{\n      name = \"example\"\n      port = 0\n      protocol = \"example\"\n    }]\n    selector = {\n      \"key\" = \"example\"\n    }\n  }\n  status = {\n    load_balancer = null\n  }\n  workspace = \"example\"\n}\n", serverURL, name)
 }
 
 // newNetworkResourceMockServer returns an httptest server that stubs the NetworkResource CRUD endpoints.

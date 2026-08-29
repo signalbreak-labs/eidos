@@ -13,8 +13,8 @@ List branches
 
 ```terraform
 data "mycloud_list_branches" "example" {
-  organization = null
-  project      = null
+  organization = "example"
+  project      = "example"
 }
 ```
 

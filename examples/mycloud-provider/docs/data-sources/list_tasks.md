@@ -13,8 +13,8 @@ List project tasks
 
 ```terraform
 data "mycloud_list_tasks" "example" {
-  organization = null
-  project      = null
+  organization = "example"
+  project      = "example"
 }
 ```
 

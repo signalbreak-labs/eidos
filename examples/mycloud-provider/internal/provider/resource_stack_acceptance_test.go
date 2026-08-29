@@ -17,7 +17,7 @@ import (
 )
 
 func testAccStackResourceConfig(serverURL string, name string) string {
-	return fmt.Sprintf("provider \"mycloud\" {\n  endpoint = \"%s\"\n  bearer_token = \"example\"\n}\nresource \"mycloud_stack\" \"example\" {\n  api_version = \"%s\"\n  kind = \"example\"\n  name = \"example\"\n  spec = {\n    replicas = 1\n    selector = {\n      \"key\" = \"example\"\n    }\n  }\n  status = {\n    ready_replicas = 1\n  }\n  workspace = \"example\"\n}\n", serverURL, name)
+	return fmt.Sprintf("provider \"mycloud\" {\n  endpoint = \"%s\"\n  bearer_token = \"example\"\n}\nresource \"mycloud_stack\" \"example\" {\n  api_version = \"%s\"\n  kind = \"example\"\n  name = \"example\"\n  spec = {\n    replicas = 0\n    selector = {\n      \"key\" = \"example\"\n    }\n  }\n  status = {\n    ready_replicas = 0\n  }\n  workspace = \"example\"\n}\n", serverURL, name)
 }
 
 // newStackResourceMockServer returns an httptest server that stubs the StackResource CRUD endpoints.

@@ -13,11 +13,13 @@ Read a Config
 
 ```terraform
 resource "mycloud_config" "example" {
-  api_version = null
-  data        = {}
-  kind        = null
-  name        = null
-  workspace   = null
+  api_version = "example"
+  data = {
+    "data" = "example"
+  }
+  kind      = "example"
+  name      = "example"
+  workspace = "example"
 }
 ```
 

@@ -13,11 +13,15 @@ Read a Workspace
 
 ```terraform
 resource "mycloud_workspace" "example" {
-  api_version = null
-  kind        = null
-  labels      = {}
-  name        = null
-  status      = {}
+  api_version = "example"
+  kind        = "example"
+  labels = {
+    "labels" = "example"
+  }
+  name = "example"
+  status = {
+    phase = "example"
+  }
 }
 ```
 

@@ -17,7 +17,7 @@ import (
 )
 
 func testAccProjectResourceConfig(serverURL string, name string) string {
-	return fmt.Sprintf("provider \"mycloud\" {\n  endpoint = \"%s\"\n  bearer_token = \"example\"\n}\nresource \"mycloud_project\" \"example\" {\n  default_branch = \"%s\"\n  description = \"example\"\n  full_name = \"example\"\n  html_url = \"example\"\n  id = 1\n  name = \"example\"\n  organization = \"example\"\n  private = true\n  project = \"example\"\n}\n", serverURL, name)
+	return fmt.Sprintf("provider \"mycloud\" {\n  endpoint = \"%s\"\n  bearer_token = \"example\"\n}\nresource \"mycloud_project\" \"example\" {\n  default_branch = \"%s\"\n  description = \"example\"\n  full_name = \"example\"\n  html_url = \"example\"\n  id = 0\n  name = \"example\"\n  organization = \"example\"\n  private = true\n  project = \"example\"\n}\n", serverURL, name)
 }
 
 // newProjectResourceMockServer returns an httptest server that stubs the ProjectResource CRUD endpoints.

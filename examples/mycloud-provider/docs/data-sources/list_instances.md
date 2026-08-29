@@ -13,7 +13,7 @@ List Instances
 
 ```terraform
 data "mycloud_list_instances" "example" {
-  workspace = null
+  workspace = "example"
 }
 ```
 

@@ -3,7 +3,7 @@ resource "mycloud_project" "example" {
   description    = "example"
   full_name      = "example"
   html_url       = "example"
-  id             = 1
+  id             = 0
   name           = "example"
   organization   = "example"
   private        = true

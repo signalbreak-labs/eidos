@@ -13,7 +13,7 @@ Get a member
 
 ```terraform
 data "mycloud_get_member" "example" {
-  member = null
+  member = "example"
 }
 ```
 

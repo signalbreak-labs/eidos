@@ -13,9 +13,9 @@ Get a pull request
 
 ```terraform
 data "mycloud_get_pull_request" "example" {
-  organization = null
-  project      = null
-  pull_number  = null
+  organization = "example"
+  project      = "example"
+  pull_number  = 0
 }
 ```
 
