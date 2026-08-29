@@ -1,0 +1,144 @@
+{
+  "files": [
+    {
+      "path": ".github/workflows/release.yml",
+      "reason": "GitHub Actions release workflow",
+      "body_hash": "d0b5fb2f70f4f613"
+    },
+    {
+      "path": ".goreleaser.yml",
+      "reason": "GoReleaser release configuration",
+      "body_hash": "0aa12c806524c158"
+    },
+    {
+      "path": "GNUmakefile",
+      "reason": "build and test automation",
+      "body_hash": "771e0e9e2aefba94"
+    },
+    {
+      "path": "README.md",
+      "reason": "provider overview and usage guide",
+      "body_hash": "06d210a8c76bda61"
+    },
+    {
+      "path": "docs/index.md",
+      "reason": "provider overview and authentication guide",
+      "body_hash": "5648d31f979c377b"
+    },
+    {
+      "path": "docs/resources/pet.md",
+      "reason": "documentation for resource pet",
+      "body_hash": "6d6e4e9a6020828f"
+    },
+    {
+      "path": "examples/resources/pet/resource.tf",
+      "reason": "example for resource pet",
+      "body_hash": "268adb9070b737c9"
+    },
+    {
+      "path": "generator.yaml",
+      "reason": "generated generator configuration",
+      "body_hash": "2d7eeee125e71a5d"
+    },
+    {
+      "path": "go.mod",
+      "reason": "Go module definition",
+      "body_hash": "f1f7603a292fa740"
+    },
+    {
+      "path": "internal/client/client.go",
+      "reason": "generated HTTP client",
+      "body_hash": "32809630b1a5e97f"
+    },
+    {
+      "path": "internal/client/client_test.go",
+      "reason": "generated HTTP client unit tests",
+      "body_hash": "e8168118061c5566"
+    },
+    {
+      "path": "internal/client/errors.go",
+      "reason": "typed API error helpers",
+      "body_hash": "7b69b0dda148a6d5"
+    },
+    {
+      "path": "internal/client/logging.go",
+      "reason": "request/response trace logging",
+      "body_hash": "9defaf534cc08195"
+    },
+    {
+      "path": "internal/client/logging_test.go",
+      "reason": "trace logging unit tests",
+      "body_hash": "3d1b897c8a09d762"
+    },
+    {
+      "path": "internal/client/models.go",
+      "reason": "request/response model structs",
+      "body_hash": "1efd23827e83c14f"
+    },
+    {
+      "path": "internal/client/pagination.go",
+      "reason": "pagination helpers",
+      "body_hash": "7a1a499684b413ec"
+    },
+    {
+      "path": "internal/client/retry.go",
+      "reason": "retry logic with exponential backoff",
+      "body_hash": "bf53c919903fb008"
+    },
+    {
+      "path": "internal/provider/json_convert.go",
+      "reason": "JSON/model conversion helpers for wired CRUD bodies",
+      "body_hash": "f6d9a056cb8d5d0d"
+    },
+    {
+      "path": "internal/provider/provider.go",
+      "reason": "provider schema and registration",
+      "body_hash": "d60949ad77d9f25f"
+    },
+    {
+      "path": "internal/provider/provider_test.go",
+      "reason": "provider-level unit tests",
+      "body_hash": "6b34fea3c7ff8145"
+    },
+    {
+      "path": "internal/provider/resource_pet.go",
+      "reason": "resource multi-file-pets_pet",
+      "body_hash": "4eca53470a60b262"
+    },
+    {
+      "path": "internal/provider/resource_pet_acceptance_test.go",
+      "reason": "acceptance tests for resource pet",
+      "body_hash": "8e3c9c8e06287387"
+    },
+    {
+      "path": "internal/provider/resource_pet_remote_test.go",
+      "reason": "coverage tests for resource pet remote helpers",
+      "body_hash": "43dc92ca0192f9da"
+    },
+    {
+      "path": "internal/provider/resource_pet_test.go",
+      "reason": "unit tests for resource pet",
+      "body_hash": "c857c254f64e1721"
+    },
+    {
+      "path": "internal/provider/testing_helpers_test.go",
+      "reason": "shared httptest helpers for coverage tests",
+      "body_hash": "98a9ffd1c260afc0"
+    },
+    {
+      "path": "internal/provider/validators.go",
+      "reason": "custom schema validators",
+      "body_hash": "94a192299dab9088"
+    },
+    {
+      "path": "main.go",
+      "reason": "provider server entrypoint",
+      "body_hash": "a50d3c56a992e1d4"
+    },
+    {
+      "path": "terraform-registry-manifest.json",
+      "reason": "Terraform Registry manifest",
+      "body_hash": "76ac85aa7f3a523b"
+    }
+  ]
+}

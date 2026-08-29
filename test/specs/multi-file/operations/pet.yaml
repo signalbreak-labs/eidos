@@ -1,0 +1,12 @@
+requestBody:
+  required: true
+  content:
+    application/json:
+      schema:
+        $ref: ../schemas/pet.yaml#/Pet
+response:
+  description: A pet.
+  content:
+    application/json:
+      schema:
+        $ref: ../schemas/pet.yaml#/Pet

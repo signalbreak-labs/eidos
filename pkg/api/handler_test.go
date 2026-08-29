@@ -2700,13 +2700,9 @@ func durPtr(d time.Duration) *config.Duration {
 	return &dd
 }
 
-// TestBuildProviderIR_NonLocalRefFailsLoud asserts the generate path runs the
-// same $ref validation as the HTTP /validate endpoint (parser.Validate): a
-// non-local $ref — e.g. a bundled spec's sibling schema file that was never
-// fetched — must surface as an error diagnostic instead of being silently
-// dropped into an empty schema. The converter records the ref string but never
-// resolves it; only Validate rejects non-local references (fail-loud, not
-// dropped-silently).
+// TestBuildProviderIR_NonLocalRefFailsLoud asserts that an inline spec cannot
+// authorize filesystem access: its relative $ref must fail instead of being
+// silently dropped into an empty schema.
 func TestBuildProviderIR_NonLocalRefFailsLoud(t *testing.T) {
 	spec := []byte(`{
 		"openapi": "3.0.1",

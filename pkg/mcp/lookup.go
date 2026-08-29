@@ -108,14 +108,14 @@ func HandleLookup(ctx context.Context, req *sdkmcp.CallToolRequest, args LookupA
 		return res, out, err
 	}
 
-	specBytes, err := normalizeSpec(ctx, args.Spec, rawArguments(req))
+	specSource, err := normalizeSpecSource(ctx, args.Spec, rawArguments(req))
 	if err != nil {
 		out = lookupErrorResult(err)
 		res, err = marshalToolResult(out)
 		return res, out, err
 	}
 
-	spec, parseDiags, err := api.ParseSpec(specBytes, "spec")
+	spec, parseDiags, err := parseNormalizedSpec(specSource)
 	if err != nil {
 		out = lookupErrorResult(err)
 		res, err = marshalToolResult(out)

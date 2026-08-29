@@ -18,7 +18,9 @@ import (
 
 	"github.com/signalbreak-labs/eidos/pkg/api"
 	"github.com/signalbreak-labs/eidos/pkg/config"
+	"github.com/signalbreak-labs/eidos/pkg/diagnostics"
 	"github.com/signalbreak-labs/eidos/pkg/generator"
+	"github.com/signalbreak-labs/eidos/pkg/parser"
 )
 
 // GenerateConfigArgs is the argument shape accepted by eidos/generate-config.
@@ -168,13 +170,13 @@ func HandleGenerateConfig(ctx context.Context, req *mcp.CallToolRequest, args Ge
 		}
 	}()
 
-	specBytes, err := normalizeSpec(ctx, args.Spec, rawArguments(req))
+	specSource, err := normalizeSpecSource(ctx, args.Spec, rawArguments(req))
 	if err != nil {
 		res, out = resultFromError(err)
 		return res, out, nil
 	}
 
-	resp := validateContext(ctx, specBytes)
+	resp := validateSpecContext(ctx, specSource)
 
 	result := GenerateConfigResult{}
 	if resp.Diagnostics != nil {
@@ -254,6 +256,13 @@ func validateContext(ctx context.Context, spec []byte) api.ValidateResponse {
 	return fn(ctx, spec)
 }
 
+func validateSpecContext(ctx context.Context, spec normalizedSpec) api.ValidateResponse {
+	if spec.name == "" {
+		return validateContext(ctx, spec.data)
+	}
+	return api.ValidateContextWithName(ctx, spec.data, spec.name, spec.contentType)
+}
+
 // setValidateContextForTest swaps the validate function used by the handler.
 // It is intended for tests only and acquires the seam mutex so the swap does
 // not race with in-flight handler calls.
@@ -263,32 +272,56 @@ func setValidateContextForTest(fn func(context.Context, []byte) api.ValidateResp
 	validateContextMu.Unlock()
 }
 
-// normalizeSpec resolves a spec argument into raw spec bytes. rawArgs is the
-// original wire arguments (req.Params.Arguments) when available; it lets the
-// object-shaped spec path recover integer precision that the SDK's float64
-// decode already rounded (L7).
-func normalizeSpec(ctx context.Context, spec any, rawArgs json.RawMessage) ([]byte, error) {
-	if spec == nil {
-		return nil, fmt.Errorf("spec is required")
+type normalizedSpec struct {
+	data        []byte
+	name        string
+	contentType string
+}
+
+func (s normalizedSpec) displayName() string {
+	if s.name != "" {
+		return s.name
 	}
-	var specBytes []byte
+	return "spec"
+}
+
+func parseNormalizedSpec(spec normalizedSpec) (*parser.Spec, diagnostics.Diagnostics, error) {
+	if spec.name == "" {
+		return api.ParseSpec(spec.data, spec.displayName())
+	}
+	return api.ParseSpecWithName(spec.data, spec.name)
+}
+
+// normalizeSpec resolves a spec argument into raw spec bytes.
+func normalizeSpec(ctx context.Context, spec any, rawArgs json.RawMessage) ([]byte, error) {
+	normalized, err := normalizeSpecSource(ctx, spec, rawArgs)
+	return normalized.data, err
+}
+
+// normalizeSpecSource also retains a loaded file's canonical path so relative
+// references have the same base in every MCP tool.
+func normalizeSpecSource(ctx context.Context, spec any, rawArgs json.RawMessage) (normalizedSpec, error) {
+	if spec == nil {
+		return normalizedSpec{}, fmt.Errorf("spec is required")
+	}
+	var normalized normalizedSpec
 	switch v := spec.(type) {
 	case string:
 		// A string may be inline spec content OR a reference the CLI also
 		// accepts: a local file path, a file:// URL, or an http(s):// URL. Try
 		// to load it as a reference first; if it is not one, treat it as inline
 		// content so callers that pass the spec body still work.
-		if b, err := loadSpecRef(ctx, v); err == nil {
-			specBytes = b
+		if data, contentType, name, err := loadSpecRef(ctx, v); err == nil {
+			normalized = normalizedSpec{data: data, name: name, contentType: contentType}
 		} else if errors.Is(err, errNotASourceRef) {
-			specBytes = []byte(v)
+			normalized.data = []byte(v)
 		} else {
-			return nil, err
+			return normalizedSpec{}, err
 		}
 	case []byte:
-		specBytes = v
+		normalized.data = v
 	case json.RawMessage:
-		specBytes = []byte(v)
+		normalized.data = []byte(v)
 	case map[string]any:
 		// The MCP SDK decodes object arguments into map[string]any with plain
 		// encoding/json, which turns every number into a float64 and silently
@@ -298,23 +331,23 @@ func normalizeSpec(ctx context.Context, spec any, rawArgs json.RawMessage) ([]by
 		// map when the raw arguments are unavailable (e.g. direct handler calls
 		// in tests).
 		if raw, ok := specFromRawArguments(rawArgs); ok {
-			specBytes = raw
+			normalized.data = raw
 		} else {
 			data, err := json.Marshal(v)
 			if err != nil {
-				return nil, fmt.Errorf("failed to marshal spec object: %w", err)
+				return normalizedSpec{}, fmt.Errorf("failed to marshal spec object: %w", err)
 			}
-			specBytes = data
+			normalized.data = data
 		}
 	default:
 		// Reject scalar or otherwise unsupported types early instead of
 		// letting api.Validate fail with a less helpful parse error.
-		return nil, fmt.Errorf("spec must be a string, []byte, json.RawMessage, or map[string]any, got %T", v)
+		return normalizedSpec{}, fmt.Errorf("spec must be a string, []byte, json.RawMessage, or map[string]any, got %T", v)
 	}
-	if len(specBytes) > maxSpecSize {
-		return nil, fmt.Errorf("spec exceeds maximum size of %d bytes", maxSpecSize)
+	if len(normalized.data) > maxSpecSize {
+		return normalizedSpec{}, fmt.Errorf("spec exceeds maximum size of %d bytes", maxSpecSize)
 	}
-	return specBytes, nil
+	return normalized, nil
 }
 
 // specFromRawArguments extracts the raw JSON bytes of the "spec" argument from

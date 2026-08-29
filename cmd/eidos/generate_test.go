@@ -62,6 +62,30 @@ func TestGenerateCommand_NoDryRun(t *testing.T) {
 	}
 }
 
+func TestGenerateCommands_LocalMultiFileSpec(t *testing.T) {
+	spec, err := filepath.Abs("../../test/specs/multi-file/openapi.yaml")
+	if err != nil {
+		t.Fatalf("resolve fixture path: %v", err)
+	}
+
+	generate, output := newTestCommand("generate", "--spec", spec, "--dry-run")
+	if err := generate.Execute(); err != nil {
+		t.Fatalf("multi-file dry-run failed: %v\n%s", err, output.String())
+	}
+	if !strings.Contains(output.String(), "Resources:            1") {
+		t.Fatalf("dry-run output = %s, want one wired resource", output.String())
+	}
+
+	configPath := filepath.Join(t.TempDir(), "generator.yaml")
+	generateConfig, output := newTestCommand("generate-config", "--spec", spec, "--output", configPath)
+	if err := generateConfig.Execute(); err != nil {
+		t.Fatalf("multi-file generate-config failed: %v\n%s", err, output.String())
+	}
+	if _, err := os.Stat(configPath); err != nil {
+		t.Fatalf("generated config: %v", err)
+	}
+}
+
 func TestGenerateCommand_RegisteredFlags(t *testing.T) {
 	cmd := newRootCmd()
 	genCmd, _, err := cmd.Find([]string{"generate"})

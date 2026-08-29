@@ -36,12 +36,19 @@ var errNotASourceRef = specsource.ErrNotASourceRef
 // http(s):// URL, returning errNotASourceRef when the string is not a source
 // reference so the caller can fall back to inline-content handling. It runs on
 // ctx so an aborted request cancels an in-flight remote fetch (N-53).
-func loadSpecRef(ctx context.Context, ref string) ([]byte, error) {
-	data, _, err := specsource.LoadSpec(ctx, ref, mcpSpecOptions(true))
+func loadSpecRef(ctx context.Context, ref string) ([]byte, string, string, error) {
+	data, contentType, err := specsource.LoadSpec(ctx, ref, mcpSpecOptions(true))
 	if errors.Is(err, specsource.ErrNotASourceRef) {
-		return nil, errNotASourceRef
+		return nil, "", "", errNotASourceRef
 	}
-	return data, err
+	if err != nil {
+		return nil, "", "", err
+	}
+	name := ref
+	if localPath, ok := specsource.LocalPath(ref); ok {
+		name = localPath
+	}
+	return data, contentType, name, nil
 }
 
 // loadConfigRef loads generator.yaml bytes from a local file path or a file://

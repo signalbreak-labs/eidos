@@ -118,7 +118,7 @@ Eidos is under active development. The architecture, intermediate representation
 | Capability | Status | Notes |
 |------------|--------|-------|
 | OpenAPI 2.0 / 3.0.x / 3.1 parsing | Implemented | All three versions are parsed. Scalar type-mismatch diagnostics are emitted for OpenAPI 3.0.x/3.1.x and for Swagger 2.0 scalar fields at every depth (response `$ref`/description, `collectionFormat`, `externalDocs` description/URL, `additionalProperties` boolean, and the schema string/bool keywords). Any-value fields (`default`/`example`/`const`/`exclusiveMaximum`/`exclusiveMinimum`) are preserved via `nodeToNative` without warning, avoiding false positives on legitimate array/object values. Unquoted `openapi`/`swagger` version values are preserved as strings by the lexer. |
-| `$ref` resolution (local) | Implemented | Only local (same-document) JSON Pointer `$ref`s resolve. File and remote URL refs are rejected with a fail-loud error diagnostic rather than fetched (the remote-fetch `RefResolver` was removed; fetching a remote *spec* is handled separately by `cmd/eidos/remote_spec.go`, which never resolves `$ref`s inside it). |
+| `$ref` resolution (local) | Implemented | Same-document JSON Pointers and relative JSON/YAML file references resolve when the entry spec came from a local path. Nested refs are relative to their containing document, canonical-path cached, cycle-safe, and bounded by document-count, byte, and depth limits. Remote/absolute refs and relative file refs from inline or remotely fetched entries fail loud. |
 | IR normalization and transformation | Mostly implemented | Type mapping, CRUD inference, overrides, security mapping, and validator inference are functional. |
 | `eidos generate --dry-run` | Implemented | Produces a file list and summary from the real parsed `ProviderIR`. |
 | `eidos generate` (write mode) | Implemented | Writes generated files to `--output`, with overwrite guards controlled by `--force`. |
@@ -1310,7 +1310,7 @@ All three build the config from the IR via `generator.GenerateConfig` in `pkg/ge
 - Detect spec version (`swagger: "2.0"`, `openapi: "3.0.x"`, `openapi: "3.1.x"`).
 - Parse JSON or YAML input into a thin, version-specific AST, then convert to a generic internal model.
 - Validate structural correctness (missing required fields, invalid `$ref` targets) with source-location diagnostics.
-- Resolve local (same-document) JSON Pointer `$ref` values with cycle detection; external file and remote URL refs are rejected with a fail-loud error diagnostic rather than fetched.
+- Resolve same-document JSON Pointers and local relative file `$ref` values with canonical-path caching, cycle detection, source-located diagnostics, and resource limits; remote and absolute references are rejected rather than fetched.
 - Return a version-agnostic intermediate model consumed by the transformer.
 
 **Version-specific handling**:
@@ -2142,7 +2142,8 @@ pkg/parser/
 ├── lexer.go            # YAML/JSON tokenization into a generic AST with source locations
 ├── spec.go             # Generic OpenAPI document model (version-agnostic Spec)
 ├── version.go          # Version detection (2.0 / 3.0.x / 3.1.x) and diagnostics types
-├── ref_local.go        # Local JSON Pointer $ref resolution (non-local refs rejected)
+├── ref_local.go        # Same-document JSON Pointer resolution
+├── ref_file.go         # Bounded relative-file resolution for local entry specs
 ├── circular.go         # Circular schema $ref cycle detection; marks participants Opaque
 ├── validate.go         # Structural validation and semantic checks
 ├── limits.go           # Resource usage guardrails (recursion/memory limits)
@@ -2157,7 +2158,7 @@ pkg/parser/
 1. **Detect version** from `swagger` (2.0) or `openapi` (3.0.x / 3.1.x).
 2. **Decode raw bytes** into a thin, typed YAML/JSON AST.
 3. **Version-specific conversion** maps raw AST nodes to the generic `Spec` model.
-4. **Generic resolution** dereferences local `$ref` values, detects circular schema refs (marking participants `Opaque`), and validates structural correctness. `allOf` merging and polymorphism resolution happen later in the transformer, not in the parser.
+4. **Generic resolution** dereferences same-document and eligible relative-file `$ref` values, detects circular schema refs (marking same-document participants `Opaque` and bounding cross-file expansion by canonical reference identity), and validates structural correctness. `allOf` merging and polymorphism resolution happen later in the transformer, not in the parser.
 5. **Return normalized model** to the transformer.
 
 #### Supported inputs
@@ -2170,9 +2171,10 @@ pkg/parser/
 #### `$ref` resolution
 
 - Local JSON Pointers (`#/components/schemas/Pet`) are resolved against the in-memory spec.
-- External file references (`./models.yaml#/Pet`) are rejected with a fail-loud error diagnostic; only same-document refs resolve.
+- Relative file references (`./models.yaml#/Pet`) resolve for CLI and MCP inputs loaded from local files. Nested refs use the directory of the document containing the ref; JSON and YAML may be mixed.
 - Remote references (`https://example.com/spec.yaml#/Pet`) are rejected with a fail-loud error diagnostic rather than fetched.
-- Circular references are detected and reported as warnings; the parser marks the cyclic ref holders `Opaque` so the transformer bounds their expansion (up to `maxCyclicDepth` levels, then an opaque boundary) instead of expanding them unboundedly.
+- Inline/API inputs and remotely fetched entry specs have no filesystem base, so relative file references are rejected fail-loud.
+- Resolution is capped at 100 documents, 50 MiB total, and 100 reference levels. Circular references terminate deterministically; same-document cycles retain the existing `Opaque` handling and cross-file cycles use canonical reference identities.
 
 #### Validation
 
@@ -3124,7 +3126,7 @@ by the implementation-status matrix and is no longer maintained as a checklist.
 | 9 | Spec version incompatibilities (2.0 vs 3.0 vs 3.1 edge cases) | Medium | Medium | Dedicated in-house parser with a comprehensive version-specific test suite; no reliance on third-party parser behavior. |
 | 10 | Terraform state drift for PATCH-only APIs | Medium | Medium | Wired Update bodies call `preserveStateIntoPlan` to carry known state values (e.g. optimistic-concurrency versions) into the plan so the request body is complete (G20); the framework's post-Update Read refreshes state. |
 | 11 | Generated code readability and maintainability | Medium | High | Use `pkg/generator/astgen` (`go/ast` + `go/format`) for programmatic Go generation; follow HashiCorp's provider conventions; add comments with spec source references. |
-| 12 | Multi-file specs (`$ref` to external files/URLs) | Medium | Medium | Local `$ref` resolution with cycle detection; external/remote `$ref` values are rejected with an error diagnostic rather than fetched. |
+| 12 | Multi-file specs (`$ref` to external files/URLs) | Medium | Medium | Local relative `$ref` resolution uses canonical caching, cycle detection, and resource limits; remote and absolute targets are rejected rather than fetched. |
 | 13 | State Stores (experimental Terraform 1.15+) | Low | Low | State Stores are currently experimental and offered without compatibility promises. Eidos tracks the feature but does not generate State Store implementations until GA. Document as a future milestone. |
 | 14 | Actions, Ephemeral Resources, List Resources require Terraform CLI >= 1.10–1.14 | Low | Medium | The generated provider does not set a minimum Terraform version constraint; these constructs are emitted whenever the spec/overrides infer them. Practitioners on older Terraform CLIs must pin a compatible provider version themselves. |
 
