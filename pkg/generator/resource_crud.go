@@ -122,6 +122,13 @@ type crudOperationPlan struct {
 	// unwraps the decoded response by this key before applying it to the model,
 	// keeping the schema and the response consistent (E1).
 	responseEnvelope string
+	// responseIsCollection is true for a read whose response (after the
+	// envelope unwrap) is an array of instances from a placeholder-free
+	// collection GET. The generated readRemote selects the element whose
+	// identifier matches the resource's identifier attribute — and reports the
+	// resource removed when no element matches — instead of blindly applying
+	// the first element (G39).
+	responseIsCollection bool
 	// responseInnerPath is the property name to navigate into AFTER the response
 	// envelope is unwrapped, before applying the body to the model. It handles
 	// create/update responses that nest the created/updated resource under a
@@ -375,6 +382,7 @@ func planOperation(r ir.ResourceIR, op ir.OperationMappingIR) (crudOperationPlan
 	planned.template = strings.TrimSpace(op.PathTemplate)
 	planned.successCodes = op.SuccessCodes
 	planned.errorMappings = errorMappingDescriptions(op.ErrorMappings)
+	planned.responseIsCollection = op.ResponseIsCollection
 	if planned.method == "" || planned.template == "" {
 		return planned, false
 	}
@@ -1402,6 +1410,253 @@ func decodeAndApplyStmts(summary, modelVar, envelope, innerPath string) []ast.St
 	return stmts
 }
 
+// collectionReadSelectable reports whether the resource's identifier can be
+// compared against collection elements: it must be a present scalar attribute
+// (string/int/float/bool), whose formatted value can be compared with the
+// decoded element's wire value.
+func collectionReadSelectable(r ir.ResourceIR) bool {
+	info := resourceIDFieldInfo(r)
+	if !info.found {
+		return false
+	}
+	switch info.primitive {
+	case ir.TypeString, ir.TypeInt, ir.TypeFloat, ir.TypeBool:
+		return true
+	}
+	return false
+}
+
+// decodeAndApplyCollectionReadStmts emits the decode/apply statements for a
+// collection read: a placeholder-free GET whose response (after the envelope
+// unwrap) is an array of every instance. Instead of blindly applying the first
+// element, the body selects the element whose identifier (compared by its
+// formatted value, so json.Number and string both match) equals the state's
+// identifier attribute, and reports the resource removed when no element
+// matches — so a remote deletion is detected instead of silently tracking
+// whichever instance happens to sort first (G39).
+//
+// The identifier comparison uses fmt.Sprint on both sides: the decoder runs
+// with UseNumber, so a numeric wire value is a json.Number whose Sprint
+// matches the formatted model accessor for the same value, and a string wire
+// value prints itself. A null identifier in state (a create response that
+// never populated it) cannot select an element; the body warns and falls
+// back to the first element, preserving the pre-selection behavior rather
+// than dropping the resource from state.
+func decodeAndApplyCollectionReadStmts(r ir.ResourceIR, summary, envelope string) []ast.Stmt {
+	info := resourceIDFieldInfo(r)
+	// Decode into data exactly as decodeAndApplyStmts does.
+	stmts := []ast.Stmt{
+		astgen.DeclStmt(astgen.VarDeclGen(astgen.VarSpec(
+			"data",
+			astgen.MapType(astgen.Ident("string"), astgen.Ident("any")),
+			nil,
+		))),
+		astgen.AssignSingle(astgen.Ident("decoder"), astgen.Call(
+			astgen.QualExpr("json", "NewDecoder"),
+			astgen.Selector(astgen.Ident("httpResp"), "Body"),
+		)),
+		astgen.ExprStmt(astgen.Call(astgen.Selector(astgen.Ident("decoder"), "UseNumber"))),
+		&ast.IfStmt{
+			Init: astgen.AssignSingle(astgen.Ident("err"), astgen.Call(
+				astgen.Selector(astgen.Ident("decoder"), "Decode"),
+				astgen.UnaryPtr(astgen.Ident("data")),
+			)),
+			Cond: astgen.Binary(
+				astgen.NotEqual(astgen.Ident("err"), astgen.Nil()),
+				token.LAND,
+				astgen.NotEqual(astgen.Ident("err"), astgen.QualExpr("io", "EOF")),
+			),
+			Body: astgen.Block(
+				addErrorfStmt(summary, "Could not decode response body: %s", astgen.Ident("err")),
+				astgen.Return(),
+			),
+		},
+	}
+
+	// if v, ok := data[<envelope>]; ok {
+	//     if arr, ok := v.([]any); ok {
+	//         var match map[string]any
+	//         if state.<Field>.IsNull() { warn } else { select by identifier }
+	//         if match == nil && len(arr) > 0 { first-element fallback }
+	//         if match != nil { data = match }
+	//     } else if m, ok := v.(map[string]any); ok { data = m }
+	// }
+	selectBy := func() []ast.Stmt {
+		// want := fmt.Sprint(state.<Field>.Value<String|Int64|Float64|Bool>())
+		accessor := "ValueString"
+		switch info.primitive {
+		case ir.TypeInt:
+			accessor = "ValueInt64"
+		case ir.TypeFloat:
+			accessor = "ValueFloat64"
+		case ir.TypeBool:
+			accessor = "ValueBool"
+		}
+		wantExpr := astgen.AssignSingle(
+			astgen.Ident("want"),
+			astgen.Call(
+				astgen.QualExpr("fmt", "Sprint"),
+				astgen.Call(
+					astgen.Selector(astgen.Selector(astgen.Ident("state"), info.field), accessor),
+				),
+			),
+		)
+		// for _, item := range arr {
+		//     m, ok := item.(map[string]any)
+		//     if !ok { continue }
+		//     if idVal, ok := m[<wire>]; ok && fmt.Sprint(idVal) == want {
+		//         match = m
+		//         break
+		//     }
+		// }
+		// if match == nil { removed = true; return }
+		loop := astgen.RangeStmt(astgen.Ident("_"), astgen.Ident("item"), token.DEFINE, astgen.Ident("arr"), astgen.Block(
+			&ast.IfStmt{
+				Init: astgen.Assign(
+					[]ast.Expr{astgen.Ident("m"), astgen.Ident("ok")},
+					[]ast.Expr{astgen.TypeAssertExpr(astgen.Ident("item"), astgen.MapType(astgen.Ident("string"), astgen.Ident("any")))},
+				),
+				Cond: astgen.Ident("ok"),
+				Body: astgen.Block(
+					&ast.IfStmt{
+						Init: astgen.Assign(
+							[]ast.Expr{astgen.Ident("idVal"), astgen.Ident("ok")},
+							[]ast.Expr{astgen.IndexExpr(astgen.Ident("m"), astgen.Lit(info.wire))},
+						),
+						Cond: astgen.Binary(
+							astgen.Ident("ok"),
+							token.LAND,
+							astgen.Binary(
+								astgen.Call(
+									astgen.QualExpr("fmt", "Sprint"),
+									astgen.Ident("idVal"),
+								),
+								token.EQL,
+								astgen.Ident("want"),
+							),
+						),
+						Body: astgen.Block(
+							astgen.AssignStmt(
+								[]ast.Expr{astgen.Ident("match")},
+								[]ast.Expr{astgen.Ident("m")},
+								token.ASSIGN,
+							),
+							astgen.Break(),
+						),
+					},
+				),
+				Else: astgen.Block(astgen.Continue()),
+			},
+		))
+		return []ast.Stmt{
+			wantExpr,
+			loop,
+			astgen.If(
+				astgen.Equal(astgen.Ident("match"), astgen.Nil()),
+				astgen.AssignStmt(
+					[]ast.Expr{astgen.Ident("removed")},
+					[]ast.Expr{astgen.Ident("true")},
+					token.ASSIGN,
+				),
+				astgen.Return(),
+			),
+		}
+	}()
+
+	collectionBody := astgen.Block(
+		astgen.DeclStmt(astgen.VarDeclGen(astgen.VarSpec(
+			"match",
+			astgen.MapType(astgen.Ident("string"), astgen.Ident("any")),
+			nil,
+		))),
+		astgen.IfElse(
+			astgen.Call(astgen.Selector(astgen.Selector(astgen.Ident("state"), info.field), "IsNull")),
+			astgen.Block(addWarningStmt(summary, astgen.Lit(fmt.Sprintf(
+				"The identifier attribute %q is null in state, so the matching collection element cannot be identified. Falling back to the first element; this may track the wrong instance when the collection has more than one.",
+				info.attr,
+			)))),
+			astgen.Block(selectBy...),
+		),
+		&ast.IfStmt{
+			Cond: astgen.Binary(
+				astgen.Equal(astgen.Ident("match"), astgen.Nil()),
+				token.LAND,
+				astgen.Binary(astgen.Call(astgen.Ident("len"), astgen.Ident("arr")), token.GTR, astgen.IntLit(0)),
+			),
+			Body: astgen.Block(
+				&ast.IfStmt{
+					Init: astgen.Assign(
+						[]ast.Expr{astgen.Ident("m"), astgen.Ident("ok")},
+						[]ast.Expr{astgen.TypeAssertExpr(astgen.IndexExpr(astgen.Ident("arr"), astgen.IntLit(0)), astgen.MapType(astgen.Ident("string"), astgen.Ident("any")))},
+					),
+					Cond: astgen.Ident("ok"),
+					Body: astgen.Block(
+						astgen.AssignStmt(
+							[]ast.Expr{astgen.Ident("match")},
+							[]ast.Expr{astgen.Ident("m")},
+							token.ASSIGN,
+						),
+					),
+				},
+			),
+		},
+		astgen.If(
+			astgen.NotEqual(astgen.Ident("match"), astgen.Nil()),
+			astgen.AssignStmt(
+				[]ast.Expr{astgen.Ident("data")},
+				[]ast.Expr{astgen.Ident("match")},
+				token.ASSIGN,
+			),
+		),
+	)
+
+	stmts = append(stmts, &ast.IfStmt{
+		Init: astgen.Assign(
+			[]ast.Expr{astgen.Ident("v"), astgen.Ident("ok")},
+			[]ast.Expr{astgen.IndexExpr(astgen.Ident("data"), astgen.Lit(envelope))},
+		),
+		Cond: astgen.Ident("ok"),
+		Body: astgen.Block(
+			&ast.IfStmt{
+				Init: astgen.Assign(
+					[]ast.Expr{astgen.Ident("arr"), astgen.Ident("ok")},
+					[]ast.Expr{astgen.TypeAssertExpr(astgen.Ident("v"), astgen.ArrayType(nil, astgen.Ident("any")))},
+				),
+				Cond: astgen.Ident("ok"),
+				Body: collectionBody,
+				Else: &ast.IfStmt{
+					Init: astgen.Assign(
+						[]ast.Expr{astgen.Ident("m"), astgen.Ident("ok")},
+						[]ast.Expr{astgen.TypeAssertExpr(astgen.Ident("v"), astgen.MapType(astgen.Ident("string"), astgen.Ident("any")))},
+					),
+					Cond: astgen.Ident("ok"),
+					Body: astgen.Block(
+						astgen.AssignStmt(
+							[]ast.Expr{astgen.Ident("data")},
+							[]ast.Expr{astgen.Ident("m")},
+							token.ASSIGN,
+						),
+					),
+				},
+			},
+		),
+	})
+
+	stmts = append(stmts,
+		astgen.AssignStmt(
+			[]ast.Expr{astgen.Ident("err")},
+			[]ast.Expr{astgen.Call(
+				astgen.Ident("applyJSONToModel"),
+				astgen.UnaryPtr(astgen.Ident("state")),
+				astgen.Ident("data"),
+			)},
+			token.ASSIGN,
+		),
+		errCheckStmt(summary, "Could not map response to state: %s"),
+	)
+	return stmts
+}
+
 // stateSetStmt emits resp.Diagnostics.Append(resp.State.Set(ctx, &model)...).
 func stateSetStmt(modelVar string) ast.Stmt {
 	return astgen.ExprStmt(astgen.Call(
@@ -1961,7 +2216,16 @@ func wiredReadHelperBody(r ir.ResourceIR, plan resourceWiringPlan) []ast.Stmt {
 		),
 		astgen.Return(),
 	})...)
-	stmts = append(stmts, decodeAndApplyStmts(summary, "state", plan.read.responseEnvelope, "")...)
+	// A placeholder-free collection GET returns every instance: select the
+	// element whose identifier matches instead of blindly applying the first
+	// (G39). An instance read keeps the envelope unwrap (whose array branch
+	// applies the single wrapped element). Selection needs a scalar
+	// identifier attribute; anything else keeps the first-element unwrap.
+	if plan.read.responseIsCollection && plan.read.responseEnvelope != "" && collectionReadSelectable(r) {
+		stmts = append(stmts, decodeAndApplyCollectionReadStmts(r, summary, plan.read.responseEnvelope)...)
+	} else {
+		stmts = append(stmts, decodeAndApplyStmts(summary, "state", plan.read.responseEnvelope, "")...)
+	}
 	// Naked return yields removed=false on the happy path (the 404 branch above
 	// sets removed=true and returns early). Required because readRemote declares
 	// a named bool result.

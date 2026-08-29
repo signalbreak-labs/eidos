@@ -2098,6 +2098,16 @@ func buildGroupedResources(spec *parser.Spec, providerName string, pathOps map[s
 		res.CRUDMapping.Create.ResponseInnerPath = detectResponseInnerPath(g.Create, g.Read)
 		res.CRUDMapping.Read = resourceOperationMapping(spec, "GET", g.InstancePath, parserOp(spec, g.InstancePath, "GET"), envelopeOf(g.Read))
 		res.CRUDMapping.Read.MediaType = mediaTypeOf(g.Read)
+		// A placeholder-free GET returns the whole collection, not one
+		// instance: record it so the generated read selects the element whose
+		// identifier matches (and reports the resource removed when none does)
+		// instead of blindly reading the first element (G39). A read whose path
+		// carries placeholders is an instance read; an array response there is
+		// a get-one wrapper (issue #35), where the first element IS the
+		// instance.
+		if isCollectionRead(g, g.Read.Path) {
+			res.CRUDMapping.Read.ResponseIsCollection = true
+		}
 		if g.Update != nil {
 			updMethod := "PUT"
 			if g.FullUpdate == nil && g.PartialUpdate != nil {
@@ -2399,6 +2409,11 @@ func resourceFromOverrideCRUD(spec *parser.Spec, providerName string, g transfor
 	if g.Read != nil {
 		res.CRUDMapping.Read = resourceOperationMapping(spec, string(g.Read.Method), g.Read.Path, parserOp(spec, g.Read.Path, string(g.Read.Method)), envelopeOf(g.Read))
 		res.CRUDMapping.Read.MediaType = mediaTypeOf(g.Read)
+		// Mirror the grouped path: a placeholder-free array read selects the
+		// matching element by identifier (G39).
+		if isCollectionRead(g, g.Read.Path) {
+			res.CRUDMapping.Read.ResponseIsCollection = true
+		}
 	}
 	if g.Update != nil {
 		upd := resourceOperationMapping(spec, string(g.Update.Method), g.Update.Path, parserOp(spec, g.Update.Path, string(g.Update.Method)), envelopeOf(g.Update))
@@ -3259,6 +3274,23 @@ func resourceOperationMapping(spec *parser.Spec, method, path string, op *parser
 	m := operationMapping(method, path, op, responseEnvelope)
 	m.PathParams = pathParamIRs(spec, path, op)
 	return m
+}
+
+// isCollectionRead reports whether a CRUD group's Read fetches the whole
+// collection rather than one instance: the read operation's own path carries
+// no dynamic placeholder (e.g. GigaVUE-FM reads GET /apps/diameter/whitelists
+// while delete is DELETE /apps/diameter/whitelists/{alias}) and the read
+// response — after the transformer's envelope unwrap — is an array of
+// instances. The generated readRemote selects the matching element by
+// identifier for such reads (G39).
+func isCollectionRead(g transformer.ResourceCRUD, readPath string) bool {
+	if g.Read == nil || g.Read.ResponseSchema == nil {
+		return false
+	}
+	if strings.Contains(readPath, "{") {
+		return false
+	}
+	return strings.EqualFold(g.Read.ResponseSchema.Type, "array")
 }
 
 // paramFormat carries a parameter schema's OpenAPI format onto the IR so the

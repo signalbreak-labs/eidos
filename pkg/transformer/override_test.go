@@ -2435,3 +2435,47 @@ func TestApplyOverrides_ComputedRefusedForRequiredRequestInput(t *testing.T) {
 		t.Errorf("refusal warnings = %d, want 2 (cluster_id and slot_id); diags: %+v", warnings, diags)
 	}
 }
+
+// TestApplyOverrides_ExactNameWinsOverFuzzyMatch locks in the G39 fix: when a
+// schema carries two distinct attributes that normalize identically
+// (user_name and username), an override entry for one must not also claim the
+// other. The v3_user case: a computed_attributes entry for the synthetic
+// user_name id attribute also demoted the distinct create-required username,
+// making the resource uncreatable.
+func TestApplyOverrides_ExactNameWinsOverFuzzyMatch(t *testing.T) {
+	provider := &ir.ProviderIR{
+		Resources: []ir.ResourceIR{{
+			Name: "v3_user",
+			Schema: ir.ObjectSchemaIR{Attributes: []ir.AttributeIR{
+				{Name: "user_name", Required: true, Schema: ir.SchemaIR{Type: ir.TypeString}},
+				{Name: "username", Required: true, RequestInput: true, Schema: ir.SchemaIR{Type: ir.TypeString}},
+			}},
+		}},
+	}
+	cfg := &config.Config{
+		Provider: config.ProviderConfig{Name: "test", Version: "0.0.1"},
+		ResourceOverrides: []config.ResourceOverride{{
+			Schema:             "v3_user",
+			ComputedAttributes: []string{"user_name"},
+		}},
+	}
+
+	diags := &diagnostics.Diagnostics{}
+	if err := ApplyOverridesWithDiagnostics(provider, cfg, diags); err != nil {
+		t.Fatalf("ApplyOverridesWithDiagnostics() error = %v", err)
+	}
+
+	attrs := map[string]ir.AttributeIR{}
+	for _, a := range provider.Resources[0].Schema.Attributes {
+		attrs[a.Name] = a
+	}
+
+	target := attrs["user_name"]
+	if !target.Computed || target.Required {
+		t.Errorf("named attribute user_name must be demoted to Computed, got %+v", target)
+	}
+	collateral := attrs["username"]
+	if collateral.Computed || !collateral.Required {
+		t.Errorf("distinct attribute username must keep Required (not be claimed by the fuzzy match), got %+v", collateral)
+	}
+}

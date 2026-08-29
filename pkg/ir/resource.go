@@ -127,9 +127,18 @@ type OperationMappingIR struct {
 	// transformer sets it by matching a property of the unwrapped create/update
 	// response whose $ref equals the resource's read response $ref. Empty when
 	// the response applies directly after the envelope unwrap.
-	ResponseInnerPath string                 `json:"response_inner_path,omitempty"`
-	SuccessCodes      []int                  `json:"success_codes,omitempty"`
-	ErrorMappings     map[int]ErrorMappingIR `json:"error_mappings,omitempty"`
+	ResponseInnerPath string `json:"response_inner_path,omitempty"`
+	// ResponseIsCollection records that this (Read) operation's response, after
+	// the envelope unwrap, is an ARRAY of instances — the read targets a
+	// collection endpoint rather than an instance (a placeholder-free GET). The
+	// generated readRemote then selects the array element whose identifier
+	// matches the resource's identifier attribute instead of blindly taking
+	// the first element, and reports the resource removed when no element
+	// matches (G39). False for instance reads whose response wraps a single
+	// item in an array (a get-one wrapper, issue #35).
+	ResponseIsCollection bool                   `json:"response_is_collection,omitempty"`
+	SuccessCodes         []int                  `json:"success_codes,omitempty"`
+	ErrorMappings        map[int]ErrorMappingIR `json:"error_mappings,omitempty"`
 	// SecurityRequirements carries the operation's declared security
 	// requirements (a list of alternatives; each alternative is a map of
 	// security scheme name to scopes). OpenAPI security is OR across

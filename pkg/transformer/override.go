@@ -480,59 +480,83 @@ func setAttributeFlagAtPath(obj *ir.ObjectSchemaIR, names []string, flag string,
 		return nil
 	}
 
-	for i := range obj.Attributes {
-		for _, n := range names {
-			if attributeNameMatches(obj.Attributes[i].Name, n) {
-				switch flag {
-				case "computed":
-					// Forcing an attribute Computed declares it server-managed.
-					// The plugin framework forbids Computed together with Required
-					// (a practitioner cannot be forced to supply a value the server
-					// also populates), so clear Required when a computed_attributes
-					// override claims a previously-Required attribute. Optional is
-					// preserved: Optional+Computed is valid (the practitioner may
-					// set the value and the server may also populate it).
-					//
-					// A request-input attribute that is Required is exempt (G39):
-					// the generated CRUD body sends its value (e.g. a required
-					// query parameter like clusterId, or a required create-body
-					// field), so making it Computed-only would leave the request
-					// sending a value the practitioner can never supply and break
-					// create and import. The override is refused for that
-					// attribute and surfaced with a Warning instead of silently
-					// breaking the request.
-					if obj.Attributes[i].RequestInput && obj.Attributes[i].Required {
-						if computed != nil && computed.diags != nil {
-							pathStr := strings.Join(path, ".")
-							if pathStr == "" {
-								pathStr = "<root>"
-							}
-							*computed.diags = append(*computed.diags, diagnostics.Diagnostic{
-								Severity: diagnostics.Warning,
-								Summary:  "computed_attributes override refused for a required request input",
-								Detail: fmt.Sprintf(
-									"The attribute %q on resource %q (path %q) is sent by the generated request with a required value, so marking it computed would make the resource uncreatable and unimportable. The computed_attributes entry is ignored for this attribute; remove it from generator.yaml or make the attribute optional in the spec.",
-									obj.Attributes[i].Name, computed.resourceName, pathStr,
-								),
-							})
-						}
-						break
-					}
-					obj.Attributes[i].Computed = true
-					obj.Attributes[i].Required = false
-				case "sensitive":
-					obj.Attributes[i].Sensitive = true
-				case "force_new":
-					obj.Attributes[i].ForceNew = true
-				default:
-					pathStr := strings.Join(path, ".")
-					if pathStr == "" {
-						pathStr = "<root>"
-					}
-					return fmt.Errorf("unknown attribute flag %q for attribute %q (path: %q)", flag, obj.Attributes[i].Name, pathStr)
-				}
+	// An exact-name match (case-insensitive, underscores intact) wins over the
+	// underscore-insensitive fuzzy match: when "user_name" and "username" both
+	// exist as distinct attributes, an override entry for "user_name" must not
+	// also claim "username" (G39 gigavuecore v3_user — the computed_attributes
+	// entry for the synthetic user_name id attribute also demoted the distinct
+	// create-required username, making the resource uncreatable). Fuzzy
+	// matching stays for entries whose spelling differs from the attribute only
+	// by underscores.
+	exactIndex := make(map[string]int, len(names))
+	for _, n := range names {
+		if _, ok := exactIndex[n]; ok {
+			continue
+		}
+		for i := range obj.Attributes {
+			if exactAttributeName(obj.Attributes[i].Name, n) {
+				exactIndex[n] = i
 				break
 			}
+		}
+	}
+	for i := range obj.Attributes {
+		for _, n := range names {
+			if !attributeNameMatches(obj.Attributes[i].Name, n) {
+				continue
+			}
+			if j, ok := exactIndex[n]; ok && j != i {
+				continue // a distinct exact match claims this entry
+			}
+			switch flag {
+			case "computed":
+				// Forcing an attribute Computed declares it server-managed.
+				// The plugin framework forbids Computed together with Required
+				// (a practitioner cannot be forced to supply a value the server
+				// also populates), so clear Required when a computed_attributes
+				// override claims a previously-Required attribute. Optional is
+				// preserved: Optional+Computed is valid (the practitioner may
+				// set the value and the server may also populate it).
+				//
+				// A request-input attribute that is Required is exempt (G39):
+				// the generated CRUD body sends its value (e.g. a required
+				// query parameter like clusterId, or a required create-body
+				// field), so making it Computed-only would leave the request
+				// sending a value the practitioner can never supply and break
+				// create and import. The override is refused for that
+				// attribute and surfaced with a Warning instead of silently
+				// breaking the request.
+				if obj.Attributes[i].RequestInput && obj.Attributes[i].Required {
+					if computed != nil && computed.diags != nil {
+						pathStr := strings.Join(path, ".")
+						if pathStr == "" {
+							pathStr = "<root>"
+						}
+						*computed.diags = append(*computed.diags, diagnostics.Diagnostic{
+							Severity: diagnostics.Warning,
+							Summary:  "computed_attributes override refused for a required request input",
+							Detail: fmt.Sprintf(
+								"The attribute %q on resource %q (path %q) is sent by the generated request with a required value, so marking it computed would make the resource uncreatable and unimportable. The computed_attributes entry is ignored for this attribute; remove it from generator.yaml or make the attribute optional in the spec.",
+								obj.Attributes[i].Name, computed.resourceName, pathStr,
+							),
+						})
+					}
+					break
+				}
+				obj.Attributes[i].Computed = true
+				obj.Attributes[i].Required = false
+			case "sensitive":
+				obj.Attributes[i].Sensitive = true
+			case "force_new":
+				obj.Attributes[i].ForceNew = true
+			default:
+				pathStr := strings.Join(path, ".")
+				if pathStr == "" {
+					pathStr = "<root>"
+				}
+				return fmt.Errorf("unknown attribute flag %q for attribute %q (path: %q)", flag, obj.Attributes[i].Name, pathStr)
+			}
+			break
 		}
 	}
 
@@ -677,12 +701,28 @@ func addWriteOnlyAttributes(obj *ir.ObjectSchemaIR, additions []config.WriteOnly
 }
 
 func findAttributeIndex(attrs []ir.AttributeIR, name string) int {
+	// An exact-name match (case-insensitive, underscores intact) wins over the
+	// underscore-insensitive fuzzy match, for the same reason as in
+	// setAttributeFlagAtPath: "user_name" and "username" are distinct
+	// attributes, and an override entry must resolve to the one it names (G39).
+	for i, a := range attrs {
+		if exactAttributeName(a.Name, name) {
+			return i
+		}
+	}
 	for i, a := range attrs {
 		if attributeNameMatches(a.Name, name) {
 			return i
 		}
 	}
 	return -1
+}
+
+// exactAttributeName reports whether attrName and target are the same name
+// ignoring case but keeping underscores, so distinct snake_case attributes
+// (user_name vs username) do not collide.
+func exactAttributeName(attrName, target string) bool {
+	return strings.EqualFold(strings.TrimSpace(attrName), strings.TrimSpace(target))
 }
 
 func timeoutConfigFromOverride(override *config.TimeoutConfig) *ir.TimeoutConfigIR {

@@ -22,16 +22,16 @@ type AttributeIR struct {
 	// from the Terraform attribute Name (which is snake_case and reserved-name
 	// sanitized). Request bodies, response mapping, and query/header parameters
 	// use WireName so the wire format matches the API (G14/G18).
-	WireName            string           `json:"wire_name,omitempty"`
-	Schema              SchemaIR         `json:"schema"`
-	Description         string           `json:"description,omitempty"`
-	MarkdownDescription string           `json:"markdown_description,omitempty"`
-	Required            bool             `json:"required,omitempty"`
-	Optional            bool             `json:"optional,omitempty"`
-	Computed            bool             `json:"computed,omitempty"`
-	Sensitive           bool             `json:"sensitive,omitempty"`
-	WriteOnly           bool             `json:"write_only,omitempty"` // writeOnly: true → not stored in state (Terraform 1.10+)
-	ForceNew            bool             `json:"force_new,omitempty"`  // x-terraform-force-new / forceNew marker
+	WireName            string   `json:"wire_name,omitempty"`
+	Schema              SchemaIR `json:"schema"`
+	Description         string   `json:"description,omitempty"`
+	MarkdownDescription string   `json:"markdown_description,omitempty"`
+	Required            bool     `json:"required,omitempty"`
+	Optional            bool     `json:"optional,omitempty"`
+	Computed            bool     `json:"computed,omitempty"`
+	Sensitive           bool     `json:"sensitive,omitempty"`
+	WriteOnly           bool     `json:"write_only,omitempty"` // writeOnly: true → not stored in state (Terraform 1.10+)
+	ForceNew            bool     `json:"force_new,omitempty"`  // x-terraform-force-new / forceNew marker
 	// RequestInput marks an attribute whose value the generated CRUD body
 	// sends to the API: a create/update request-body property, a formData
 	// field, or a path/query/header parameter fed from state. It guards the
@@ -39,12 +39,12 @@ type AttributeIR struct {
 	// would leave the request sending a value the practitioner can never
 	// supply (e.g. a required clusterId query param), breaking create and
 	// import (G39).
-	RequestInput        bool             `json:"request_input,omitempty"`
-	Deprecated          bool             `json:"deprecated,omitempty"`
-	DeprecationMessage  string           `json:"deprecation_message,omitempty"`
-	Default             *any             `json:"default,omitempty"`
-	PlanModifiers       []PlanModifierIR `json:"plan_modifiers,omitempty"`
-	Validators          []ValidatorIR    `json:"validators,omitempty"`
+	RequestInput       bool             `json:"request_input,omitempty"`
+	Deprecated         bool             `json:"deprecated,omitempty"`
+	DeprecationMessage string           `json:"deprecation_message,omitempty"`
+	Default            *any             `json:"default,omitempty"`
+	PlanModifiers      []PlanModifierIR `json:"plan_modifiers,omitempty"`
+	Validators         []ValidatorIR    `json:"validators,omitempty"`
 }
 
 // ComputedOnly reports whether the attribute is server-populated and not

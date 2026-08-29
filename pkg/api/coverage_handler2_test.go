@@ -1165,3 +1165,66 @@ func TestSuggestPagination(t *testing.T) {
 		t.Errorf("no pagination = %+v, want nil", got)
 	}
 }
+
+// TestResourceFromOverrideCRUD_CollectionReadFlag drives the placeholder-free
+// array-read detection (G39): an override-created resource whose read fetches
+// the collection (no path placeholder) and whose response is an array of
+// instances (the GigaVUE-FM diameter_whitelist shape: read_operation
+// loadDiameterWhitelists, delete_operation on /{alias}) gets
+// ResponseIsCollection on its Read mapping, so the generated readRemote
+// selects the matching element by identifier. An instance read (placeholder
+// path) whose response is a get-one array wrapper keeps the flag clear.
+func TestResourceFromOverrideCRUD_CollectionReadFlag(t *testing.T) {
+	arrayResponse := &transformer.SchemaSpec{Type: "array", Items: &transformer.SchemaSpec{
+		Type: "object",
+		Properties: map[string]transformer.SchemaSpec{
+			"alias": {Type: "string"},
+		},
+	}}
+	spec := &parser.Spec{Paths: map[string]*parser.PathItem{
+		"/whitelists": {
+			Post: &parser.Operation{OperationID: "createWhitelist"},
+			Get:  &parser.Operation{OperationID: "loadWhitelists"},
+		},
+		"/whitelists/{alias}": {Delete: &parser.Operation{OperationID: "deleteWhitelist"}},
+	}}
+	g := transformer.ResourceCRUD{
+		Name:           "whitelist",
+		CollectionPath: "/whitelists",
+		InstancePath:   "/whitelists/{alias}",
+		Create: &transformer.Operation{Method: transformer.MethodPost, Path: "/whitelists", OperationID: "createWhitelist",
+			RequestSchema: &transformer.SchemaSpec{Properties: map[string]transformer.SchemaSpec{"alias": {Type: "string"}}}},
+		Read:   &transformer.Operation{Method: transformer.MethodGet, Path: "/whitelists", OperationID: "loadWhitelists", ResponseSchema: arrayResponse},
+		Delete: &transformer.Operation{Method: transformer.MethodDelete, Path: "/whitelists/{alias}", OperationID: "deleteWhitelist"},
+	}
+	var diags diagnostics.Diagnostics
+	res := resourceFromOverrideCRUD(spec, "acme", g, &diags, false)
+	if res == nil {
+		t.Fatal("resourceFromOverrideCRUD returned nil")
+	}
+	if !res.CRUDMapping.Read.ResponseIsCollection {
+		t.Errorf("placeholder-free array read must set ResponseIsCollection, got %+v", res.CRUDMapping.Read)
+	}
+
+	// An instance read (placeholder path) with the same array response is a
+	// get-one wrapper: the flag stays clear.
+	instanceSpec := &parser.Spec{Paths: map[string]*parser.PathItem{
+		"/widgets":      {Post: &parser.Operation{OperationID: "createWidget"}},
+		"/widgets/{id}": {Get: &parser.Operation{OperationID: "getWidget"}, Delete: &parser.Operation{OperationID: "deleteWidget"}},
+	}}
+	g2 := transformer.ResourceCRUD{
+		Name:           "widget",
+		CollectionPath: "/widgets",
+		InstancePath:   "/widgets/{id}",
+		Create:         &transformer.Operation{Method: transformer.MethodPost, Path: "/widgets", OperationID: "createWidget"},
+		Read:           &transformer.Operation{Method: transformer.MethodGet, Path: "/widgets/{id}", OperationID: "getWidget", ResponseSchema: arrayResponse},
+		Delete:         &transformer.Operation{Method: transformer.MethodDelete, Path: "/widgets/{id}", OperationID: "deleteWidget"},
+	}
+	res2 := resourceFromOverrideCRUD(instanceSpec, "acme", g2, &diags, false)
+	if res2 == nil {
+		t.Fatal("resourceFromOverrideCRUD returned nil for instance read")
+	}
+	if res2.CRUDMapping.Read.ResponseIsCollection {
+		t.Errorf("instance read with a get-one array wrapper must keep ResponseIsCollection clear, got %+v", res2.CRUDMapping.Read)
+	}
+}

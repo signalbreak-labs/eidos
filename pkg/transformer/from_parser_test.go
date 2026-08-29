@@ -2083,7 +2083,7 @@ func TestSchemaSpecFromParserMergesSiblingDescription(t *testing.T) {
 		Components: &parser.Components{
 			Schemas: map[string]*parser.Schema{
 				// The target has no description of its own: the sibling fills it.
-				"Bare":    component,
+				"Bare": component,
 				// The target carries its own description: it must win.
 				"Described": {Type: "object", Description: "from the component", Properties: map[string]*parser.Schema{}},
 			},

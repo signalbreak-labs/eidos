@@ -1074,3 +1074,105 @@ func TestResourceTimeouts_Compiles(t *testing.T) {
 		t.Fatalf("go test -run '^$' ./... failed for timeouts resource: %v\n%s", err, out)
 	}
 }
+
+// collectionReadResourceIR returns a wired resource whose Read is a
+// placeholder-free collection GET: the response envelope carries an array of
+// every instance (e.g. GigaVUE-FM {"diameterWhitelists": [...]}) and the
+// schema is derived from the item.
+func collectionReadResourceIR() ir.ResourceIR {
+	r := sampleResourceIR()
+	r.CRUDMapping.Read = ir.OperationMappingIR{
+		Method:               "GET",
+		PathTemplate:         "/pets",
+		SuccessCodes:         []int{200},
+		ResponseEnvelope:     "diameterWhitelists",
+		ResponseIsCollection: true,
+	}
+	return r
+}
+
+// TestWiredReadBody_CollectionReadSelectsByID asserts a collection read (a
+// placeholder-free GET whose envelope response is an array of every instance)
+// selects the element whose identifier matches the state's identifier
+// attribute, and reports the resource removed (removed = true) when no
+// element matches — instead of blindly applying the first element (G39). A
+// null identifier falls back to the first element with a warning.
+func TestWiredReadBody_CollectionReadSelectsByID(t *testing.T) {
+	r := collectionReadResourceIR()
+
+	file := ResourceFile(r, testClientImport)
+	var buf bytes.Buffer
+	if err := file.Render(&buf); err != nil {
+		t.Fatalf("Render() error = %v", err)
+	}
+	got := buf.String()
+
+	for _, want := range []string{
+		`if v, ok := data["diameterWhitelists"]; ok {`,
+		`arr, ok := v.([]any)`,
+		`state.Id.IsNull()`,
+		`want := fmt.Sprint(state.Id.ValueString())`,
+		`for _, item := range arr {`,
+		`if idVal, ok := m["id"]; ok && fmt.Sprint(idVal) == want {`,
+		`match = m`,
+		`if match == nil {`,
+		`removed = true`,
+		`m, ok := arr[0].(map[string]any)`,
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("collection read body missing %q\n--- body ---\n%s", want, got)
+		}
+	}
+}
+
+// TestWiredReadBody_InstanceReadKeepsFirstElementUnwrap asserts an instance
+// read (a placeholder path) keeps the get-one array unwrap: the first element
+// IS the instance there, so identifier selection must not be emitted.
+func TestWiredReadBody_InstanceReadKeepsFirstElementUnwrap(t *testing.T) {
+	r := collectionReadResourceIR()
+	r.CRUDMapping.Read.PathTemplate = "/pets/{id}"
+	r.CRUDMapping.Read.ResponseIsCollection = false
+
+	file := ResourceFile(r, testClientImport)
+	var buf bytes.Buffer
+	if err := file.Render(&buf); err != nil {
+		t.Fatalf("Render() error = %v", err)
+	}
+	got := buf.String()
+
+	if !strings.Contains(got, `m, ok := arr[0].(map[string]any)`) {
+		t.Errorf("instance read must keep the first-element unwrap\n--- body ---\n%s", got)
+	}
+	if strings.Contains(got, "removed = true") && strings.Contains(got, "want :=") {
+		t.Errorf("instance read must not emit identifier selection\n--- body ---\n%s", got)
+	}
+}
+
+// TestWiredBody_CollectionRead_Compiles generates a full provider module with
+// the collection-read resource and compiles it, proving the selection code is
+// valid Go in the generated module.
+func TestWiredBody_CollectionRead_Compiles(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping network-bound compile test in -short mode")
+	}
+
+	p := sampleProviderWithResourceIR()
+	p.Resources = []ir.ResourceIR{collectionReadResourceIR()}
+
+	tmp := generateResourceModule(t, p)
+
+	ctx, cancel := contextWithTimeout(t, 5*time.Minute)
+	defer cancel()
+
+	tidyCmd := exec.CommandContext(ctx, "go", "mod", "tidy")
+	tidyCmd.Dir = tmp
+	if out, err := tidyCmd.CombinedOutput(); err != nil {
+		t.Fatalf("go mod tidy failed: %v\n%s", err, out)
+	}
+
+	buildCmd := exec.CommandContext(ctx, "go", "build", "./...")
+	buildCmd.Dir = tmp
+	if out, err := buildCmd.CombinedOutput(); err != nil {
+		t.Fatalf("go build ./... failed for collection-read resource: %v\n%s", err, out)
+	}
+}
