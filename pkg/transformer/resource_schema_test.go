@@ -1340,3 +1340,140 @@ func TestManagedResourceSchema_MergesUpdateOnlyRequestProperties(t *testing.T) {
 		t.Errorf("create-optional color must stay Optional+Computed, got %+v", color)
 	}
 }
+
+func TestManagedResourceSchema_PromotesNestedPathParameters(t *testing.T) {
+	metadata := SchemaSpec{
+		Type:     "object",
+		Required: []string{"name", "workspace"},
+		Properties: map[string]SchemaSpec{
+			"labels":    {Type: "object", AdditionalProperties: &SchemaSpec{Type: "string"}},
+			"name":      {Type: "string"},
+			"workspace": {Type: "string"},
+		},
+	}
+	state := &SchemaSpec{
+		Type:     "object",
+		Required: []string{"metadata"},
+		Properties: map[string]SchemaSpec{
+			"metadata": metadata,
+			"spec":     {Type: "object", Properties: map[string]SchemaSpec{"image": {Type: "string"}}},
+		},
+	}
+	request := &SchemaSpec{
+		Type:     "object",
+		Required: []string{"metadata"},
+		Properties: map[string]SchemaSpec{
+			"metadata": metadata,
+			"spec":     {Type: "object", Properties: map[string]SchemaSpec{"image": {Type: "string"}}},
+		},
+	}
+	c := ResourceCRUD{
+		Name:           "instance",
+		CollectionPath: "/workspaces/{workspace}/instances",
+		InstancePath:   "/workspaces/{workspace}/instances/{name}",
+		Create: &Operation{
+			Method: MethodPost, Path: "/workspaces/{workspace}/instances", RequestSchema: request, ResponseSchema: state,
+			Parameters: []Parameter{{Name: "workspace", In: "path", Required: true, Type: "string"}},
+		},
+		Read: &Operation{
+			Method: MethodGet, Path: "/workspaces/{workspace}/instances/{name}", ResponseSchema: state,
+			Parameters: []Parameter{
+				{Name: "workspace", In: "path", Required: true, Type: "string"},
+				{Name: "name", In: "path", Required: true, Type: "string"},
+			},
+		},
+		Delete: &Operation{Method: MethodDelete, Path: "/workspaces/{workspace}/instances/{name}"},
+		ID: IDInfo{
+			Kind: IDComposite, ParameterNames: []string{"workspace", "name"}, ImportFormat: "%s:%s",
+		},
+	}
+
+	schema, _ := ManagedResourceSchema(c)
+	for _, name := range []string{"name", "workspace"} {
+		attr, ok := findAttr(schema.Attributes, name)
+		if !ok {
+			t.Fatalf("promoted path attribute %q missing from schema: %+v", name, schema.Attributes)
+		}
+		if attr.WirePath != "metadata" {
+			t.Errorf("%s WirePath = %q, want metadata", name, attr.WirePath)
+		}
+		if !attr.Required {
+			t.Errorf("%s must remain Required after promotion: %+v", name, attr)
+		}
+	}
+
+	meta, ok := findAttr(schema.Attributes, "metadata")
+	if !ok {
+		t.Fatal("metadata with unrelated labels must remain in the schema")
+	}
+	if _, ok := findAttr(meta.Schema.Attributes, "name"); ok {
+		t.Error("promoted name must not remain duplicated under metadata")
+	}
+	if _, ok := findAttr(meta.Schema.Attributes, "workspace"); ok {
+		t.Error("promoted workspace must not remain duplicated under metadata")
+	}
+	if _, ok := findAttr(meta.Schema.Attributes, "labels"); !ok {
+		t.Error("unrelated metadata.labels must remain nested")
+	}
+
+	// Schema construction must not mutate operation schemas shared by other
+	// transformer passes.
+	if _, ok := state.Properties["metadata"].Properties["name"]; !ok {
+		t.Error("state schema was mutated while building the managed schema")
+	}
+	if _, ok := request.Properties["metadata"].Properties["workspace"]; !ok {
+		t.Error("request schema was mutated while building the managed schema")
+	}
+}
+
+func TestManagedResourceSchema_AmbiguousNestedPathParameterStaysUnwired(t *testing.T) {
+	state := &SchemaSpec{Type: "object", Properties: map[string]SchemaSpec{
+		"dashboard": {Type: "object", Properties: map[string]SchemaSpec{"uid": {Type: "string"}}},
+		"metadata":  {Type: "object", Properties: map[string]SchemaSpec{"uid": {Type: "string"}}},
+	}}
+	c := ResourceCRUD{
+		Name:   "dashboard",
+		Create: &Operation{Method: MethodPost, Path: "/dashboards", ResponseSchema: state},
+		Read: &Operation{
+			Method: MethodGet, Path: "/dashboards/{uid}", ResponseSchema: state,
+			Parameters: []Parameter{{Name: "uid", In: "path", Required: true, Type: "string"}},
+		},
+		Delete: &Operation{Method: MethodDelete, Path: "/dashboards/{uid}"},
+		ID:     IDInfo{Kind: IDSimple, ParameterNames: []string{"uid"}, AttributeName: "uid", ImportFormat: "%s"},
+	}
+	var diags diagnostics.Diagnostics
+
+	schema, _ := ManagedResourceSchemaWithDiagnostics(c, &diags, false)
+	if _, ok := findAttr(schema.Attributes, "uid"); ok {
+		t.Fatalf("ambiguous nested uid must not be promoted or synthesized: %+v", schema.Attributes)
+	}
+	if !hasWarning(diags, "ambiguous nested path parameter") {
+		t.Fatalf("expected fail-loud ambiguity warning, got %+v", diags)
+	}
+}
+
+func TestManagedResourceSchema_TopLevelPathParameterWins(t *testing.T) {
+	state := &SchemaSpec{Type: "object", Properties: map[string]SchemaSpec{
+		"dashboard": {Type: "object", Properties: map[string]SchemaSpec{"uid": {Type: "string"}}},
+		"uid":       {Type: "string"},
+	}}
+	c := ResourceCRUD{
+		Name:   "dashboard",
+		Create: &Operation{Method: MethodPost, Path: "/dashboards", ResponseSchema: state},
+		Read: &Operation{
+			Method: MethodGet, Path: "/dashboards/{uid}", ResponseSchema: state,
+			Parameters: []Parameter{{Name: "uid", In: "path", Required: true, Type: "string"}},
+		},
+		Delete: &Operation{Method: MethodDelete, Path: "/dashboards/{uid}"},
+		ID:     IDInfo{Kind: IDSimple, ParameterNames: []string{"uid"}, AttributeName: "uid", ImportFormat: "%s"},
+	}
+
+	schema, _ := ManagedResourceSchema(c)
+	uid, ok := findAttr(schema.Attributes, "uid")
+	if !ok {
+		t.Fatalf("top-level uid missing: %+v", schema.Attributes)
+	}
+	if uid.WirePath != "" {
+		t.Fatalf("top-level uid WirePath = %q, want empty", uid.WirePath)
+	}
+}

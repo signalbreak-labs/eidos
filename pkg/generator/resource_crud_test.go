@@ -461,6 +461,123 @@ func TestLocationIDExtraction(t *testing.T) {
 	}
 }
 
+func TestNestedIdentityCRUD_CompilesAndRuns(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping network-bound compile test in -short mode")
+	}
+
+	bodySchema := &ir.SchemaIR{Attributes: []ir.AttributeIR{
+		{Name: "workspace", Required: true, WirePath: "metadata", Schema: ir.SchemaIR{Type: ir.TypeString}},
+	}}
+	r := ir.ResourceIR{
+		Name:        "dashboard",
+		TypeName:    "mycloud_dashboard",
+		IDAttribute: "uid",
+		Schema: ir.ObjectSchemaIR{Attributes: []ir.AttributeIR{
+			{Name: "uid", Computed: true, WirePath: "dashboard", Schema: ir.SchemaIR{Type: ir.TypeString}},
+			{Name: "workspace", Required: true, WirePath: "metadata", Schema: ir.SchemaIR{Type: ir.TypeString}},
+		}},
+		CRUDMapping: ir.CRUDMappingIR{
+			Create: ir.OperationMappingIR{Method: "POST", PathTemplate: "/workspaces/{workspace}/dashboards", BodySchema: bodySchema, SuccessCodes: []int{201}},
+			Read:   ir.OperationMappingIR{Method: "GET", PathTemplate: "/workspaces/{workspace}/dashboards/{uid}", SuccessCodes: []int{200}},
+			Delete: ir.OperationMappingIR{Method: "DELETE", PathTemplate: "/workspaces/{workspace}/dashboards/{uid}", SuccessCodes: []int{204}},
+		},
+	}
+	p := sampleProviderWithResourceIR()
+	p.Resources = []ir.ResourceIR{r}
+	tmp := generateResourceModule(t, p)
+
+	testPath := filepath.Join(tmp, "internal", "provider", "nested_identity_test.go")
+	if err := os.MkdirAll(filepath.Dir(testPath), 0o750); err != nil {
+		t.Fatalf("create provider test dir: %v", err)
+	}
+	content := `package provider
+
+import (
+	"context"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"testing"
+
+	"github.com/hashicorp/terraform-plugin-framework/resource"
+	"github.com/hashicorp/terraform-plugin-framework/types"
+	"github.com/mycloud/terraform-provider-mycloud/internal/client"
+)
+
+func TestNestedIdentityLifecycle(t *testing.T) {
+	paths := make(chan string, 3)
+	bodies := make(chan string, 1)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		paths <- req.URL.Path
+		switch req.Method {
+		case http.MethodPost:
+			body, _ := io.ReadAll(req.Body)
+			bodies <- string(body)
+			w.WriteHeader(http.StatusCreated)
+			_, _ = w.Write([]byte(` + "`" + `{"metadata":{"workspace":"acme"},"dashboard":{"uid":"dash-123"}}` + "`" + `))
+		case http.MethodGet:
+			_, _ = w.Write([]byte(` + "`" + `{"metadata":{"workspace":"acme"},"dashboard":{"uid":"dash-123"}}` + "`" + `))
+		case http.MethodDelete:
+			w.WriteHeader(http.StatusNoContent)
+		}
+	}))
+	defer srv.Close()
+
+	c := client.New(client.WithBaseURL(srv.URL))
+	r := &DashboardResource{client: c}
+	state := &DashboardResourceModel{Workspace: types.StringValue("acme")}
+	createResp := &resource.CreateResponse{}
+	r.createRemote(context.Background(), state, createResp)
+	if createResp.Diagnostics.HasError() {
+		t.Fatalf("create diagnostics: %v", createResp.Diagnostics)
+	}
+	if got := state.Uid.ValueString(); got != "dash-123" {
+		t.Fatalf("Uid = %q, want dash-123", got)
+	}
+	if got := <-paths; got != "/workspaces/acme/dashboards" {
+		t.Fatalf("create path = %q", got)
+	}
+	if got := <-bodies; got != ` + "`" + `{"metadata":{"workspace":"acme"}}` + "`" + ` {
+		t.Fatalf("create body = %s", got)
+	}
+
+	readResp := &resource.ReadResponse{}
+	if removed := r.readRemote(context.Background(), state, readResp); removed || readResp.Diagnostics.HasError() {
+		t.Fatalf("read removed=%v diagnostics=%v", removed, readResp.Diagnostics)
+	}
+	if got := <-paths; got != "/workspaces/acme/dashboards/dash-123" {
+		t.Fatalf("read path = %q", got)
+	}
+
+	deleteResp := &resource.DeleteResponse{}
+	r.deleteRemote(context.Background(), state, deleteResp)
+	if deleteResp.Diagnostics.HasError() {
+		t.Fatalf("delete diagnostics: %v", deleteResp.Diagnostics)
+	}
+	if got := <-paths; got != "/workspaces/acme/dashboards/dash-123" {
+		t.Fatalf("delete path = %q", got)
+	}
+}
+`
+	if err := os.WriteFile(testPath, []byte(content), 0o600); err != nil {
+		t.Fatalf("write nested identity test: %v", err)
+	}
+
+	ctx, cancel := contextWithTimeout(t, 5*time.Minute)
+	defer cancel()
+	tidyCmd := exec.CommandContext(ctx, "go", "mod", "tidy")
+	tidyCmd.Dir = tmp
+	if out, err := tidyCmd.CombinedOutput(); err != nil {
+		t.Fatalf("go mod tidy failed: %v\n%s", err, out)
+	}
+	testCmd := exec.CommandContext(ctx, "go", "test", "./internal/provider/", "-run", "TestNestedIdentityLifecycle")
+	testCmd.Dir = tmp
+	if out, err := testCmd.CombinedOutput(); err != nil {
+		t.Fatalf("go test ./internal/provider/ failed: %v\n%s", err, out)
+	}
+}
+
 // TestResolvePathSubstitution_UIDShapedPlaceholder asserts a UID-shaped path
 // placeholder ({folder_uid}) is filled with the resource's uid attribute, not
 // the numeric id fallback (G19).

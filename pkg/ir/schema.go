@@ -22,7 +22,13 @@ type AttributeIR struct {
 	// from the Terraform attribute Name (which is snake_case and reserved-name
 	// sanitized). Request bodies, response mapping, and query/header parameters
 	// use WireName so the wire format matches the API (G14/G18).
-	WireName            string   `json:"wire_name,omitempty"`
+	WireName string `json:"wire_name,omitempty"`
+	// WirePath is the one-level API object containing this attribute when a
+	// managed-resource path parameter is promoted from a nested response shape
+	// (for example, metadata.name). Generated JSON conversion nests and unwraps
+	// the value through this parent while Terraform keeps the path parameter as
+	// a top-level attribute. Empty for ordinary attributes.
+	WirePath            string   `json:"wire_path,omitempty"`
 	Schema              SchemaIR `json:"schema"`
 	Description         string   `json:"description,omitempty"`
 	MarkdownDescription string   `json:"markdown_description,omitempty"`

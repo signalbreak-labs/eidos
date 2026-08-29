@@ -21,9 +21,21 @@ import (
 // (N-37); JSON-only providers carry no dead XML code.
 func JSONConvertFile(provider *ir.ProviderIR) File {
 	return Template("internal/provider/json_convert.go", schema.JSONConvertTemplate, map[string]any{
-		"WireNamesBody": renderWireNames(provider),
-		"IncludeXML":    AnyResourceXMLBody(provider.Resources),
+		"WireNamesBody":   renderWireNames(provider),
+		"IncludeXML":      AnyResourceXMLBody(provider.Resources),
+		"IncludeWirePath": providerHasWirePath(provider.Resources),
 	})
+}
+
+func providerHasWirePath(resources []ir.ResourceIR) bool {
+	for _, resource := range resources {
+		for _, attr := range resource.Schema.Attributes {
+			if attr.WirePath != "" {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // renderWireNames builds the body of the generated wireNames map, keyed by

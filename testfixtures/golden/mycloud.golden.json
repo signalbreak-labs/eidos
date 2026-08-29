@@ -128,7 +128,7 @@
     {
       "path": "docs/index.md",
       "reason": "provider overview and authentication guide",
-      "body_hash": "49bedd4604d81026"
+      "body_hash": "3571b15adbef7c62"
     },
     {
       "path": "docs/list-resources/list_branches.md",
@@ -368,7 +368,7 @@
     {
       "path": "generator.yaml",
       "reason": "generated generator configuration",
-      "body_hash": "9b289a1004160550"
+      "body_hash": "821c7edfe6643489"
     },
     {
       "path": "go.mod",
@@ -848,7 +848,7 @@
     {
       "path": "internal/provider/provider.go",
       "reason": "provider schema and registration",
-      "body_hash": "65dffbbc675bfe87"
+      "body_hash": "10312864a4f2956c"
     },
     {
       "path": "internal/provider/provider_test.go",
