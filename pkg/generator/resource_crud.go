@@ -399,10 +399,18 @@ func planOperation(r ir.ResourceIR, op ir.OperationMappingIR) (crudOperationPlan
 	// its parameter schema (e.g. a shared {apiVersion} with enum ["v4","v4beta"])
 	// — is NOT dynamic: it does not count toward the composite decision, so a
 	// path like /{apiVersion}/things/{thingId} has one dynamic placeholder and
-	// the resource-id fallback remains valid for {thingId}.
+	// the resource-id fallback remains valid for {thingId}. An enum-equivalent
+	// placeholder (bound to a Required attribute by identical enum set, e.g.
+	// notif_meta_config's {notifType} ↔ `type`) IS dynamic — it is filled from
+	// practitioner configuration — even though a static literal could also be
+	// derived from its enum, so it counts toward the composite decision and
+	// keeps the WireName matching (not the id fallback) resolving its siblings.
 	dynamicPlaceholders := 0
 	for _, placeholder := range placeholders {
 		if _, ok := staticPathValue(op.PathParams, placeholder); ok {
+			if _, ok := enumEquivalentAttribute(r, op.PathParams, placeholder); ok {
+				dynamicPlaceholders++
+			}
 			continue
 		}
 		dynamicPlaceholders++
@@ -690,6 +698,13 @@ func pathPlaceholders(template string) []string {
 // attribute, since substituting the single id into every slot would build a
 // wrong URL (REMAINING_GAPS §3/#12).
 //
+// An unmatched placeholder whose path parameter declares a string enum binds
+// to the unique Required string attribute carrying the exact same enum set:
+// the practitioner's chosen value fills the segment. This runs before the
+// static-value fallback so a multi-valued enum parameter is not silently
+// pinned to its first value (gigavuecore notif_meta_config's {notifType},
+// enum [instant, batch, trap], ↔ the Required `type` body attribute).
+//
 // Before giving up on an unresolvable placeholder, a static value derived from
 // the matching path parameter's schema is attempted (const → default → first
 // enum value). This wires shared path segments that are not resource attributes
@@ -724,6 +739,16 @@ func resolvePathSubstitution(r ir.ResourceIR, placeholder string, noIDFallback b
 		if attr, ok := uidAttribute(r); ok {
 			return pathSubstitution{placeholder: placeholder, field: naming.GoFieldName(attr.Name), primitive: attr.Schema.Type}, true
 		}
+	}
+	// The placeholder did not name-match an attribute: when its path
+	// parameter declares a string enum and exactly one Required string
+	// attribute carries the identical enum set, bind to that attribute so the
+	// practitioner's configuration supplies the URL segment. This must run
+	// before staticPathValue, which would pin a multi-valued enum parameter
+	// to its first value, and before the id-attribute fallback, which would
+	// fill the segment with an unrelated identifier.
+	if attr, ok := enumEquivalentAttribute(r, pathParams, placeholder); ok {
+		return pathSubstitution{placeholder: placeholder, field: naming.GoFieldName(attr.Name), primitive: attr.Schema.Type}, true
 	}
 	// No matching attribute and no UID fallback: try a static value from the
 	// path parameter's schema. This runs before the noIDFallback guard so a
@@ -778,6 +803,75 @@ func staticPathValue(pathParams []ir.ParamIR, placeholder string) (string, bool)
 		return "", false
 	}
 	return "", false
+}
+
+// enumEquivalentAttribute finds the unique Required string attribute whose
+// enum values are exactly the placeholder's path-parameter enum set. The
+// motivating case is gigavuecore's notif_meta_config: the instance path
+// /notification/event/notifMetaConfig/{notifType}/{taskId} declares
+// notifType with enum [instant, batch, trap] while the request body's
+// Required `type` attribute carries the same enum — the placeholder cannot
+// name-match (notifType vs type) and must not be statically pinned, so the
+// practitioner's `type` configuration is the only correct source for the
+// segment. Ambiguity (zero or multiple matching attributes) resolves to
+// ok=false so the remaining fallbacks decide.
+func enumEquivalentAttribute(r ir.ResourceIR, pathParams []ir.ParamIR, placeholder string) (ir.AttributeIR, bool) {
+	var paramEnum []any
+	for _, p := range pathParams {
+		if p.Name == placeholder {
+			paramEnum = p.Schema.EnumValues
+			break
+		}
+	}
+	if len(paramEnum) == 0 {
+		return ir.AttributeIR{}, false
+	}
+	var match ir.AttributeIR
+	matches := 0
+	for _, attr := range r.Schema.Attributes {
+		if !attr.Required || attr.Schema.Type != ir.TypeString || !schema.IsPrimitiveSchema(attr.Schema) {
+			continue
+		}
+		if !sameStringEnumSet(attr.Schema.EnumValues, paramEnum) {
+			continue
+		}
+		matches++
+		if matches > 1 {
+			return ir.AttributeIR{}, false
+		}
+		match = attr
+	}
+	if matches != 1 {
+		return ir.AttributeIR{}, false
+	}
+	return match, true
+}
+
+// sameStringEnumSet reports whether two enum value slices contain exactly the
+// same string members, ignoring order. Non-string members in either slice
+// make the sets unequal (order-insensitive equality, not subset).
+func sameStringEnumSet(a, b []any) bool {
+	if len(a) == 0 || len(a) != len(b) {
+		return false
+	}
+	set := make(map[string]struct{}, len(a))
+	for _, v := range a {
+		s, ok := v.(string)
+		if !ok {
+			return false
+		}
+		set[s] = struct{}{}
+	}
+	for _, v := range b {
+		s, ok := v.(string)
+		if !ok {
+			return false
+		}
+		if _, exists := set[s]; !exists {
+			return false
+		}
+	}
+	return true
 }
 
 // anyStringValue renders a schema const/default/enum value of any primitive
