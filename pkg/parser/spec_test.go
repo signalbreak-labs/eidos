@@ -851,7 +851,7 @@ func TestSchemaOpenAPI31FieldsRoundTrip(t *testing.T) {
 			Schemas: map[string]*Schema{
 				"Full31": {
 					Type:          "object",
-					PropertyNames: &Schema{Type: "string", MinLength: 1},
+					PropertyNames: &Schema{Type: "string", MinLength: ptrInt(1)},
 					PrefixItems:   []*Schema{{Type: "string"}, {Type: "integer"}},
 					If:            &Schema{Required: []string{"name"}},
 					Then:          &Schema{Required: []string{"id"}},
@@ -952,3 +952,6 @@ func TestSchemaAdditionalPropertiesUnmarshalFallback(t *testing.T) {
 		t.Fatalf("expected boolean additionalProperties false, got %v (%T)", boolSchema.AdditionalProperties, boolSchema.AdditionalProperties)
 	}
 }
+
+// ptrInt returns a pointer to v; test helper for pointer schema bounds.
+func ptrInt(v int) *int { return &v }

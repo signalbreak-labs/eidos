@@ -239,3 +239,82 @@ func TestConvertV30Edge_Link(t *testing.T) {
 		t.Errorf("server = %+v", l.Server)
 	}
 }
+
+// TestConvertV30Edge_ZeroBounds asserts that schema constraints declared with
+// a zero value parse as present pointers, not as absent: `minimum: 0`
+// genuinely forbids negative values and must survive to the generated
+// validator (G39).
+func TestConvertV30Edge_ZeroBounds(t *testing.T) {
+	data := []byte(`openapi: 3.0.1
+info:
+  title: Zero bounds
+  version: 1.0.0
+paths: {}
+components:
+  schemas:
+    Meter:
+      type: object
+      properties:
+        ratio:
+          type: number
+          minimum: 0
+        retryCeiling:
+          type: integer
+          maximum: 0
+        label:
+          type: string
+          minLength: 0
+        code:
+          type: string
+          maxLength: 0
+        tags:
+          type: array
+          minItems: 0
+          items:
+            type: string
+`)
+	node, err := LoadFile("zero-bounds.yaml", data)
+	if err != nil {
+		t.Fatalf("LoadFile: %v", err)
+	}
+	spec, diags, err := ConvertV30(node)
+	if err != nil {
+		t.Fatalf("ConvertV30: %v", err)
+	}
+	for _, d := range diags {
+		if d.Severity == SeverityError {
+			t.Errorf("unexpected error diagnostic: %s", d)
+		}
+	}
+	props := spec.Components.Schemas["Meter"].Properties
+	if props == nil {
+		t.Fatal("Meter properties missing")
+	}
+	checkFloatPtr := func(name string, got *float64, want float64) {
+		t.Helper()
+		if got == nil {
+			t.Fatalf("%s bound is nil; a declared 0 must parse as present", name)
+		}
+		if *got != want {
+			t.Fatalf("%s = %v, want %v", name, *got, want)
+		}
+	}
+	checkIntPtr := func(name string, got *int, want int) {
+		t.Helper()
+		if got == nil {
+			t.Fatalf("%s bound is nil; a declared 0 must parse as present", name)
+		}
+		if *got != want {
+			t.Fatalf("%s = %v, want %v", name, *got, want)
+		}
+	}
+	checkFloatPtr("minimum", props["ratio"].Minimum, 0)
+	checkFloatPtr("maximum", props["retryCeiling"].Maximum, 0)
+	checkIntPtr("minLength", props["label"].MinLength, 0)
+	checkIntPtr("maxLength", props["code"].MaxLength, 0)
+	checkIntPtr("minItems", props["tags"].MinItems, 0)
+	// A schema that declares no bounds parses nil pointers.
+	if props["label"].Minimum != nil || props["code"].MaxItems != nil {
+		t.Errorf("absent bounds must parse as nil: %+v %+v", props["label"], props["code"])
+	}
+}

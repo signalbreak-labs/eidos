@@ -671,11 +671,21 @@ func extractWriteOnlyAttributes(schema ir.ObjectSchemaIR) []config.WriteOnlyAttr
 // to "waypoint_symbol"). The schema inference already marks the nested
 // attribute Computed, so omitting it from the override changes nothing for the
 // nested attribute while preserving the writable top-level field.
+//
+// A leaf name whose value the CRUD body sends to the API (RequestInput) is
+// likewise excluded, even when Optional: emitting it would (on regeneration)
+// mark a spec-settable request field read-only, leaving the request sending a
+// value the practitioner can never supply — the self-inflicted shape of the
+// GigaVUE-FM clusterId query-parameter demotion (G39).
 func extractComputedAttributes(schema ir.ObjectSchemaIR) []string {
 	required := make(map[string]struct{})
+	requestInput := make(map[string]struct{})
 	walkObjectSchema(schema, func(attr ir.AttributeIR) {
 		if attr.Required {
 			required[attr.Name] = struct{}{}
+		}
+		if attr.RequestInput {
+			requestInput[attr.Name] = struct{}{}
 		}
 	})
 	var attrs []string
@@ -686,6 +696,9 @@ func extractComputedAttributes(schema ir.ObjectSchemaIR) []string {
 			return
 		}
 		if _, isRequired := required[attr.Name]; isRequired {
+			return
+		}
+		if _, isInput := requestInput[attr.Name]; isInput {
 			return
 		}
 		if _, ok := seen[attr.Name]; !ok {

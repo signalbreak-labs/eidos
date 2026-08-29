@@ -42,6 +42,7 @@ Read-Only:
 * `spec` (Attributes) (see [below for nested schema](#nestedatt--items--spec))
 * `status` (Attributes) (see [below for nested schema](#nestedatt--items--status))
 * `workspace` (String)
+
 <a id="nestedatt--items--spec"></a>
 ### Nested Schema for `items.spec`
 
@@ -50,6 +51,7 @@ Read-Only:
 * `ip_address` (String)
 * `ports` (Attributes List) (see [below for nested schema](#nestedatt--items--spec--ports))
 * `selector` (Map of String)
+
 <a id="nestedatt--items--spec--ports"></a>
 ### Nested Schema for `items.spec.ports`
 
@@ -58,6 +60,7 @@ Read-Only:
 * `name` (String)
 * `port` (Number)
 * `protocol` (String)
+
 <a id="nestedatt--items--status"></a>
 ### Nested Schema for `items.status`
 

@@ -215,6 +215,19 @@ func runGenerate(cmd *cobra.Command, flags *generateFlags) error {
 		provider = generator.FilterProviderIR(provider, filter)
 	}
 
+	// G39: surface Terraform platform size-limit diagnostics (warning as the
+	// estimated serialized schema approaches the 64 MiB GetProviderSchema cap)
+	// alongside the pipeline diagnostics. Description truncation — the lever for
+	// a provider over the cap — is applied before the check so a configured
+	// limit brings the provider under the cap within this run; generator.Run
+	// re-applies both (truncation is idempotent) and enforces the hard cap.
+	limits := limitsFromConfig(cfg)
+	generator.ApplyDescriptionLimit(provider, generator.EffectiveDescriptionLimit(limits))
+	genDiags = append(genDiags, generator.CheckProviderSchemaSize(provider, limits)...)
+	if genDiags.HasErrors() {
+		return failBuildProviderIR(cmd, genDiags, fmt.Errorf("spec cannot be generated: the provider IR contains error diagnostics (see above)"))
+	}
+
 	if flags.generateConfig && flags.dryRun {
 		done, err := handleGenerateConfig(cmd, flags, specBytes, specDisplay)
 		if err != nil {
@@ -255,6 +268,7 @@ func runGenerate(cmd *cobra.Command, flags *generateFlags) error {
 		OutputDir:      flags.output,
 		CollectOptions: collectOpts,
 		Force:          flags.force,
+		Limits:         limitsFromConfig(cfg),
 	})
 	if err != nil {
 		return fmt.Errorf("generation failed: %w", err)
@@ -273,6 +287,16 @@ func runGenerate(cmd *cobra.Command, flags *generateFlags) error {
 // other selection; the full parse→transform pipeline still runs because the
 // scaffolding is templated from BuildConfig, which is derived from the provider
 // name.
+// limitsFromConfig returns the generator.yaml limits: section, or nil when no
+// config is in play (the generator then applies its built-in Terraform
+// platform defaults).
+func limitsFromConfig(cfg *config.Config) *config.LimitsConfig {
+	if cfg == nil {
+		return nil
+	}
+	return cfg.Limits
+}
+
 func collectOptionsFor(cfg *config.Config, flags *generateFlags) generator.CollectOptions {
 	opts := generator.DefaultCollectOptions()
 	opts.IncludeTerraformTests = flags.generateTerraformTests

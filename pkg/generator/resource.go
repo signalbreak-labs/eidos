@@ -274,8 +274,11 @@ func generateResourceFile(r ir.ResourceIR, clientImport string) (*ast.File, erro
 		f.AddDecl(resourceConfigureDecl(structName))
 	}
 
-	// ImportState method.
-	if r.Importable {
+	// ImportState method. A scaffolded (unwired) resource's Read always fails
+	// with the honest scaffold diagnostic, so an emitted import could never
+	// succeed — the mandatory post-import refresh errors. Suppress the import
+	// (and its docs section) so the resource stays honest (G39).
+	if ResourceImportable(r) {
 		f.AddComment("ImportState imports an existing remote resource into Terraform state.")
 		f.AddDecl(astgen.MethodDecl(
 			"ImportState", "r", astgen.StarExpr(astgen.Ident(structName)),
@@ -324,7 +327,7 @@ func resourceAssertSpecs(r ir.ResourceIR, wiring resourceWiringPlan, structName 
 	if resourceHasIdentity(r) {
 		specs = append(specs, specFor("ResourceWithIdentity"))
 	}
-	if r.Importable {
+	if ResourceImportable(r) {
 		specs = append(specs, specFor("ResourceWithImportState"))
 	}
 	if hasStateUpgrades(r) {
@@ -367,7 +370,10 @@ func registerResourceImports(f *astgen.File, r ir.ResourceIR, wiring resourceWir
 	if objectSchemaNeedsValidators(r.Schema) {
 		f.AddImport("github.com/hashicorp/terraform-plugin-framework/schema/validator", "validator")
 	}
-	if r.Importable {
+	for _, imp := range standardValidatorImports(r.Schema) {
+		f.AddImport(imp[0], imp[1])
+	}
+	if ResourceImportable(r) {
 		f.AddImport("github.com/hashicorp/terraform-plugin-framework/path", "path")
 		parsed, err := parseImportIDFormat(r.ImportIDFormat, r.IDAttribute)
 		if err != nil {
@@ -409,6 +415,15 @@ func registerResourceImports(f *astgen.File, r ir.ResourceIR, wiring resourceWir
 // resourceModelName returns the generated model struct name for a resource.
 func resourceModelName(r ir.ResourceIR) string {
 	return naming.GoTypeName(r.Name) + "ResourceModel"
+}
+
+// ResourceImportable reports whether the resource emits an ImportState method.
+// Importable alone is not enough: a scaffolded (unwired) resource's Read always
+// fails with the honest scaffold diagnostic, so an emitted import could never
+// succeed — the mandatory post-import refresh errors. A scaffolded resource
+// therefore stays non-importable in both code and docs (G39).
+func ResourceImportable(r ir.ResourceIR) bool {
+	return r.Importable && planResourceWiring(r).wired
 }
 
 // registerWiredResourceImports adds the imports a wired CRUD body needs to build

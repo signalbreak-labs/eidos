@@ -38,7 +38,7 @@
     {
       "path": "docs/resources/pet.md",
       "reason": "documentation for resource pet",
-      "body_hash": "b063b8fbfc73c77f"
+      "body_hash": "10d1b8c3b6e08798"
     },
     {
       "path": "examples/data-sources/list_pets/data-source.tf",
@@ -53,12 +53,12 @@
     {
       "path": "generator.yaml",
       "reason": "generated generator configuration",
-      "body_hash": "77c5e3b18aa2d925"
+      "body_hash": "63cdfcc4c6963930"
     },
     {
       "path": "go.mod",
       "reason": "Go module definition",
-      "body_hash": "f65b8544fe48b912"
+      "body_hash": "e0f6c6060abd808d"
     },
     {
       "path": "internal/client/auth.go",
@@ -153,12 +153,12 @@
     {
       "path": "internal/provider/resource_pet.go",
       "reason": "resource mycloud-pets_pet",
-      "body_hash": "bef8294fa4df2b23"
+      "body_hash": "f7b06612aadd57f8"
     },
     {
       "path": "internal/provider/resource_pet_acceptance_test.go",
       "reason": "acceptance tests for resource pet",
-      "body_hash": "bd215b289514ba40"
+      "body_hash": "f6efcc51e2f3ffab"
     },
     {
       "path": "internal/provider/resource_pet_remote_test.go",
@@ -190,5 +190,8 @@
       "reason": "Terraform Registry manifest",
       "body_hash": "76ac85aa7f3a523b"
     }
+  ],
+  "warnings": [
+    "import suppressed: import target is computed-only"
   ]
 }

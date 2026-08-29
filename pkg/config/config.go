@@ -72,6 +72,10 @@ type Config struct {
 	SignRelease *bool            `yaml:"sign_release,omitempty" json:"sign_release,omitempty"`
 	Generation  GenerationConfig `yaml:"generation,omitempty" json:"generation,omitempty"`
 	Spec        SpecConfig       `yaml:"spec,omitempty" json:"spec,omitempty"`
+	// Limits caps generated output sizes against Terraform platform limits
+	// (provider schema, docs files, descriptions). Nil uses the built-in
+	// defaults; see LimitsConfig.
+	Limits *LimitsConfig `yaml:"limits,omitempty" json:"limits,omitempty"`
 
 	// Warnings holds non-fatal validation messages produced by Validate. Warnings
 	// are not serialized back to generator.yaml; they are runtime metadata for

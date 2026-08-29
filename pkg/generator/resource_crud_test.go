@@ -1074,3 +1074,215 @@ func TestResourceTimeouts_Compiles(t *testing.T) {
 		t.Fatalf("go test -run '^$' ./... failed for timeouts resource: %v\n%s", err, out)
 	}
 }
+
+// collectionReadResourceIR returns a wired resource whose Read is a
+// placeholder-free collection GET: the response envelope carries an array of
+// every instance (e.g. GigaVUE-FM {"diameterWhitelists": [...]}) and the
+// schema is derived from the item.
+func collectionReadResourceIR() ir.ResourceIR {
+	r := sampleResourceIR()
+	r.CRUDMapping.Read = ir.OperationMappingIR{
+		Method:               "GET",
+		PathTemplate:         "/pets",
+		SuccessCodes:         []int{200},
+		ResponseEnvelope:     "diameterWhitelists",
+		ResponseIsCollection: true,
+	}
+	return r
+}
+
+// TestWiredReadBody_CollectionReadSelectsByID asserts a collection read (a
+// placeholder-free GET whose envelope response is an array of every instance)
+// selects the element whose identifier matches the state's identifier
+// attribute, and reports the resource removed (removed = true) when no
+// element matches — instead of blindly applying the first element (G39). A
+// null identifier falls back to the first element with a warning.
+func TestWiredReadBody_CollectionReadSelectsByID(t *testing.T) {
+	r := collectionReadResourceIR()
+
+	file := ResourceFile(r, testClientImport)
+	var buf bytes.Buffer
+	if err := file.Render(&buf); err != nil {
+		t.Fatalf("Render() error = %v", err)
+	}
+	got := buf.String()
+
+	for _, want := range []string{
+		`if v, ok := data["diameterWhitelists"]; ok {`,
+		`arr, ok := v.([]any)`,
+		`state.Id.IsNull()`,
+		`want := fmt.Sprint(state.Id.ValueString())`,
+		`for _, item := range arr {`,
+		`if idVal, ok := m["id"]; ok && fmt.Sprint(idVal) == want {`,
+		`match = m`,
+		`if match == nil {`,
+		`removed = true`,
+		`m, ok := arr[0].(map[string]any)`,
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("collection read body missing %q\n--- body ---\n%s", want, got)
+		}
+	}
+}
+
+// TestWiredReadBody_InstanceReadKeepsFirstElementUnwrap asserts an instance
+// read (a placeholder path) keeps the get-one array unwrap: the first element
+// IS the instance there, so identifier selection must not be emitted.
+func TestWiredReadBody_InstanceReadKeepsFirstElementUnwrap(t *testing.T) {
+	r := collectionReadResourceIR()
+	r.CRUDMapping.Read.PathTemplate = "/pets/{id}"
+	r.CRUDMapping.Read.ResponseIsCollection = false
+
+	file := ResourceFile(r, testClientImport)
+	var buf bytes.Buffer
+	if err := file.Render(&buf); err != nil {
+		t.Fatalf("Render() error = %v", err)
+	}
+	got := buf.String()
+
+	if !strings.Contains(got, `m, ok := arr[0].(map[string]any)`) {
+		t.Errorf("instance read must keep the first-element unwrap\n--- body ---\n%s", got)
+	}
+	if strings.Contains(got, "removed = true") && strings.Contains(got, "want :=") {
+		t.Errorf("instance read must not emit identifier selection\n--- body ---\n%s", got)
+	}
+}
+
+// TestWiredBody_CollectionRead_Compiles generates a full provider module with
+// the collection-read resource and compiles it, proving the selection code is
+// valid Go in the generated module.
+func TestWiredBody_CollectionRead_Compiles(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping network-bound compile test in -short mode")
+	}
+
+	p := sampleProviderWithResourceIR()
+	p.Resources = []ir.ResourceIR{collectionReadResourceIR()}
+
+	tmp := generateResourceModule(t, p)
+
+	ctx, cancel := contextWithTimeout(t, 5*time.Minute)
+	defer cancel()
+
+	tidyCmd := exec.CommandContext(ctx, "go", "mod", "tidy")
+	tidyCmd.Dir = tmp
+	if out, err := tidyCmd.CombinedOutput(); err != nil {
+		t.Fatalf("go mod tidy failed: %v\n%s", err, out)
+	}
+
+	buildCmd := exec.CommandContext(ctx, "go", "build", "./...")
+	buildCmd.Dir = tmp
+	if out, err := buildCmd.CombinedOutput(); err != nil {
+		t.Fatalf("go build ./... failed for collection-read resource: %v\n%s", err, out)
+	}
+}
+
+// TestPlanOperation_EnumEquivalentPathParam wires a composite resource whose
+// placeholder cannot name-match an attribute but whose path parameter enum
+// exactly equals a Required string attribute's enum set (the gigavuecore
+// notif_meta_config shape: {notifType} enum [instant, batch, trap] ↔ the
+// Required `type` body attribute). Before the fix, {notifType} fell through to
+// the static-value fallback and was pinned to the first enum member
+// ("instant"), so creates for batch/trap notification types hit the wrong URL;
+// with the binding in place the practitioner's `type` configuration supplies
+// the segment and {taskId} resolves via its WireName attribute.
+func TestPlanOperation_EnumEquivalentPathParam(t *testing.T) {
+	enum := []any{"instant", "batch", "trap"}
+	params := func(extra ...ir.ParamIR) []ir.ParamIR {
+		return append([]ir.ParamIR{{Name: "notifType", In: "path", Schema: ir.SchemaIR{Type: ir.TypeString, EnumValues: enum}}}, extra...)
+	}
+	r := sampleResourceIR()
+	// Mirror the generated notif_meta_config schema: a Required `type`
+	// attribute carrying the same enum as {notifType}, and a Required
+	// `task_id` attribute whose WireName is the spec's camelCase taskId.
+	r.Schema.Attributes = append(r.Schema.Attributes,
+		ir.AttributeIR{Name: "type", Required: true, Schema: ir.SchemaIR{Type: ir.TypeString, EnumValues: enum}},
+		ir.AttributeIR{Name: "task_id", Required: true, WireName: "taskId", Schema: ir.SchemaIR{Type: ir.TypeString}},
+	)
+	r.CRUDMapping.Create = ir.OperationMappingIR{Method: "POST", PathTemplate: "/notification/event/notifMetaConfig/{notifType}/{taskId}", PathParams: params(ir.ParamIR{Name: "taskId", In: "path", Schema: ir.SchemaIR{Type: ir.TypeString}})}
+	r.CRUDMapping.Read = ir.OperationMappingIR{Method: "GET", PathTemplate: "/notification/event/notifMetaConfig/{notifType}/{taskId}", PathParams: params(ir.ParamIR{Name: "taskId", In: "path", Schema: ir.SchemaIR{Type: ir.TypeString}})}
+	r.CRUDMapping.Delete = ir.OperationMappingIR{Method: "DELETE", PathTemplate: "/notification/event/notifMetaConfig/{notifType}/{taskId}", PathParams: params(ir.ParamIR{Name: "taskId", In: "path", Schema: ir.SchemaIR{Type: ir.TypeString}})}
+	plan := planResourceWiring(r)
+	if !plan.wired {
+		t.Fatalf("expected enum-equivalent composite resource to wire, got wired=false")
+	}
+	var sawType, sawTaskID bool
+	for _, sub := range plan.read.subs {
+		if sub.placeholder == "notifType" && sub.field == "Type" && sub.literal == "" {
+			sawType = true
+		}
+		if sub.placeholder == "taskId" && sub.field == "TaskId" {
+			sawTaskID = true
+		}
+	}
+	if !sawType {
+		t.Errorf("expected {notifType} to resolve to the Type attribute, subs=%+v", plan.read.subs)
+	}
+	if !sawTaskID {
+		t.Errorf("expected {taskId} to resolve to the TaskId attribute, subs=%+v", plan.read.subs)
+	}
+
+	// The binding must not fire when the enum sets differ: with a disjoint
+	// attribute enum the placeholder falls back to the static first-enum
+	// member, the pre-existing behavior for versioning segments.
+	r2 := sampleResourceIR()
+	r2.Schema.Attributes = append(r2.Schema.Attributes,
+		ir.AttributeIR{Name: "type", Required: true, Schema: ir.SchemaIR{Type: ir.TypeString, EnumValues: []any{"other"}}},
+	)
+	r2.CRUDMapping.Create = ir.OperationMappingIR{Method: "POST", PathTemplate: "/x/{notifType}", PathParams: params()}
+	r2.CRUDMapping.Read = ir.OperationMappingIR{Method: "GET", PathTemplate: "/x/{notifType}/{id}", PathParams: params()}
+	r2.CRUDMapping.Delete = ir.OperationMappingIR{Method: "DELETE", PathTemplate: "/x/{notifType}/{id}", PathParams: params()}
+	plan2 := planResourceWiring(r2)
+	for _, sub := range plan2.read.subs {
+		if sub.placeholder == "notifType" && sub.field != "" {
+			t.Errorf("enum mismatch must not bind an attribute, got field=%q", sub.field)
+		}
+	}
+}
+
+// TestEnumEquivalentAttribute_UniqueMatchesOnly asserts the helper rejects
+// ambiguity: zero matching attributes and multiple matching attributes both
+// resolve to ok=false so the remaining fallbacks decide.
+func TestEnumEquivalentAttribute_UniqueMatchesOnly(t *testing.T) {
+	enum := []any{"a", "b"}
+	pathParams := []ir.ParamIR{{Name: "mode", In: "path", Schema: ir.SchemaIR{Type: ir.TypeString, EnumValues: enum}}}
+	mk := func(names ...string) ir.ResourceIR {
+		r := sampleResourceIR()
+		for _, n := range names {
+			r.Schema.Attributes = append(r.Schema.Attributes, ir.AttributeIR{Name: n, Required: true, Schema: ir.SchemaIR{Type: ir.TypeString, EnumValues: enum}})
+		}
+		return r
+	}
+	if _, ok := enumEquivalentAttribute(mk(), pathParams, "mode"); ok {
+		t.Error("zero matching attributes must not bind")
+	}
+	if _, ok := enumEquivalentAttribute(mk("left", "right"), pathParams, "mode"); ok {
+		t.Error("two matching attributes must not bind")
+	}
+	attr, ok := enumEquivalentAttribute(mk("kind"), pathParams, "mode")
+	if !ok || attr.Name != "kind" {
+		t.Errorf("unique match must bind, got ok=%v attr=%+v", ok, attr)
+	}
+	// Optional attributes and non-string attributes are not candidates.
+	r := sampleResourceIR()
+	r.Schema.Attributes = append(r.Schema.Attributes,
+		ir.AttributeIR{Name: "opt", Optional: true, Schema: ir.SchemaIR{Type: ir.TypeString, EnumValues: enum}},
+		ir.AttributeIR{Name: "num", Required: true, Schema: ir.SchemaIR{Type: ir.TypeInt, EnumValues: []any{float64(1)}}},
+	)
+	if _, ok := enumEquivalentAttribute(r, pathParams, "mode"); ok {
+		t.Error("optional or non-string attributes must not bind")
+	}
+	// sameStringEnumSet is order-insensitive and rejects partial overlap.
+	if !sameStringEnumSet([]any{"b", "a"}, []any{"a", "b"}) {
+		t.Error("order-insensitive equality failed")
+	}
+	if sameStringEnumSet([]any{"a"}, []any{"a", "b"}) {
+		t.Error("different lengths must not be equal")
+	}
+	if sameStringEnumSet([]any{"a", "a"}, []any{"a", "b"}) {
+		t.Error("duplicates vs distinct values must not be equal")
+	}
+	if sameStringEnumSet([]any{"a", float64(1)}, []any{"a", float64(1)}) {
+		t.Error("non-string enum members must not be equal")
+	}
+}

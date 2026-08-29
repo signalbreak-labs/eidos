@@ -42,6 +42,7 @@ var goldenCases = []struct {
 	{"swagger-formdata", "../../test/specs/swagger-formdata.yaml"},
 	{"put-as-create", "../../test/specs/put-as-create.yaml"},
 	{"put-as-create-composite", "../../test/specs/put-as-create-composite.yaml"},
+	{"constraint-validators", "../../test/specs/constraint-validators.yaml"},
 	{"multi-file", "../../test/specs/multi-file/openapi.yaml"},
 }
 

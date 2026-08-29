@@ -150,6 +150,11 @@ func TestGenerateConfig_Full(t *testing.T) {
 					Attributes: []ir.AttributeIR{
 						{Name: "id", Computed: true, Schema: ir.SchemaIR{Type: ir.TypeString}},
 						{Name: "name", Required: true, Schema: ir.SchemaIR{Type: ir.TypeString}},
+						// RequestInput + Computed (the GigaVUE-FM clusterId shape):
+						// must NOT be re-emitted as a computed_attribute, or a
+						// regenerated config would demote a spec-settable request
+						// field to read-only (G39).
+						{Name: "cluster_id", Optional: true, Computed: true, RequestInput: true, Schema: ir.SchemaIR{Type: ir.TypeString}},
 						{Name: "secret", Sensitive: true, Computed: true, Schema: ir.SchemaIR{Type: ir.TypeString}},
 						{Name: "password", WriteOnly: true, Sensitive: true, Schema: ir.SchemaIR{Type: ir.TypeString}},
 						{Name: "immutable_tag", Schema: ir.SchemaIR{Type: ir.TypeString}, PlanModifiers: []ir.PlanModifierIR{{Type: ir.PlanModifierTypeRequiresReplace}}},

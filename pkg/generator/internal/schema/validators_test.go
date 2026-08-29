@@ -485,14 +485,14 @@ func TestValidatePatternProperties(t *testing.T) {
 // schema's declared type, so an Int64 dispatch on a schema carrying an
 // exclusive bound yields an expr.
 func TestAttributeValidatorExprs_KindDispatch(t *testing.T) {
-	bound := ir.SchemaIR{Type: ir.TypeFloat, ExclusiveMinimum: floatPtr(1)}
+	bound := ir.AttributeIR{Schema: ir.SchemaIR{Type: ir.TypeFloat, ExclusiveMinimum: floatPtr(1)}}
 	if got := attributeValidatorExprs(bound, "Float64"); len(got) != 1 {
 		t.Errorf("Float64 dispatch: expected 1 expr, got %d", len(got))
 	}
 	if got := attributeValidatorExprs(bound, "Int64"); len(got) != 1 {
 		t.Errorf("Int64 dispatch on bound schema: expected 1 expr, got %d", len(got))
 	}
-	empty := ir.SchemaIR{Type: ir.TypeFloat}
+	empty := ir.AttributeIR{Schema: ir.SchemaIR{Type: ir.TypeFloat}}
 	if got := attributeValidatorExprs(empty, "Object"); len(got) != 0 {
 		t.Errorf("Object dispatch: expected 0 exprs, got %d", len(got))
 	}

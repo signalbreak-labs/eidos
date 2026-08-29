@@ -28,12 +28,12 @@
     {
       "path": "docs/resources/note.md",
       "reason": "documentation for resource note",
-      "body_hash": "c681609c149e71b5"
+      "body_hash": "7e4bbe9bee2cb259"
     },
     {
       "path": "docs/resources/upload.md",
       "reason": "documentation for resource upload",
-      "body_hash": "8e6ef482652f57a1"
+      "body_hash": "4fff6aea08959d93"
     },
     {
       "path": "examples/resources/note/resource.tf",
@@ -48,12 +48,12 @@
     {
       "path": "generator.yaml",
       "reason": "generated generator configuration",
-      "body_hash": "705a2bd60d8ea21e"
+      "body_hash": "1928e3751d4c02ed"
     },
     {
       "path": "go.mod",
       "reason": "Go module definition",
-      "body_hash": "57d6cf206f6908ce"
+      "body_hash": "da4ad685579ebb49"
     },
     {
       "path": "internal/client/client.go",
@@ -113,12 +113,12 @@
     {
       "path": "internal/provider/resource_note.go",
       "reason": "resource form-data-api_note",
-      "body_hash": "bae9bd81fa1e0e2a"
+      "body_hash": "295f5ab6cf9529b4"
     },
     {
       "path": "internal/provider/resource_note_acceptance_test.go",
       "reason": "acceptance tests for resource note",
-      "body_hash": "927b66f099883f4f"
+      "body_hash": "239b7599be046a75"
     },
     {
       "path": "internal/provider/resource_note_remote_test.go",
@@ -133,7 +133,7 @@
     {
       "path": "internal/provider/resource_upload.go",
       "reason": "resource form-data-api_upload",
-      "body_hash": "f4a5261087815f09"
+      "body_hash": "07403399a6569526"
     },
     {
       "path": "internal/provider/resource_upload_test.go",
@@ -160,5 +160,9 @@
       "reason": "Terraform Registry manifest",
       "body_hash": "76ac85aa7f3a523b"
     }
+  ],
+  "warnings": [
+    "import suppressed: import target is computed-only",
+    "import suppressed: import target is computed-only"
   ]
 }

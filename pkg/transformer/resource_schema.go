@@ -48,13 +48,21 @@ func schemaIRFromSpecRecursive(spec SchemaSpec) ir.SchemaIR {
 	}
 	switch strings.ToLower(strings.TrimSpace(spec.Type)) {
 	case "string":
-		return ir.SchemaIR{Type: ir.TypeString, Format: spec.Format}
+		s := ir.SchemaIR{Type: ir.TypeString, Format: spec.Format}
+		applyScalarConstraints(&s, spec)
+		return s
 	case "integer":
-		return ir.SchemaIR{Type: ir.TypeInt, Format: spec.Format}
+		s := ir.SchemaIR{Type: ir.TypeInt, Format: spec.Format}
+		applyScalarConstraints(&s, spec)
+		return s
 	case "number":
-		return ir.SchemaIR{Type: ir.TypeFloat, Format: spec.Format}
+		s := ir.SchemaIR{Type: ir.TypeFloat, Format: spec.Format}
+		applyScalarConstraints(&s, spec)
+		return s
 	case "boolean":
-		return ir.SchemaIR{Type: ir.TypeBool}
+		s := ir.SchemaIR{Type: ir.TypeBool}
+		applyScalarConstraints(&s, spec)
+		return s
 	case "array":
 		if spec.Items == nil {
 			return ir.SchemaIR{Type: ir.TypeDynamic}
@@ -64,18 +72,44 @@ func schemaIRFromSpecRecursive(spec SchemaSpec) ir.SchemaIR {
 		if spec.UniqueItems {
 			kind = ir.Set
 		}
-		return ir.SchemaIR{Collection: &ir.CollectionType{Kind: kind, ElementType: elem}}
+		s := ir.SchemaIR{Collection: &ir.CollectionType{Kind: kind, ElementType: elem}}
+		applyScalarConstraints(&s, spec)
+		return s
 	case "object", "":
 		if len(spec.Properties) > 0 {
 			return ir.SchemaIR{Attributes: nestedAttributesFromSpec(spec)}
 		}
 		if spec.AdditionalProperties != nil {
 			elem := schemaIRFromSpecRecursive(*spec.AdditionalProperties)
-			return ir.SchemaIR{Collection: &ir.CollectionType{Kind: ir.Map, ElementType: elem}}
+			s := ir.SchemaIR{Collection: &ir.CollectionType{Kind: ir.Map, ElementType: elem}}
+			applyScalarConstraints(&s, spec)
+			return s
 		}
 		return ir.SchemaIR{Type: ir.TypeDynamic}
 	}
 	return ir.SchemaIR{Type: ir.TypeDynamic}
+}
+
+// applyScalarConstraints copies the scalar constraints carried on a SchemaSpec
+// (populated from the parser's schema by applyConstraintsFromParser) onto the
+// converted ir.SchemaIR so the generator can emit framework validators
+// (OneOf/Between/LengthBetween/RegexMatches and the custom
+// exclusive-bound/multipleOf validators). Without this copy every constraint
+// declared on a property or array element is silently dropped during
+// SchemaSpec→SchemaIR conversion (G39).
+func applyScalarConstraints(s *ir.SchemaIR, spec SchemaSpec) {
+	s.EnumValues = spec.Enum
+	s.Const = spec.Const
+	s.Pattern = spec.Pattern
+	s.MinLength = spec.MinLength
+	s.MaxLength = spec.MaxLength
+	s.Minimum = spec.Minimum
+	s.Maximum = spec.Maximum
+	s.ExclusiveMinimum = spec.ExclusiveMinimum
+	s.ExclusiveMaximum = spec.ExclusiveMaximum
+	s.MultipleOf = spec.MultipleOf
+	s.MinItems = spec.MinItems
+	s.MaxItems = spec.MaxItems
 }
 
 // nestedAttributesFromSpec builds the nested attribute list for an object-typed
@@ -222,6 +256,10 @@ func applyManagedAttributeFlags(
 	default:
 		attr.Computed = true
 	}
+	// A request-body property is a value the generated CRUD body sends, so a
+	// computed_attributes override must not be able to make it Computed-only
+	// (the request would send a value the practitioner can never supply).
+	attr.RequestInput = inRequest || requestRequired[name]
 	// A server-assigned identifier is Computed even when the request body
 	// happens to list it; the provider must not require the practitioner to
 	// supply the id on create. A practitioner-set identifier — one the create
@@ -322,6 +360,7 @@ func ManagedResourceSchemaWithDiagnostics(c ResourceCRUD, diags *diagnostics.Dia
 	if c.Create != nil && c.Create.RequestSchema != nil {
 		requestSpec = c.Create.RequestSchema
 	}
+	requestSpec = mergeUpdateRequestSpec(requestSpec, c.Update)
 	formData := createFormDataParams(c.Create)
 	requestProps, requestRequired := requestPropertySets(requestSpec, formData)
 
@@ -583,7 +622,16 @@ func pathParamDescription(c ResourceCRUD, idAttribute string) string {
 // (hasID), else the path-parameter-named attribute (idAttribute) or its
 // synthetic. Gated on Create.Method == PUT by the caller, so POST-create
 // resources are byte-identical.
+//
+// A singleton PUT-as-create (a create path with no {placeholder} segments,
+// e.g. PUT /fm/copilot/config) substitutes nothing from the plan: forcing its
+// identifier Required would demand a value no request ever sends (a bogus
+// Required "id" the practitioner cannot meaningfully supply), so the identifier
+// keeps its inferred flags (a Computed placeholder the import can still target).
 func forcePutAsCreateIdentifiers(attrs *[]ir.AttributeIR, c ResourceCRUD, hasID bool, idAttribute string) {
+	if c.Create == nil || !strings.Contains(c.Create.Path, "{") {
+		return
+	}
 	var idNames []string
 	switch {
 	case c.ID.Kind == IDComposite:
@@ -686,6 +734,10 @@ func appendFormDataOnlyAttributes(attrs []ir.AttributeIR, formData []Parameter, 
 			Name:        snake,
 			Schema:      schemaIRFromSpecRecursive(SchemaSpec{Type: p.Type}),
 			Description: p.Description,
+			// A formData field is sent by the generated form-encoded create
+			// body, so it is a request input the computed_attributes override
+			// must not silence (G39).
+			RequestInput: true,
 		}
 		if requestRequired[p.Name] {
 			attr.Required = true
@@ -731,6 +783,10 @@ func appendRequestOnlyAttributes(attrs []ir.AttributeIR, requestSpec *SchemaSpec
 			WireName:    name,
 			Schema:      schemaIRFromSpecRecursive(requestSpec.Properties[name]),
 			Description: requestSpec.Properties[name].Description,
+			// A request-body input the response does not echo is still sent
+			// by the generated CRUD body, so it is a request input the
+			// computed_attributes override must not silence (G39).
+			RequestInput: true,
 		}
 		if requestRequired[name] {
 			attr.Required = true
@@ -826,6 +882,10 @@ func collectOperationParameters(c ResourceCRUD) map[string]*operationParamFlags 
 }
 
 func applyParamFlags(attr ir.AttributeIR, p *operationParamFlags) ir.AttributeIR {
+	// The generated CRUD body substitutes this attribute into a path/query/
+	// header parameter, so it is a request input the computed_attributes
+	// override must not be able to make Computed-only (G39).
+	attr.RequestInput = true
 	if p.required {
 		attr.Required = true
 		attr.Optional = false
@@ -851,6 +911,10 @@ func newAttributeFromParam(snake string, p *operationParamFlags) ir.AttributeIR 
 		WireName:    p.wireName,
 		Schema:      paramSchemaIR(p.in, p.typ, p.itemsType, p.style, nil, p.wireName),
 		Description: p.description,
+		// A query/header parameter is sent from state, so it is a request
+		// input the computed_attributes override must not be able to make
+		// Computed-only (G39).
+		RequestInput: true,
 	}
 	if p.required {
 		attr.Required = true
@@ -892,6 +956,40 @@ func requestPropertySets(requestSpec *SchemaSpec, formData []Parameter) (map[str
 		}
 	}
 	return requestProps, requestRequired
+}
+
+// mergeUpdateRequestSpec merges writable properties that only the update
+// operation's request body carries into the create request spec (G39 docs
+// audit: update-only request properties were never consulted, so their
+// descriptions were dropped and settable fields degraded to response-only
+// Computed). The resource is one model for create and update — the wired
+// bodies marshal the whole model, and modelToJSONMap omits null values — so an
+// update-only property left unset is simply not sent on create. Create stays
+// authoritative: a property present in both keeps the Create body's shape and
+// description, and the merged spec's Required list stays Create's alone, so an
+// update-required-only property is Optional (settable) rather than Required at
+// create time.
+func mergeUpdateRequestSpec(create *SchemaSpec, update *Operation) *SchemaSpec {
+	if update == nil || update.RequestSchema == nil {
+		return create
+	}
+	if create == nil {
+		return update.RequestSchema
+	}
+	if create == update.RequestSchema {
+		return create
+	}
+	merged := *create
+	merged.Properties = make(map[string]SchemaSpec, len(create.Properties)+len(update.RequestSchema.Properties))
+	for name, prop := range create.Properties {
+		merged.Properties[name] = prop
+	}
+	for name, prop := range update.RequestSchema.Properties {
+		if _, ok := create.Properties[name]; !ok {
+			merged.Properties[name] = prop
+		}
+	}
+	return &merged
 }
 
 // preferDescription returns next when it says something, else keeps cur. It is

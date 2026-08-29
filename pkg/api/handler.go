@@ -1081,7 +1081,7 @@ func applyConfigOverrides(preview *ir.ProviderIR, cfg *config.Config, providerNa
 		preview.Functions = append(preview.Functions, functionFromOverride(fo, providerName))
 	}
 
-	if err := transformer.ApplyOverrides(preview, cfg); err != nil {
+	if err := transformer.ApplyOverridesWithDiagnostics(preview, cfg, diags); err != nil {
 		*diags = append(*diags, diagnostics.Diagnostic{
 			Severity: diagnostics.Error,
 			Summary:  "Failed to apply generator.yaml overrides",
@@ -2157,6 +2157,16 @@ func buildGroupedResources(spec *parser.Spec, providerName string, pathOps map[s
 		res.CRUDMapping.Create.ResponseInnerPath = detectResponseInnerPath(g.Create, g.Read)
 		res.CRUDMapping.Read = resourceOperationMapping(spec, "GET", g.InstancePath, parserOp(spec, g.InstancePath, "GET"), envelopeOf(g.Read))
 		res.CRUDMapping.Read.MediaType = mediaTypeOf(g.Read)
+		// A placeholder-free GET returns the whole collection, not one
+		// instance: record it so the generated read selects the element whose
+		// identifier matches (and reports the resource removed when none does)
+		// instead of blindly reading the first element (G39). A read whose path
+		// carries placeholders is an instance read; an array response there is
+		// a get-one wrapper (issue #35), where the first element IS the
+		// instance.
+		if isCollectionRead(g, g.Read.Path) {
+			res.CRUDMapping.Read.ResponseIsCollection = true
+		}
 		if g.Update != nil {
 			updMethod := "PUT"
 			if g.FullUpdate == nil && g.PartialUpdate != nil {
@@ -2200,7 +2210,7 @@ func buildGroupedResources(spec *parser.Spec, providerName string, pathOps map[s
 		// parameter and is only emitted when all of them are present as top-level
 		// schema attributes (otherwise the import would target attributes that do
 		// not exist, so the resource stays non-importable — honest, not silent).
-		if importFmt, ok := groupedImportFormat(g, schema, idAttr); ok {
+		if importFmt, ok := groupedImportFormatWithDiagnostics(g, schema, idAttr, diags); ok {
 			res.ImportIDFormat = importFmt
 			res.Importable = true
 		}
@@ -2458,6 +2468,11 @@ func resourceFromOverrideCRUD(spec *parser.Spec, providerName string, g transfor
 	if g.Read != nil {
 		res.CRUDMapping.Read = resourceOperationMapping(spec, string(g.Read.Method), g.Read.Path, parserOp(spec, g.Read.Path, string(g.Read.Method)), envelopeOf(g.Read))
 		res.CRUDMapping.Read.MediaType = mediaTypeOf(g.Read)
+		// Mirror the grouped path: a placeholder-free array read selects the
+		// matching element by identifier (G39).
+		if isCollectionRead(g, g.Read.Path) {
+			res.CRUDMapping.Read.ResponseIsCollection = true
+		}
 	}
 	if g.Update != nil {
 		upd := resourceOperationMapping(spec, string(g.Update.Method), g.Update.Path, parserOp(spec, g.Update.Path, string(g.Update.Method)), envelopeOf(g.Update))
@@ -2480,7 +2495,7 @@ func resourceFromOverrideCRUD(spec *parser.Spec, providerName string, g transfor
 	// populate; groupedImportFormat returns ok=false otherwise and the resource
 	// stays honestly non-importable. An explicit import_format override applied
 	// later (applyResourceImportFormatOverride) supersedes this inferred format.
-	if importFmt, ok := groupedImportFormat(g, schema, idAttr); ok {
+	if importFmt, ok := groupedImportFormatWithDiagnostics(g, schema, idAttr, diags); ok {
 		res.ImportIDFormat = importFmt
 		res.Importable = true
 	}
@@ -2583,51 +2598,178 @@ func detectResponseInnerPath(write, read *transformer.Operation) string {
 // not present (e.g. a nested-response resource whose path parameters are not
 // top-level fields), the resource is not importable — honest, not silent.
 func groupedImportFormat(g transformer.ResourceCRUD, schema ir.ObjectSchemaIR, idAttr string) (string, bool) {
-	hasAttr := func(name string) bool {
+	return groupedImportFormatWithDiagnostics(g, schema, idAttr, nil)
+}
+
+// groupedImportFormatWithDiagnostics is groupedImportFormat that appends
+// fail-loud warnings to diags (a nil diags is allowed and simply suppresses
+// emission). It warns when a resource stays non-importable because an import
+// target attribute is Computed-only (a value the practitioner cannot know) or
+// because a required read parameter has no schema attribute.
+func groupedImportFormatWithDiagnostics(g transformer.ResourceCRUD, schema ir.ObjectSchemaIR, idAttr string, diags *diagnostics.Diagnostics) (string, bool) {
+	findAttr := func(name string) (ir.AttributeIR, bool) {
 		for _, a := range schema.Attributes {
 			if a.Name == name {
-				return true
+				return a, true
 			}
 		}
-		return false
+		return ir.AttributeIR{}, false
+	}
+	// userSettable reports whether the practitioner can supply the attribute's
+	// value in configuration. An import ID segment must reference a value the
+	// practitioner knows before the first read — a Computed-only attribute
+	// (server-assigned, e.g. a server-generated id) is not knowable, so an
+	// import that targets it can never succeed (G39).
+	userSettable := func(name string) bool {
+		a, ok := findAttr(name)
+		return ok && !a.ComputedOnly()
 	}
 
+	var parts []string
 	switch g.ID.Kind {
 	case transformer.IDComposite:
-		if len(g.ID.ParameterNames) == 0 {
+		p, ok := compositeImportParts(g, userSettable, diags)
+		if !ok {
 			return "", false
 		}
-		parts := make([]string, 0, len(g.ID.ParameterNames))
-		for _, p := range g.ID.ParameterNames {
-			snake := transformer.ToSnakeCase(p)
-			if !hasAttr(snake) {
-				return "", false
-			}
-			parts = append(parts, "{"+snake+"}")
-		}
-		return strings.Join(parts, ":"), true
+		parts = p
 	default: // IDSimple
-		// The import must populate the attribute the read substitutes into the
-		// path placeholder. When a schema attribute carries the raw path
-		// parameter name (e.g. {name} → name), that attribute is what the read
-		// uses; the resolved ID attribute (e.g. "id" from a response echo) may be
-		// a different field the read does not substitute — importing by it would
-		// set the wrong attribute and the follow-up read would 404 (e.g.
-		// intent_policy's {name} path with an "id" response property). Fall back
-		// to the resolved ID attribute only when no attribute matches the path
-		// parameter name.
-		if len(g.ID.ParameterNames) > 0 && hasAttr(g.ID.ParameterNames[0]) {
-			return "{" + g.ID.ParameterNames[0] + "}", true
-		}
-		effective := idAttr
-		if effective == "" {
-			effective = "id"
-		}
-		if !hasAttr(effective) {
+		p, ok := simpleImportBase(g, findAttr, userSettable, idAttr, diags)
+		if !ok {
 			return "", false
 		}
-		return "{" + effective + "}", true
+		parts = []string{"{" + p + "}"}
 	}
+	parts, ok := appendRequiredReadParams(g, parts, findAttr, userSettable, diags)
+	if !ok {
+		return "", false
+	}
+	return strings.Join(parts, ":"), true
+}
+
+// compositeImportParts builds the {param} segments for a composite-identity
+// resource: every path parameter, sanitized, must be user-settable or the
+// resource is not importable (warnNotImportable fires via diags).
+func compositeImportParts(g transformer.ResourceCRUD, userSettable func(string) bool, diags *diagnostics.Diagnostics) ([]string, bool) {
+	if len(g.ID.ParameterNames) == 0 {
+		return nil, false
+	}
+	parts := make([]string, 0, len(g.ID.ParameterNames))
+	for _, p := range g.ID.ParameterNames {
+		snake := transformer.ToSnakeCase(p)
+		if !userSettable(snake) {
+			warnNotImportable(diags, g.Name, snake, "composite path parameter")
+			return nil, false
+		}
+		parts = append(parts, "{"+snake+"}")
+	}
+	return parts, true
+}
+
+// simpleImportBase resolves the single attribute an import populates for a
+// simple-identity resource.
+//
+// The import must populate the attribute the read substitutes into the path
+// placeholder. When a schema attribute carries the raw path parameter name
+// (e.g. {name} → name), that attribute is what the read uses; the resolved
+// ID attribute (e.g. "id" from a response echo) may be a different field the
+// read does not substitute — importing by it would set the wrong attribute
+// and the follow-up read would 404 (e.g. intent_policy's {name} path with an
+// "id" response property). Fall back to the resolved ID attribute only when
+// no attribute matches the path parameter name.
+func simpleImportBase(g transformer.ResourceCRUD, findAttr func(string) (ir.AttributeIR, bool), userSettable func(string) bool, idAttr string, diags *diagnostics.Diagnostics) (string, bool) {
+	base := ""
+	if len(g.ID.ParameterNames) > 0 {
+		if _, ok := findAttr(g.ID.ParameterNames[0]); ok {
+			base = g.ID.ParameterNames[0]
+		}
+	}
+	if base == "" {
+		base = idAttr
+		if base == "" {
+			base = "id"
+		}
+	}
+	if _, ok := findAttr(base); !ok {
+		return "", false
+	}
+	if !userSettable(base) {
+		warnNotImportable(diags, g.Name, base, "identifier")
+		return "", false
+	}
+	return base, true
+}
+
+// appendRequiredReadParams extends parts with the read operation's required
+// query/header parameters. A required query/header parameter on the READ is
+// sent from state on the refresh that follows every import, so the import must
+// populate it too — otherwise the generated read goes out with an empty value
+// the API rejects (e.g. GigaVUE-FM's required clusterId query parameter on
+// /portConfig/gigastreams/advHash/{slotId}) (G39). Parameters whose schema
+// attribute is user-settable join the composite import format; a Computed-only
+// one is not knowable by the practitioner, so the resource stays honestly
+// non-importable with a warning (ok reports whether the format survived).
+func appendRequiredReadParams(g transformer.ResourceCRUD, parts []string, findAttr func(string) (ir.AttributeIR, bool), userSettable func(string) bool, diags *diagnostics.Diagnostics) ([]string, bool) {
+	for _, p := range requiredReadParams(g.Read) {
+		if _, ok := findAttr(p); !ok {
+			continue // no schema attribute: the read is scaffolded anyway
+		}
+		if !userSettable(p) {
+			warnNotImportable(diags, g.Name, p, "required read parameter")
+			return parts, false
+		}
+		dup := false
+		for _, existing := range parts {
+			if existing == "{"+p+"}" {
+				dup = true
+				break
+			}
+		}
+		if !dup {
+			parts = append(parts, "{"+p+"}")
+		}
+	}
+	return parts, true
+}
+
+// requiredReadParams returns the sanitized names of the read operation's
+// required query and header parameters, sorted for deterministic import
+// formats. Path parameters are handled by the identifier logic and are
+// excluded.
+func requiredReadParams(read *transformer.Operation) []string {
+	if read == nil {
+		return nil
+	}
+	var names []string
+	for _, p := range read.Parameters {
+		in := strings.ToLower(p.In)
+		if in != "query" && in != "header" {
+			continue
+		}
+		if !p.Required {
+			continue
+		}
+		names = append(names, transformer.SanitizeAttributeName(p.Name))
+	}
+	sort.Strings(names)
+	return names
+}
+
+// warnNotImportable surfaces why a resource's import was suppressed: the
+// import target attribute is Computed-only, a value the practitioner cannot
+// know before the first read (G39).
+func warnNotImportable(diags *diagnostics.Diagnostics, resource, attr, role string) {
+	if diags == nil {
+		return
+	}
+	*diags = append(*diags, diagnostics.Diagnostic{
+		Severity: diagnostics.Warning,
+		Summary:  "import suppressed: import target is computed-only",
+		Detail: fmt.Sprintf(
+			"Resource %q stays non-importable because its %s attribute %q is Computed-only — the practitioner cannot know the value before the first read, so an import referencing it cannot succeed. Make the attribute user-settable (required or optional in the request) or choose a user-settable identifier via generator.yaml id_attribute/import_format.",
+			resource, role, attr,
+		),
+	})
 }
 
 // groupIsResource reports whether every CRUD operation in the group classifies as
@@ -3215,6 +3357,23 @@ func resourceOperationMapping(spec *parser.Spec, method, path string, op *parser
 	m := operationMapping(method, path, op, responseEnvelope)
 	m.PathParams = pathParamIRs(spec, path, op)
 	return m
+}
+
+// isCollectionRead reports whether a CRUD group's Read fetches the whole
+// collection rather than one instance: the read operation's own path carries
+// no dynamic placeholder (e.g. GigaVUE-FM reads GET /apps/diameter/whitelists
+// while delete is DELETE /apps/diameter/whitelists/{alias}) and the read
+// response — after the transformer's envelope unwrap — is an array of
+// instances. The generated readRemote selects the matching element by
+// identifier for such reads (G39).
+func isCollectionRead(g transformer.ResourceCRUD, readPath string) bool {
+	if g.Read == nil || g.Read.ResponseSchema == nil {
+		return false
+	}
+	if strings.Contains(readPath, "{") {
+		return false
+	}
+	return strings.EqualFold(g.Read.ResponseSchema.Type, "array")
 }
 
 // paramFormat carries a parameter schema's OpenAPI format onto the IR so the

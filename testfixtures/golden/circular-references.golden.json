@@ -28,7 +28,7 @@
     {
       "path": "docs/data-sources/list_departments.md",
       "reason": "documentation for data source list_departments",
-      "body_hash": "ab9381c3ce376b40"
+      "body_hash": "590ab45bf903f4ac"
     },
     {
       "path": "docs/index.md",
@@ -53,7 +53,7 @@
     {
       "path": "go.mod",
       "reason": "Go module definition",
-      "body_hash": "96d0c1654c9157f8"
+      "body_hash": "9d3856e494ebc01b"
     },
     {
       "path": "internal/client/client.go",

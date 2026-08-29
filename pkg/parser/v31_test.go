@@ -70,7 +70,7 @@ func TestConvertV31MycloudRoundTrip(t *testing.T) {
 		t.Fatalf("listPets parameters mismatch: %+v", listPets.Parameters)
 	}
 	limitSchema := listPets.Parameters[0].Schema
-	if limitSchema == nil || limitSchema.Type != "integer" || limitSchema.Maximum != 100 {
+	if limitSchema == nil || limitSchema.Type != "integer" || limitSchema.Maximum == nil || *limitSchema.Maximum != 100 {
 		t.Fatalf("limit schema mismatch: %+v", limitSchema)
 	}
 
@@ -365,7 +365,7 @@ components:
 	}
 	s := spec.Components.Schemas["Full31"]
 
-	if s.PropertyNames == nil || s.PropertyNames.Type != "string" || s.PropertyNames.MinLength != 1 {
+	if s.PropertyNames == nil || s.PropertyNames.Type != "string" || s.PropertyNames.MinLength == nil || *s.PropertyNames.MinLength != 1 {
 		t.Fatalf("propertyNames mismatch: %+v", s.PropertyNames)
 	}
 	if len(s.PrefixItems) != 2 || s.PrefixItems[0].Type != "string" || s.PrefixItems[1].Type != "integer" {

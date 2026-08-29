@@ -45,6 +45,28 @@ type SchemaSpec struct {
 	AnyOf         []SchemaSpec
 	RefName       string
 	Discriminator *DiscriminatorSpec
+
+	// Scalar constraints carried through from the parser's schema so
+	// schemaIRFromSpec(Recursive) can populate the matching ir.SchemaIR fields
+	// and the generator can emit framework validators (OneOf, Between,
+	// LengthBetween, RegexMatches …). Before these fields existed the
+	// parser→SchemaSpec conversion dropped every constraint, so no generated
+	// attribute ever carried a spec-declared enum or bound (G39: constraints
+	// must not be silently dropped). Pointer fields distinguish "absent" from
+	// the zero bound; the parser's non-pointer numbers treat 0 as absent,
+	// which is semantically a no-op bound anyway.
+	Enum             []any
+	Const            *any
+	Pattern          string
+	MinLength        *int
+	MaxLength        *int
+	Minimum          *float64
+	Maximum          *float64
+	ExclusiveMinimum *float64
+	ExclusiveMaximum *float64
+	MultipleOf       *float64
+	MinItems         *int
+	MaxItems         *int
 }
 
 // DiscriminatorSpec carries an OpenAPI discriminator object: the property

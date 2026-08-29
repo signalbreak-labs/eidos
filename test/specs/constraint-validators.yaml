@@ -1,0 +1,126 @@
+openapi: 3.1.0
+info:
+  title: Constraint API
+  version: 1.0.0
+  description: >-
+    A reference spec exercising every JSON Schema constraint that maps to a
+    standard terraform-plugin-framework-validators call: enum, const,
+    minLength/maxLength, pattern, minimum/maximum (inclusive, including an
+    explicit 0), minItems/maxItems, and enum-constrained collection elements.
+paths:
+  /widgets:
+    post:
+      operationId: createWidget
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WidgetInput'
+      responses:
+        '201':
+          description: The created widget.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Widget'
+  /widgets/{widgetId}:
+    get:
+      operationId: getWidget
+      parameters:
+        - name: widgetId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: The widget.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Widget'
+    delete:
+      operationId: deleteWidget
+      parameters:
+        - name: widgetId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '204':
+          description: Deleted.
+components:
+  schemas:
+    Widget:
+      type: object
+      required:
+        - id
+      properties:
+        id:
+          type: string
+    WidgetInput:
+      type: object
+      required:
+        - name
+        - kind
+        - replicas
+      properties:
+        name:
+          type: string
+          description: Widget name.
+          minLength: 3
+          maxLength: 64
+        kind:
+          type: string
+          description: Widget kind.
+          enum: [alpha, beta, gamma]
+        tier:
+          type: string
+          description: Fixed tier (const).
+          const: standard
+        code:
+          type: string
+          description: Widget code matching a pattern.
+          pattern: '^[A-Z]{3}-[0-9]+$'
+        replicas:
+          type: integer
+          description: Replica count.
+          minimum: 1
+          maximum: 10
+        ratio:
+          type: number
+          description: Replica ratio.
+          minimum: 0
+          maximum: 1
+        autoscale:
+          type: boolean
+          description: Boolean pinned to true by its enum.
+          enum: [true]
+        severity:
+          type: array
+          description: Severity levels applied to the widget.
+          minItems: 1
+          maxItems: 5
+          items:
+            type: string
+            enum: [info, warn, critical]
+        replicasPerNode:
+          type: object
+          description: Replica count keyed by node name.
+          additionalProperties:
+            type: integer
+        settings:
+          type: object
+          description: Nested settings carrying their own constraints.
+          properties:
+            mode:
+              type: string
+              description: Settings mode.
+              enum: [fast, slow]
+            retries:
+              type: integer
+              description: Retry count.
+              minimum: 0
+              maximum: 3

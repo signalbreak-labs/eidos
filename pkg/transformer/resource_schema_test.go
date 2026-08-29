@@ -322,6 +322,54 @@ func TestManagedResourceSchema_PutAsCreateForcesIdentifierRequired(t *testing.T)
 			t.Errorf("PUT-as-create synthetic id must be Required only: got Required=%v Computed=%v Optional=%v", id.Required, id.Computed, id.Optional)
 		}
 	})
+
+	t.Run("singleton path has no placeholder, id stays Computed", func(t *testing.T) {
+		// A singleton PUT-as-create (e.g. PUT /fm/copilot/config) substitutes
+		// nothing from the plan, so forcing the identifier Required would demand
+		// a value no request ever sends. The synthetic id keeps its Computed
+		// placeholder semantics (the import can still target it).
+		c := ResourceCRUD{
+			Name:           "copilot_config",
+			CollectionPath: "/fm/copilot/config",
+			InstancePath:   "/fm/copilot/config",
+			Create: &Operation{
+				Method: MethodPut,
+				Path:   "/fm/copilot/config",
+				RequestSchema: &SchemaSpec{
+					Type:     "object",
+					Required: []string{"enabled"},
+					Properties: map[string]SchemaSpec{
+						"enabled":   {Type: "boolean"},
+						"serverUrl": {Type: "string"},
+					},
+				},
+			},
+			Read: &Operation{
+				Method: MethodGet,
+				Path:   "/fm/copilot/config",
+				ResponseSchema: &SchemaSpec{
+					Type:     "object",
+					Required: []string{"enabled"},
+					Properties: map[string]SchemaSpec{
+						"enabled":   {Type: "boolean"},
+						"serverUrl": {Type: "string"},
+					},
+				},
+			},
+			Delete: &Operation{Method: MethodDelete, Path: "/fm/copilot/config"},
+		}
+		schema, _ := ManagedResourceSchema(c)
+		id, ok := findAttr(schema.Attributes, "id")
+		if !ok {
+			t.Fatalf("no synthetic id attribute: %+v", schema.Attributes)
+		}
+		if id.Required || !id.Computed {
+			t.Errorf("singleton PUT-as-create id must stay Computed (not Required): got Required=%v Computed=%v", id.Required, id.Computed)
+		}
+		if id.Optional {
+			t.Errorf("singleton PUT-as-create id must not be Optional: got Optional=%v", id.Optional)
+		}
+	})
 }
 
 // TestManagedResourceSchema_BodylessResourceNoSyntheticID locks in the §3/#12
@@ -1210,5 +1258,85 @@ func mapCRUDWithClusterQuery(requiredQuery bool) ResourceCRUD {
 		},
 		Delete: &Operation{Method: MethodDelete, Path: "/maps/{id}"},
 		ID:     IDInfo{Kind: IDSimple, ParameterNames: []string{"id"}, AttributeName: "id", ImportFormat: "%s"},
+	}
+}
+
+// TestManagedResourceSchema_MergesUpdateOnlyRequestProperties locks in the
+// G39 fix: a property the UPDATE request body carries but the CREATE body
+// lacks must stay settable (Optional+Computed, not response-only Computed)
+// and its description must surface, instead of the update half of the API
+// being silently dropped. Create stays authoritative: an update-required-only
+// property is Optional (forcing it Required would demand a value the create
+// API never accepts), and a property present in both bodies keeps the Create
+// body's description.
+func TestManagedResourceSchema_MergesUpdateOnlyRequestProperties(t *testing.T) {
+	c := ResourceCRUD{
+		Name: "gadget",
+		Create: &Operation{
+			Method: MethodPost, Path: "/gadgets", OperationID: "createGadget",
+			RequestSchema: &SchemaSpec{
+				Required: []string{"name"},
+				Properties: map[string]SchemaSpec{
+					"name":  {Type: "string", Description: "create-side name"},
+					"color": {Type: "string", Description: "create-side color"},
+				},
+			},
+		},
+		Update: &Operation{
+			Method: MethodPut, Path: "/gadgets/{gadgetId}", OperationID: "updateGadget",
+			RequestSchema: &SchemaSpec{
+				Required: []string{"name", "rebuildPolicy"},
+				Properties: map[string]SchemaSpec{
+					"name":          {Type: "string", Description: "update-side name"},
+					"rebuildPolicy": {Type: "string", Description: "how the gadget is rebuilt on update"},
+				},
+			},
+		},
+		Read: &Operation{
+			Method: MethodGet, Path: "/gadgets/{gadgetId}", OperationID: "getGadget",
+			ResponseSchema: &SchemaSpec{Properties: map[string]SchemaSpec{
+				"name":          {Type: "string"},
+				"color":         {Type: "string"},
+				"rebuildPolicy": {Type: "string"},
+			}},
+		},
+		Delete: &Operation{Method: MethodDelete, Path: "/gadgets/{gadgetId}", OperationID: "deleteGadget"},
+	}
+
+	schema, _ := ManagedResourceSchema(c)
+	attrs := map[string]ir.AttributeIR{}
+	for _, a := range schema.Attributes {
+		attrs[a.Name] = a
+	}
+
+	rebuild, ok := attrs["rebuild_policy"]
+	if !ok {
+		t.Fatalf("update-only request property rebuildPolicy missing from schema, got %+v", schema.Attributes)
+	}
+	if !rebuild.Optional || !rebuild.Computed || rebuild.Required {
+		t.Errorf("update-only property must be Optional+Computed (settable), got Optional=%v Computed=%v Required=%v",
+			rebuild.Optional, rebuild.Computed, rebuild.Required)
+	}
+	if rebuild.Description != "how the gadget is rebuilt on update" {
+		t.Errorf("update-only property description dropped, got %q", rebuild.Description)
+	}
+
+	name, ok := attrs["name"]
+	if !ok {
+		t.Fatal("name attribute missing")
+	}
+	if !name.Required {
+		t.Errorf("create-required name must stay Required, got %+v", name)
+	}
+	if name.Description != "create-side name" {
+		t.Errorf("create body must stay authoritative for shared properties, got description %q", name.Description)
+	}
+
+	color, ok := attrs["color"]
+	if !ok {
+		t.Fatal("color attribute missing")
+	}
+	if !color.Optional || !color.Computed || color.Required {
+		t.Errorf("create-optional color must stay Optional+Computed, got %+v", color)
 	}
 }

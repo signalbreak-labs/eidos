@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"go/ast"
 	"go/token"
+	"sort"
 	"strings"
 
 	"github.com/signalbreak-labs/eidos/pkg/generator/astgen"
@@ -95,6 +96,9 @@ func generateProviderFile(pir ir.ProviderIR, clientImport string) (*ast.File, er
 	// checking every rendered attribute.
 	if objectSchemaNeedsValidators(pir.ConfigSchema) {
 		f.AddImport("github.com/hashicorp/terraform-plugin-framework/schema/validator", "validator")
+	}
+	for _, imp := range standardValidatorImports(pir.ConfigSchema) {
+		f.AddImport(imp[0], imp[1])
 	}
 
 	providerStruct := providerPackageName(pir)
@@ -1075,6 +1079,9 @@ func objectSchemaNeedsValidators(s ir.ObjectSchemaIR) bool {
 		if schemaIRNeedsValidators(attr.Schema) {
 			return true
 		}
+		if attrNeedsStandardValidators(attr) {
+			return true
+		}
 	}
 	for _, block := range s.Blocks {
 		if blockNeedsValidators(block) {
@@ -1082,6 +1089,28 @@ func objectSchemaNeedsValidators(s ir.ObjectSchemaIR) bool {
 		}
 	}
 	return false
+}
+
+// attrNeedsStandardValidators reports whether the attribute emits at least one
+// standard framework-validators library call (OneOf, Between, LengthBetween,
+// RegexMatches, collection size/element validators) derived from a spec
+// constraint. It is gated on user-settable attributes: validators only run
+// against practitioner configuration, so Computed-only attributes (data source
+// result fields, response-only resources attributes) never contribute.
+func attrNeedsStandardValidators(attr ir.AttributeIR) bool {
+	if attr.Schema.Union != nil {
+		merged := schema.MergedDiscriminatedUnion(attr.Schema)
+		if merged == nil {
+			// A non-merged union renders as a DynamicAttribute with no
+			// Validators.
+			return false
+		}
+		// A merged discriminated union renders its variant attributes inside a
+		// SingleNestedAttribute, so those nested attributes' validators
+		// contribute too.
+		return objectSchemaNeedsValidators(ir.ObjectSchemaIR{Attributes: merged.Attributes, Blocks: merged.Blocks})
+	}
+	return schema.HasStandardValidators(attr, attributeValidatorKind(attr.Schema))
 }
 
 // schemaIRNeedsValidators reports whether the given schema emits a Validators
@@ -1238,6 +1267,85 @@ func blockValidatorPackageImports(s ir.ObjectSchemaIR) (needsList, needsSet bool
 		}
 	}
 	return
+}
+
+// standardValidatorImportPaths maps a framework-validators subpackage alias
+// (or "regexp") to its import path, for the standard schema-constraint
+// validators emitted by schema.AddValidators.
+func standardValidatorImportPath(alias string) string {
+	if alias == "regexp" {
+		return "regexp"
+	}
+	return "github.com/hashicorp/terraform-plugin-framework-validators/" + alias
+}
+
+// standardValidatorImports returns the (import path, alias) pairs the standard
+// validators (stringvalidator.OneOf, int64validator.Between, …) require for an
+// object schema, sorted by alias for deterministic output. The walk mirrors
+// the render decision — only attributes that actually render through an
+// AddValidators call with a matching kind contribute — so an alias is never
+// registered without a referencing expression (an unused import would fail the
+// generated provider's compilation).
+func standardValidatorImports(s ir.ObjectSchemaIR) [][2]string {
+	seen := make(map[string]bool)
+	var aliases []string
+	collectStandardValidatorImports(s, func(alias string) {
+		if alias == "" || seen[alias] {
+			return
+		}
+		seen[alias] = true
+		aliases = append(aliases, alias)
+	})
+	sort.Strings(aliases)
+	out := make([][2]string, 0, len(aliases))
+	for _, alias := range aliases {
+		out = append(out, [2]string{standardValidatorImportPath(alias), alias})
+	}
+	return out
+}
+
+// collectStandardValidatorImports walks an object schema's attributes and
+// blocks, invoking add for each framework-validators alias (or "regexp") the
+// standard validators reference. It mirrors attributeValidatorKind and the
+// nested-shape recursion in schemaIRNeedsValidators so the alias set matches
+// what the renderers actually emit.
+func collectStandardValidatorImports(s ir.ObjectSchemaIR, add func(alias string)) {
+	for _, attr := range s.Attributes {
+		collectAttrStandardValidatorImports(attr, add)
+	}
+	for _, block := range s.Blocks {
+		collectStandardValidatorImports(block.Schema, add)
+	}
+}
+
+// collectAttrStandardValidatorImports contributes the standard-validator
+// imports for one attribute and recurses into the shapes whose nested
+// attributes also render through AddValidators: object-like attributes,
+// merged discriminated unions (rendered as a merged SingleNestedAttribute),
+// and collections with object-like elements. Non-merged unions render as
+// DynamicAttribute with no validators, and dynamic-element collections are
+// promoted to DynamicAttribute by the renderer (G12), so neither contributes.
+func collectAttrStandardValidatorImports(attr ir.AttributeIR, add func(alias string)) {
+	sch := attr.Schema
+	if sch.Union != nil {
+		if merged := schema.MergedDiscriminatedUnion(sch); merged != nil {
+			collectStandardValidatorImports(ir.ObjectSchemaIR{Attributes: merged.Attributes, Blocks: merged.Blocks}, add)
+		}
+		return
+	}
+	kind := attributeValidatorKind(sch)
+	for _, alias := range schema.StandardValidatorPackages(attr, kind) {
+		add(alias)
+	}
+	if sch.Collection != nil {
+		elem := schema.DynamicUnionElement(sch.Collection.ElementType)
+		if !schema.ContainsNestedDynamic(elem) && schema.IsObjectLike(elem) {
+			collectStandardValidatorImports(ir.ObjectSchemaIR{Attributes: elem.Attributes, Blocks: elem.Blocks}, add)
+		}
+	}
+	if schema.IsObjectLike(sch) {
+		collectStandardValidatorImports(ir.ObjectSchemaIR{Attributes: sch.Attributes, Blocks: sch.Blocks}, add)
+	}
 }
 
 // objectSchemaNeedsBlockSizeValidators reports whether any block at any depth in

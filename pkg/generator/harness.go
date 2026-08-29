@@ -52,6 +52,14 @@ type Harness struct {
 	// already exists. Combined with O_EXCL, this makes the existence check
 	// atomic with the write, eliminating a TOCTOU race.
 	RefuseOverwrite bool
+
+	// MaxDocsFileBytes caps the rendered size of docs/ markdown files. A docs
+	// file at or above the cap fails generation naming the file and its size:
+	// the Terraform Registry truncates oversize documents with only a
+	// viewer-facing note, silently losing the tail of the schema
+	// documentation, so an oversize file must not be written unnoticed (G39).
+	// Zero disables the check.
+	MaxDocsFileBytes int
 }
 
 // Generate writes all files to the output directory, creating intermediate
@@ -112,7 +120,16 @@ func (h *Harness) Generate(files []File) error {
 		if err := renderFileSafely(e.file, &buf); err != nil {
 			return fmt.Errorf("render %q: %w", e.file.Path, err)
 		}
-		rendered[e.clean] = buf.Bytes()
+		content := buf.Bytes()
+		// G39: the Registry truncates docs files over its per-document limit
+		// with only a viewer-facing note, so refuse to write an oversize file
+		// instead of letting the documentation tail vanish at publish time.
+		if h.MaxDocsFileBytes > 0 && isDocsMarkdownPath(e.clean) && len(content) > h.MaxDocsFileBytes {
+			return fmt.Errorf(
+				"docs file %q renders to %s, over the %s cap (the Terraform Registry truncates oversize documents; reduce descriptions, or raise limits.max_docs_file_bytes to accept the truncation)",
+				e.file.Path, humanBytes(int64(len(content))), humanBytes(int64(h.MaxDocsFileBytes)))
+		}
+		rendered[e.clean] = content
 	}
 
 	for _, e := range entries {

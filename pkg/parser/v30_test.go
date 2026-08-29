@@ -69,7 +69,7 @@ func TestConvertV30MycloudRoundTrip(t *testing.T) {
 		t.Fatalf("listPets parameters mismatch: %+v", listPets.Parameters)
 	}
 	limitSchema := listPets.Parameters[0].Schema
-	if limitSchema == nil || limitSchema.Type != "integer" || limitSchema.Maximum != 100 {
+	if limitSchema == nil || limitSchema.Type != "integer" || limitSchema.Maximum == nil || *limitSchema.Maximum != 100 {
 		t.Fatalf("limit schema mismatch: %+v", limitSchema)
 	}
 

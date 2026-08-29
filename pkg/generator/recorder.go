@@ -15,6 +15,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/signalbreak-labs/eidos/pkg/config"
 	"github.com/signalbreak-labs/eidos/pkg/generator/internal/naming"
 	"github.com/signalbreak-labs/eidos/pkg/ir"
 )
@@ -49,6 +50,12 @@ type Options struct {
 	Force bool
 	// CollectOptions controls which optional files are included in the plan.
 	CollectOptions
+	// Limits carries the generator.yaml limits: section (schema/docs/description
+	// caps). Nil uses the built-in Terraform platform defaults: generation
+	// refuses a provider whose estimated serialized schema exceeds the cap, and
+	// write mode refuses docs/ markdown files over the Registry's per-document
+	// limit (G39).
+	Limits *config.LimitsConfig
 }
 
 // Run executes the generator for the supplied ProviderIR. In ModeRecord it
@@ -67,6 +74,17 @@ type Options struct {
 // returned plan and from record-mode collection: it is generator state, not a
 // provider deliverable.
 func Run(provider *ir.ProviderIR, opts Options) ([]FileEntry, error) {
+	// G39: refuse to generate a provider whose estimated serialized schema
+	// cannot pass `terraform init` (the CLI caps GetProviderSchema responses at
+	// 64 MiB). Both record and write modes enforce the cap so a dry run fails
+	// the same way a write would. Description truncation (the lever) is applied
+	// before the check so a configured limit can bring a provider back under
+	// the cap within a single run; it is an explicit author choice recorded in
+	// generator.yaml and needs no separate diagnostic.
+	ApplyDescriptionLimit(provider, EffectiveDescriptionLimit(opts.Limits))
+	if sizeDiags := CheckProviderSchemaSize(provider, opts.Limits); sizeDiags.HasErrors() {
+		return nil, fmt.Errorf("%s", sizeDiags)
+	}
 	switch opts.Mode {
 	case ModeRecord:
 		return CollectFromProviderIR(provider, opts.CollectOptions), nil
@@ -82,7 +100,11 @@ func Run(provider *ir.ProviderIR, opts Options) ([]FileEntry, error) {
 		if err != nil {
 			return nil, fmt.Errorf("prepare files for write mode: %w", err)
 		}
-		h := Harness{OutputDir: opts.OutputDir, RefuseOverwrite: !opts.Force}
+		h := Harness{
+			OutputDir:        opts.OutputDir,
+			RefuseOverwrite:  !opts.Force,
+			MaxDocsFileBytes: EffectiveDocsFileLimit(opts.Limits),
+		}
 		if err := h.Generate(files); err != nil {
 			return nil, fmt.Errorf("write generated files: %w", err)
 		}

@@ -34,6 +34,7 @@ Read-Only:
 * `labels` (Map of String)
 * `name` (String)
 * `status` (Attributes) (see [below for nested schema](#nestedatt--items--status))
+
 <a id="nestedatt--items--status"></a>
 ### Nested Schema for `items.status`
 

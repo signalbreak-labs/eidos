@@ -37,15 +37,6 @@ The following arguments are supported:
 * `name` (String, required)
 * `status` (Attributes, optional) (see [below for nested schema](#nestedatt--status))
 
-### Attributes
-
-In addition to all arguments above, the following computed attributes are exported:
-
-* `api_version` (String, computed)
-* `kind` (String, computed)
-* `labels` (Map of String, computed)
-* `status` (Attributes, computed) (see [below for nested schema](#nestedatt--status))
-
 <a id="nestedatt--status"></a>
 ### Nested Schema for `status`
 

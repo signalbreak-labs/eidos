@@ -1,6 +1,7 @@
 package api
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/signalbreak-labs/eidos/pkg/config"
@@ -53,7 +54,17 @@ func TestResourceOverrideConfiguresID(t *testing.T) {
 func TestApplyResourceCreationOverride_IDFromUpdatePath(t *testing.T) {
 	pathOps := map[string]map[transformer.HTTPMethod]transformer.Operation{
 		"/policies": {
-			transformer.MethodPost: {Method: transformer.MethodPost, Path: "/policies", OperationID: "createPolicy"},
+			transformer.MethodPost: {Method: transformer.MethodPost, Path: "/policies", OperationID: "createPolicy",
+				// The create body carries "name", so the identifier is
+				// user-settable (Required + RequestInput); a Computed-only
+				// import target is refused by groupedImportFormat (G39).
+				RequestSchema: &transformer.SchemaSpec{
+					Type:     "object",
+					Required: []string{"name"},
+					Properties: map[string]transformer.SchemaSpec{
+						"name": {Type: "string"},
+					},
+				}},
 			transformer.MethodGet: {Method: transformer.MethodGet, Path: "/policies", OperationID: "listPolicies",
 				ResponseSchema: &transformer.SchemaSpec{
 					Type:     "object",
@@ -188,5 +199,97 @@ func TestGroupedImportFormat_IDAttrFallback(t *testing.T) {
 	got, ok := groupedImportFormat(g, schema, "id")
 	if !ok || got != "{id}" {
 		t.Errorf("groupedImportFormat = %q, %v; want {id}, true", got, ok)
+	}
+}
+
+// TestGroupedImportFormat_RequiredReadParamsJoinsFormat locks in the G39 fix:
+// a required query parameter on the read (e.g. GigaVUE-FM's clusterId on
+// /portConfig/gigastreams/advHash/{slotId}) is sent from state on the refresh
+// that follows every import, so the import format must populate it — the
+// format becomes composite ("{slot_id}:{cluster_id}") instead of leaving the
+// param null and the read failing.
+func TestGroupedImportFormat_RequiredReadParamsJoinsFormat(t *testing.T) {
+	g := transformer.ResourceCRUD{
+		ID: transformer.IDInfo{Kind: transformer.IDSimple, ParameterNames: []string{"slotId"}, AttributeName: "slot_id"},
+		Read: &transformer.Operation{
+			Method: transformer.MethodGet,
+			Path:   "/portConfig/gigastreams/advHash/{slotId}",
+			Parameters: []transformer.Parameter{
+				{Name: "clusterId", In: "query", Required: true, Type: "string"},
+			},
+		},
+	}
+	schema := ir.ObjectSchemaIR{Attributes: []ir.AttributeIR{
+		{Name: "slot_id", Required: true, RequestInput: true, Schema: ir.SchemaIR{Type: ir.TypeString}},
+		{Name: "cluster_id", Required: true, RequestInput: true, Schema: ir.SchemaIR{Type: ir.TypeString}},
+	}}
+	got, ok := groupedImportFormat(g, schema, "slot_id")
+	if !ok || got != "{slot_id}:{cluster_id}" {
+		t.Errorf("groupedImportFormat = %q, %v; want {slot_id}:{cluster_id}, true", got, ok)
+	}
+}
+
+// TestGroupedImportFormat_ComputedOnlyReadParamSuppressesImport locks in the
+// G39 refusal: when a required read parameter maps to a Computed-only
+// attribute, the practitioner cannot supply it at import time, so the resource
+// stays non-importable and a fail-loud warning explains why.
+func TestGroupedImportFormat_ComputedOnlyReadParamSuppressesImport(t *testing.T) {
+	g := transformer.ResourceCRUD{
+		Name: "adv_hash",
+		ID:   transformer.IDInfo{Kind: transformer.IDSimple, ParameterNames: []string{"slotId"}, AttributeName: "slot_id"},
+		Read: &transformer.Operation{
+			Method: transformer.MethodGet,
+			Path:   "/portConfig/gigastreams/advHash/{slotId}",
+			Parameters: []transformer.Parameter{
+				{Name: "clusterId", In: "query", Required: true, Type: "string"},
+			},
+		},
+	}
+	schema := ir.ObjectSchemaIR{Attributes: []ir.AttributeIR{
+		{Name: "slot_id", Required: true, RequestInput: true, Schema: ir.SchemaIR{Type: ir.TypeString}},
+		{Name: "cluster_id", Computed: true, Schema: ir.SchemaIR{Type: ir.TypeString}},
+	}}
+	var diags diagnostics.Diagnostics
+	got, ok := groupedImportFormatWithDiagnostics(g, schema, "slot_id", &diags)
+	if ok {
+		t.Errorf("groupedImportFormat = (%q,true), want not importable", got)
+	}
+	found := false
+	for _, d := range diags {
+		if d.Severity == diagnostics.Warning && strings.Contains(d.Detail, "cluster_id") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("no warning surfaced for the computed-only required read parameter: %+v", diags)
+	}
+}
+
+// TestGroupedImportFormat_ComputedOnlyIdentifierSuppressesImport locks in the
+// G39 refusal for the identifier itself: an import may never target a
+// Computed-only attribute (the practitioner cannot know the value before the
+// first read), so e.g. a server-assigned {policyId} read path with a
+// computed-only policy_id attribute stays non-importable with a warning.
+func TestGroupedImportFormat_ComputedOnlyIdentifierSuppressesImport(t *testing.T) {
+	g := transformer.ResourceCRUD{
+		Name: "policy",
+		ID:   transformer.IDInfo{Kind: transformer.IDSimple, ParameterNames: []string{"policyId"}, AttributeName: "policy_id"},
+	}
+	schema := ir.ObjectSchemaIR{Attributes: []ir.AttributeIR{
+		{Name: "policy_id", Computed: true, Schema: ir.SchemaIR{Type: ir.TypeString}},
+	}}
+	var diags diagnostics.Diagnostics
+	got, ok := groupedImportFormatWithDiagnostics(g, schema, "policy_id", &diags)
+	if ok {
+		t.Errorf("groupedImportFormat = (%q,true), want not importable", got)
+	}
+	found := false
+	for _, d := range diags {
+		if d.Severity == diagnostics.Warning && strings.Contains(d.Summary, "computed-only") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("no warning surfaced for the computed-only identifier: %+v", diags)
 	}
 }

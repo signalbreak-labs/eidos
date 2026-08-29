@@ -51,11 +51,7 @@ The following arguments are supported:
 
 In addition to all arguments above, the following computed attributes are exported:
 
-* `api_version` (String, computed)
 * `id` (String, computed)
-* `kind` (String, computed)
-* `spec` (Attributes, computed) (see [below for nested schema](#nestedatt--spec))
-* `status` (Attributes, computed) (see [below for nested schema](#nestedatt--status))
 
 <a id="nestedatt--spec"></a>
 ### Nested Schema for `spec`
@@ -65,6 +61,7 @@ Optional:
 * `ip_address` (String)
 * `ports` (Attributes List) (see [below for nested schema](#nestedatt--spec--ports))
 * `selector` (Map of String)
+
 <a id="nestedatt--spec--ports"></a>
 ### Nested Schema for `spec.ports`
 
@@ -73,6 +70,7 @@ Optional:
 * `name` (String)
 * `port` (Number)
 * `protocol` (String)
+
 <a id="nestedatt--status"></a>
 ### Nested Schema for `status`
 

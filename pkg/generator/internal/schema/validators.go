@@ -1094,10 +1094,12 @@ func generatePatternPropertiesValidator(f *astgen.File) {
 }
 
 // AddValidators adds a Terraform-plugin-framework Validators field to elems when
-// the attribute schema requires custom validators. kind is the validator
-// interface name (String, Int64, Float64, Bool, List, Set, Map, Object).
+// the attribute schema requires validators. kind is the validator interface
+// name (String, Int64, Float64, Bool, List, Set, Map, Object). The field holds
+// both the custom validators from validators.go and the standard
+// framework-validators library calls from standard_validators.go.
 func AddValidators(elems []ast.Expr, attr ir.AttributeIR, kind string) []ast.Expr {
-	exprs := attributeValidatorExprs(attr.Schema, kind)
+	exprs := attributeValidatorExprs(attr, kind)
 	if len(exprs) == 0 {
 		return elems
 	}
@@ -1110,20 +1112,23 @@ func AddValidators(elems []ast.Expr, attr ir.AttributeIR, kind string) []ast.Exp
 	))
 }
 
-// attributeValidatorExprs returns the custom validator constructor calls that
-// apply to an attribute of the given validator kind.
-func attributeValidatorExprs(s ir.SchemaIR, kind string) []ast.Expr {
+// attributeValidatorExprs returns the validator constructor calls that apply
+// to an attribute of the given validator kind: the custom validators from
+// validators.go plus the standard library validators derived from the
+// spec-declared constraints (G39).
+func attributeValidatorExprs(attr ir.AttributeIR, kind string) []ast.Expr {
+	var exprs []ast.Expr
 	switch kind {
 	case "Float64":
-		return Float64ValidatorExprs(s)
+		exprs = Float64ValidatorExprs(attr.Schema)
 	case "Int64":
-		return Int64ValidatorExprs(s)
+		exprs = Int64ValidatorExprs(attr.Schema)
 	case "Object":
-		return ObjectValidatorExprs(s)
+		exprs = ObjectValidatorExprs(attr.Schema)
 	case "Map":
-		return MapValidatorExprs(s)
+		exprs = MapValidatorExprs(attr.Schema)
 	}
-	return nil
+	return append(exprs, standardValidatorExprs(attr, kind)...)
 }
 
 // Float64ValidatorExprs returns custom validator expressions for float64

@@ -3,6 +3,7 @@ package generator
 import (
 	"fmt"
 	"strings"
+	"time"
 	"unicode"
 
 	"github.com/signalbreak-labs/eidos/pkg/generator/internal/naming"
@@ -90,6 +91,11 @@ func ProviderDocsFiles(pir ir.ProviderIR) []File {
 func ResourceDocsFile(r ir.ResourceIR) File {
 	path := fmt.Sprintf("docs/resources/%s.md", naming.SnakeCase(r.Name))
 	arguments, attributes, blocks, nestedSchemas := renderDocsSchema(r.Schema)
+	// A configured timeouts block is part of the resource schema, so its
+	// attributes must be documented too — without this the block was silently
+	// absent from all generated docs (117/117 resources in the gigavuecore
+	// audit, G39).
+	blocks, nestedSchemas = appendTimeoutsDocs(r, blocks, nestedSchemas)
 	data := map[string]any{
 		"ResourceName":    resourceDocsTypeName(r),
 		"ProviderName":    providerDocsTypeNameFromResource(r),
@@ -100,10 +106,51 @@ func ResourceDocsFile(r ir.ResourceIR) File {
 		"Attributes":      attributes,
 		"Blocks":          blocks,
 		"NestedSchemas":   nestedSchemas,
-		"Importable":      r.Importable,
+		"Importable":      ResourceImportable(r),
 		"ImportFormat":    docsImportFormat(r.ImportIDFormat),
 	}
 	return Template(path, resourceTemplate, data)
+}
+
+// appendTimeoutsDocs adds the `timeouts` block row to the Blocks section and
+// its "### Nested Schema for `timeouts`" section to the nested schemas for a
+// resource with configured CRUD timeouts. The block is a framework
+// SingleNestedBlock whose attributes are optional strings parsed as
+// time.Duration by the framework-timeouts package.
+func appendTimeoutsDocs(r ir.ResourceIR, blocks, nestedSchemas string) (string, string) {
+	if !resourceHasTimeouts(r) {
+		return blocks, nestedSchemas
+	}
+	attrs := make([]ir.AttributeIR, 0, 4)
+	for _, op := range []struct {
+		name     string
+		duration *time.Duration
+	}{
+		{"create", r.Timeouts.Create},
+		{"read", r.Timeouts.Read},
+		{"update", r.Timeouts.Update},
+		{"delete", r.Timeouts.Delete},
+	} {
+		if op.duration == nil {
+			continue
+		}
+		attrs = append(attrs, ir.AttributeIR{
+			Name:        op.name,
+			Optional:    true,
+			Description: fmt.Sprintf("A %s timeout for this operation, e.g. %q. Overrides the generator default (%s).", op.name, op.duration, op.duration),
+			Schema:      ir.SchemaIR{Type: ir.TypeString},
+		})
+	}
+	blocks += "* `timeouts` (Block Single) (see [below for nested schema](#nestedatt--timeouts))\n"
+	var b strings.Builder
+	ensureDocsBlankLine(&b)
+	writeDocsNestedSection(&b, docsNestedType{
+		anchorID:  "nestedatt--timeouts",
+		pathTitle: "timeouts",
+		path:      []string{"timeouts"},
+		object:    &ir.ObjectSchemaIR{Attributes: attrs},
+	})
+	return blocks, nestedSchemas + b.String()
 }
 
 // ResourceDocsFiles returns the generated resource documentation files for all
@@ -436,7 +483,13 @@ func writeDocsAttributeRows(b *strings.Builder, attrs []ir.AttributeIR, argument
 				continue
 			}
 		} else {
-			if !attr.Computed {
+			// tfplugindocs convention: an Optional+Computed (or Required)
+			// attribute is an argument the server also echoes, and belongs in
+			// Arguments only; the Attributes section lists Computed-only
+			// attributes. Without this, every Optional+Computed attribute is
+			// duplicated under both sections (599 attrs / 101 resources in the
+			// gigavuecore audit, G39).
+			if !attr.Computed || attr.Required || attr.Optional {
 				continue
 			}
 			qualifier = "computed"
@@ -507,8 +560,25 @@ func writeDocsNestedSections(b *strings.Builder, types []docsNestedType) {
 			continue
 		}
 		seen[nt.anchorID] = true
+		// The anchor follows the previous section's last bullet (or the
+		// previous group's bullets, via the recursion below); without a blank
+		// line CommonMark parses the raw HTML anchor as a lazy continuation
+		// of that bullet's paragraph, and the Registry renders it glued to the
+		// bullet text.
+		ensureDocsBlankLine(b)
 		writeDocsNestedSection(b, nt)
 	}
+}
+
+// ensureDocsBlankLine appends a blank line unless the builder is empty or
+// already ends with one, so every group header and anchor starts its own
+// block instead of a lazy continuation of the preceding bullet.
+func ensureDocsBlankLine(b *strings.Builder) {
+	s := b.String()
+	if s == "" || strings.HasSuffix(s, "\n\n") {
+		return
+	}
+	b.WriteString("\n")
 }
 
 // writeDocsNestedSection renders one "### Nested Schema for `path`" section:
@@ -538,6 +608,12 @@ func writeDocsNestedSection(b *strings.Builder, nt docsNestedType) {
 		if len(attrs) == 0 && len(blocks) == 0 {
 			continue
 		}
+		// A non-first group header follows the previous group's last bullet;
+		// without a blank line the header renders glued to that bullet
+		// (e.g. "* `type` (String) - Alert clear type Optional:"). The first
+		// group directly follows the section heading, which already ends with
+		// a blank line, so ensureDocsBlankLine is a no-op there.
+		ensureDocsBlankLine(b)
 		fmt.Fprintf(b, "%s:\n\n", group)
 		for _, attr := range attrs {
 			childPath := appendDocsPath(nt.path, attr.Name)

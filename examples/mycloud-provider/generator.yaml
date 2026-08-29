@@ -13,10 +13,7 @@ resource_overrides:
       id_attribute: id
       import_format: '{workspace}:{name}'
       computed_attributes:
-        - api_version
-        - data
         - id
-        - kind
       description: Read a Config
     - schema: instance
       operation: createInstance
@@ -24,15 +21,10 @@ resource_overrides:
       id_attribute: id
       import_format: '{workspace}:{name}'
       computed_attributes:
-        - api_version
         - id
-        - kind
-        - labels
-        - spec
         - containers
         - image
         - image_pull_policy
-        - status
         - phase
       description: Read an Instance
     - schema: network
@@ -41,32 +33,18 @@ resource_overrides:
       id_attribute: id
       import_format: '{workspace}:{name}'
       computed_attributes:
-        - api_version
         - id
-        - kind
-        - spec
         - ip_address
         - ports
         - port
         - protocol
         - selector
-        - status
         - load_balancer
       description: Read a Network
     - schema: project
       operation: createProjectForOrganization
       resource_name: project
       import_format: '{organization}:{project}'
-      computed_attributes:
-        - default_branch
-        - description
-        - full_name
-        - html_url
-        - id
-        - name
-        - organization
-        - private
-        - project
       description: Get a project
     - schema: secret
       operation: createSecret
@@ -74,11 +52,7 @@ resource_overrides:
       id_attribute: id
       import_format: '{workspace}:{name}'
       computed_attributes:
-        - api_version
-        - data
         - id
-        - kind
-        - type
       description: Read a Secret
     - schema: stack
       operation: createStack
@@ -86,13 +60,9 @@ resource_overrides:
       id_attribute: id
       import_format: '{workspace}:{name}'
       computed_attributes:
-        - api_version
         - id
-        - kind
-        - spec
         - replicas
         - selector
-        - status
         - ready_replicas
       description: Read a Stack
     - schema: workspace
@@ -101,10 +71,6 @@ resource_overrides:
       id_attribute: name
       import_format: '{name}'
       computed_attributes:
-        - api_version
-        - kind
-        - labels
-        - status
         - phase
       description: Read a Workspace
 datasource_overrides:

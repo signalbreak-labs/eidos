@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/signalbreak-labs/eidos/pkg/config"
+	"github.com/signalbreak-labs/eidos/pkg/diagnostics"
 	"github.com/signalbreak-labs/eidos/pkg/ir"
 )
 
@@ -250,6 +251,182 @@ func TestApplyOverrides_IDAttributeAndImportFormat(t *testing.T) {
 	}
 	if !r.Importable {
 		t.Errorf("Importable = false, want true")
+	}
+}
+
+func TestApplyOverrides_IDAttributeDropsSupersededPlaceholder(t *testing.T) {
+	strSchema := ir.SchemaIR{Type: ir.TypeString}
+	provider := &ir.ProviderIR{
+		Resources: []ir.ResourceIR{{
+			Name:        "archive_server",
+			TypeName:    "archive_server",
+			IDAttribute: "server_alias",
+			// alias is the real user-settable unique key from the response
+			// schema; server_alias is the synthetic Computed placeholder the
+			// transformer appends for the {serverAlias} path parameter (no
+			// WireName — the response never echoes that name).
+			Schema: ir.ObjectSchemaIR{Attributes: []ir.AttributeIR{
+				{Name: "alias", Required: true, WireName: "alias", Schema: strSchema},
+				{Name: "server_alias", Computed: true, Schema: strSchema},
+			}},
+			CRUDMapping: ir.CRUDMappingIR{
+				Create: ir.OperationMappingIR{Method: "POST", PathTemplate: "/fmSystem/archiveServers"},
+				Read:   ir.OperationMappingIR{Method: "GET", PathTemplate: "/fmSystem/archiveServers/{serverAlias}"},
+				Delete: ir.OperationMappingIR{Method: "DELETE", PathTemplate: "/fmSystem/archiveServers/{serverAlias}"},
+			},
+		}},
+	}
+	cfg := &config.Config{
+		Provider: config.ProviderConfig{Name: "test", Version: "0.0.1"},
+		ResourceOverrides: []config.ResourceOverride{{
+			Schema: "archive_server",
+			// The override replaces the path-param-derived placeholder with the
+			// real attribute.
+			IDAttribute: "alias",
+		}},
+	}
+
+	if err := ApplyOverrides(provider, cfg); err != nil {
+		t.Fatalf("ApplyOverrides() = %v, want nil", err)
+	}
+
+	r := provider.Resources[0]
+	if r.IDAttribute != "alias" {
+		t.Fatalf("IDAttribute = %q, want %q", r.IDAttribute, "alias")
+	}
+	for _, a := range r.Schema.Attributes {
+		if a.Name == "server_alias" {
+			t.Errorf("server_alias attribute still present after id_attribute override; schema now: %+v", r.Schema.Attributes)
+		}
+	}
+	if len(r.Schema.Attributes) != 1 || r.Schema.Attributes[0].Name != "alias" {
+		t.Errorf("Schema.Attributes = %+v, want only [alias]", r.Schema.Attributes)
+	}
+}
+
+func TestApplyOverrides_IDAttributeKeepsRealEchoedAttribute(t *testing.T) {
+	strSchema := ir.SchemaIR{Type: ir.TypeString}
+	provider := &ir.ProviderIR{
+		Resources: []ir.ResourceIR{{
+			Name:        "user",
+			TypeName:    "user",
+			IDAttribute: "username",
+			// username here is a real response echo (it carries the property's
+			// WireName), not the synthetic placeholder, so the override must
+			// not drop it even though it is Computed-only.
+			Schema: ir.ObjectSchemaIR{Attributes: []ir.AttributeIR{
+				{Name: "user_name", Required: true, WireName: "userName", Schema: strSchema},
+				{Name: "username", Computed: true, WireName: "username", Schema: strSchema},
+			}},
+			CRUDMapping: ir.CRUDMappingIR{
+				// The path placeholder does not spell the old attribute name, so
+				// the path-template guard cannot be what keeps username — this
+				// isolates the WireName discriminator.
+				Read: ir.OperationMappingIR{Method: "GET", PathTemplate: "/users/{login}"},
+			},
+		}},
+	}
+	cfg := &config.Config{
+		Provider: config.ProviderConfig{Name: "test", Version: "0.0.1"},
+		ResourceOverrides: []config.ResourceOverride{{
+			Schema:      "user",
+			IDAttribute: "user_name",
+		}},
+	}
+
+	if err := ApplyOverrides(provider, cfg); err != nil {
+		t.Fatalf("ApplyOverrides() = %v, want nil", err)
+	}
+
+	r := provider.Resources[0]
+	var haveUsername bool
+	for _, a := range r.Schema.Attributes {
+		if a.Name == "username" {
+			haveUsername = true
+		}
+	}
+	if !haveUsername {
+		t.Errorf("username attribute was dropped; a WireName-carrying (response-echoed) attribute must be kept")
+	}
+}
+
+func TestApplyOverrides_ImportFormatAutoExtendedWithReadParams(t *testing.T) {
+	strSchema := ir.SchemaIR{Type: ir.TypeString}
+	provider := &ir.ProviderIR{
+		Resources: []ir.ResourceIR{{
+			Name:     "tool",
+			TypeName: "tool",
+			Schema: ir.ObjectSchemaIR{Attributes: []ir.AttributeIR{
+				{Name: "alias", Required: true, WireName: "alias", Schema: strSchema},
+				{Name: "cluster_id", Required: true, WireName: "clusterId", Schema: strSchema},
+			}},
+			CRUDMapping: ir.CRUDMappingIR{
+				Read: ir.OperationMappingIR{
+					Method:       "GET",
+					PathTemplate: "/tools/{alias}",
+					QueryParams:  []ir.ParamIR{{Name: "clusterId", Required: true}},
+				},
+			},
+		}},
+	}
+	cfg := &config.Config{
+		Provider: config.ProviderConfig{Name: "test", Version: "0.0.1"},
+		ResourceOverrides: []config.ResourceOverride{{
+			Schema:       "tool",
+			ImportFormat: "{alias}",
+		}},
+	}
+
+	if err := ApplyOverrides(provider, cfg); err != nil {
+		t.Fatalf("ApplyOverrides() = %v, want nil", err)
+	}
+
+	r := provider.Resources[0]
+	if r.ImportIDFormat != "{alias}/{cluster_id}" {
+		t.Errorf("ImportIDFormat = %q, want %q", r.ImportIDFormat, "{alias}/{cluster_id}")
+	}
+	if !r.Importable {
+		t.Errorf("Importable = false, want true")
+	}
+}
+
+func TestApplyOverrides_ImportFormatNotExtendedWithoutAttribute(t *testing.T) {
+	strSchema := ir.SchemaIR{Type: ir.TypeString}
+	provider := &ir.ProviderIR{
+		Resources: []ir.ResourceIR{{
+			Name:     "tool",
+			TypeName: "tool",
+			Schema: ir.ObjectSchemaIR{Attributes: []ir.AttributeIR{
+				{Name: "alias", Required: true, WireName: "alias", Schema: strSchema},
+				{Name: "cluster_id", Computed: true, WireName: "clusterId", Schema: strSchema},
+			}},
+			CRUDMapping: ir.CRUDMappingIR{
+				Read: ir.OperationMappingIR{
+					Method:       "GET",
+					PathTemplate: "/tools/{alias}",
+					QueryParams:  []ir.ParamIR{{Name: "clusterId", Required: true}},
+				},
+			},
+		}},
+	}
+	cfg := &config.Config{
+		Provider: config.ProviderConfig{Name: "test", Version: "0.0.1"},
+		ResourceOverrides: []config.ResourceOverride{{
+			Schema:       "tool",
+			ImportFormat: "{alias}",
+		}},
+	}
+
+	if err := ApplyOverrides(provider, cfg); err != nil {
+		t.Fatalf("ApplyOverrides() = %v, want nil", err)
+	}
+
+	// cluster_id is Computed-only, so the practitioner cannot know it to type it
+	// into an import ID; the format stays as configured and the fail-loud
+	// warning keeps responsibility with the config author.
+	r := provider.Resources[0]
+	if r.ImportIDFormat != "{alias}" {
+		t.Errorf("ImportIDFormat = %q, want %q (no auto-extension off a Computed-only attribute)", r.ImportIDFormat, "{alias}")
 	}
 }
 
@@ -2359,4 +2536,122 @@ func TestOverrideDescriptionDoesNotEraseSpecText(t *testing.T) {
 			t.Errorf("description = %q, want the override text", attr.Description)
 		}
 	})
+}
+
+// TestApplyOverrides_ComputedRefusedForRequiredRequestInput locks in the G39
+// guard: a computed_attributes entry naming an attribute the generated CRUD
+// body sends with a required value (e.g. a required query parameter like
+// clusterId, or a required create-body field) is refused for that attribute —
+// applying it would leave the request sending a value the practitioner can
+// never supply, breaking create and import. The attribute keeps its Required
+// semantics and a Warning is surfaced instead of silently breaking the request.
+func TestApplyOverrides_ComputedRefusedForRequiredRequestInput(t *testing.T) {
+	provider := &ir.ProviderIR{
+		Resources: []ir.ResourceIR{{
+			Name:     "adv_hash",
+			TypeName: "adv_hash",
+			Schema: ir.ObjectSchemaIR{
+				Attributes: []ir.AttributeIR{
+					// cluster_id feeds a required query parameter the wired
+					// read/create body sends from state.
+					{Name: "cluster_id", Required: true, RequestInput: true, Schema: ir.SchemaIR{Type: ir.TypeString}},
+					// slot_id is the path identifier, also a request input.
+					{Name: "slot_id", Required: true, RequestInput: true, Schema: ir.SchemaIR{Type: ir.TypeString}},
+					// fields is an optional request-body input: computed is
+					// still allowed (Optional+Computed keeps it settable).
+					{Name: "fields", Optional: true, RequestInput: true, Schema: ir.SchemaIR{Type: ir.TypeString}},
+					// cluster_name is response-only: computed applies freely.
+					{Name: "cluster_name", Required: false, Optional: false, Schema: ir.SchemaIR{Type: ir.TypeString}},
+				},
+			},
+		}},
+	}
+	cfg := &config.Config{
+		Provider: config.ProviderConfig{Name: "test", Version: "0.0.1"},
+		ResourceOverrides: []config.ResourceOverride{{
+			Schema:             "adv_hash",
+			ComputedAttributes: []string{"cluster_id", "slot_id", "fields", "cluster_name"},
+		}},
+	}
+
+	var diags diagnostics.Diagnostics
+	if err := ApplyOverridesWithDiagnostics(provider, cfg, &diags); err != nil {
+		t.Fatalf("ApplyOverridesWithDiagnostics() = %v, want nil", err)
+	}
+
+	attrs := provider.Resources[0].Schema.Attributes
+	for _, a := range attrs {
+		switch a.Name {
+		case "cluster_id", "slot_id":
+			if a.Computed {
+				t.Errorf("%s Computed = true, want false (required request input must keep Required semantics)", a.Name)
+			}
+			if !a.Required {
+				t.Errorf("%s Required = false, want true", a.Name)
+			}
+		case "fields":
+			if !a.Computed || !a.Optional {
+				t.Errorf("fields flags = (Computed=%v Optional=%v), want Optional+Computed", a.Computed, a.Optional)
+			}
+		case "cluster_name":
+			if !a.Computed {
+				t.Errorf("cluster_name Computed = false, want true (response-only attribute is freely computable)")
+			}
+		}
+	}
+
+	// Both refused attributes surface as fail-loud warnings.
+	warnings := 0
+	for _, d := range diags {
+		if d.Severity == diagnostics.Warning && strings.Contains(d.Summary, "computed_attributes override refused") {
+			warnings++
+		}
+	}
+	if warnings != 2 {
+		t.Errorf("refusal warnings = %d, want 2 (cluster_id and slot_id); diags: %+v", warnings, diags)
+	}
+}
+
+// TestApplyOverrides_ExactNameWinsOverFuzzyMatch locks in the G39 fix: when a
+// schema carries two distinct attributes that normalize identically
+// (user_name and username), an override entry for one must not also claim the
+// other. The v3_user case: a computed_attributes entry for the synthetic
+// user_name id attribute also demoted the distinct create-required username,
+// making the resource uncreatable.
+func TestApplyOverrides_ExactNameWinsOverFuzzyMatch(t *testing.T) {
+	provider := &ir.ProviderIR{
+		Resources: []ir.ResourceIR{{
+			Name: "v3_user",
+			Schema: ir.ObjectSchemaIR{Attributes: []ir.AttributeIR{
+				{Name: "user_name", Required: true, Schema: ir.SchemaIR{Type: ir.TypeString}},
+				{Name: "username", Required: true, RequestInput: true, Schema: ir.SchemaIR{Type: ir.TypeString}},
+			}},
+		}},
+	}
+	cfg := &config.Config{
+		Provider: config.ProviderConfig{Name: "test", Version: "0.0.1"},
+		ResourceOverrides: []config.ResourceOverride{{
+			Schema:             "v3_user",
+			ComputedAttributes: []string{"user_name"},
+		}},
+	}
+
+	diags := &diagnostics.Diagnostics{}
+	if err := ApplyOverridesWithDiagnostics(provider, cfg, diags); err != nil {
+		t.Fatalf("ApplyOverridesWithDiagnostics() error = %v", err)
+	}
+
+	attrs := map[string]ir.AttributeIR{}
+	for _, a := range provider.Resources[0].Schema.Attributes {
+		attrs[a.Name] = a
+	}
+
+	target := attrs["user_name"]
+	if !target.Computed || target.Required {
+		t.Errorf("named attribute user_name must be demoted to Computed, got %+v", target)
+	}
+	collateral := attrs["username"]
+	if collateral.Computed || !collateral.Required {
+		t.Errorf("distinct attribute username must keep Required (not be claimed by the fuzzy match), got %+v", collateral)
+	}
 }

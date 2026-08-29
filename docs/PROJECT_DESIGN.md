@@ -1644,6 +1644,11 @@ Eidos generates `ImportState` handlers for resources where:
 
 For composite import IDs, the handler splits the import string on the delimiter between brace-enclosed attributes and maps each segment to the corresponding attribute. Unbraced composite formats such as `project_id:resource_id` are rejected during generation; existing `generator.yaml` entries must be updated to use braces.
 
+Two behaviors refine explicit import formats at generation time (both surfaced as diagnostics, never silent):
+
+- **Required read parameters are auto-appended.** The refresh that follows an import sends the read operation's required query parameters from state, so a format that omits one would leave the read sending an empty value the API rejects. When an explicit `import_format` does not populate a required read query parameter and the parameter maps to a user-settable schema attribute, the format is extended with that attribute (e.g. `{alias}` → `{alias}/{cluster_id}` for GigaVUE-FM's required `clusterId`) and an Info diagnostic reports the extension. Parameters with no matching user-settable attribute remain a fail-loud Warning, because they need a config decision rather than an invented attribute.
+- **A superseded synthetic identifier is dropped.** When an explicit `id_attribute` names a real, user-settable attribute, the Computed-only placeholder that inference derived from the path parameter name (e.g. `{serverAlias}` → `server_alias`, never populated because the response does not echo that name) is removed from the schema instead of lingering as a dead, always-null attribute. Response-derived attributes always carry a `WireName`, so a genuine echo is never mistaken for the placeholder.
+
 ### 8.6 Provider-Defined Functions
 
 OpenAPI specs can define utility endpoints that don't map naturally to resources or data sources. Eidos can generate provider-defined functions for read-only compute/query endpoints:
@@ -3200,6 +3205,7 @@ implemented; `CHANGELOG.md` [Unreleased] records the detail:
 | `resource_overrides` per-CRUD promotion (G8/G9) | `generate_resource` plus explicit `create_operation`/`read_operation`/`update_operation`/`delete_operation` fields promote an action to a managed resource wired to the specified operations (MyCloud dashboards: create on `POST /dashboards/db`, read/delete on `/dashboards/uid/{uid}`); `ManagedResourceSchema` appends request-body inputs the response does not echo as Optional attributes. |
 | Operational/framework notes closed as-is (G10, G21) | G10 — a merged reference spec can declare Enterprise/Cloud-only RBAC endpoints the target server does not serve (validate the spec against the server edition before generating); G21 — the recursive mute-timing `time_intervals` shape cannot be represented in terraform-plugin-framework (dynamic-in-collection), an accepted framework limitation. |
 | Required query/header params dropped or demoted (issue #40) | List-resource `ConfigSchema` is built from the collection operation's path/query/header parameters *before* the array-response check, so required filters survive enveloped `{items, context}` collections. `UnwrapResponseEnvelope` treats `{<array>, context}` as a collection envelope (`meta`/`links` companions still allowed) so identity and resource schemas populate and the list can wire. Managed-resource required query/header parameters are reconciled into schema flags (`Required`, not `Optional+Computed`). A property that is both `required` and `readOnly` emits a `diagnostics.Warning`. This is a generic OpenAPI pattern (required query/header params, collection envelopes, required+readOnly properties), not a vendor-specific exception. |
+| Schema constraints dropped between parser and generator (G39) | `parser.Schema` numeric/size bounds are pointers (a declared `minimum: 0` is distinct from an absent one — the v2/v30 parsers gained `*Ptr` scalar helpers), `SchemaSpec` carries enum/const/pattern/length/bounds/items constraints, `schemaIRFromSpec(Recursive)` copies them into `ir.SchemaIR`, and the managed-resource + provider-config attribute renderers emit the standard `terraform-plugin-framework-validators` calls: `stringvalidator` OneOf/LengthBetween/RegexMatches (pattern compiled at generation time), `int64validator`/`float64validator` Between/AtLeast/AtMost + OneOf, `boolvalidator.Equals` for single-value bool enums, and `listvalidator`/`setvalidator`/`mapvalidator` SizeBetween + `ValueStringsAre(stringvalidator.OneOf)` for enum-constrained string elements. Custom validators (exclusive bounds, multipleOf, discriminator, patternProperties) still come from `pkg/generator/internal/schema/validators.go`; the standard exprs share the same `Validators` field. The `constraint-validators` reference spec + golden snapshot exercises every mapping, and generated `go.mod` files pin `terraform-plugin-framework-validators v0.19.0`. Scope: managed resources and the provider config schema (see §23.2 for the not-yet-wired categories). |
 
 ### 23.2 Accepted limitations (by design)
 
@@ -3213,8 +3219,20 @@ upstream constraint changes or a product decision is made.
   `applyJSONToModel` / `modelToJSONMap` JSON conversion that does not switch on
   the discriminator property when encoding/decoding a variant. A discriminated
   union round-trip is generic JSON, not variant-aware.
-- **`EnumValues` is not rendered as a `stringvalidator`.** The allowed-keys
-  check is covered by `DiscriminatorValidator` instead.
+- **A discriminator property's `EnumValues` is not rendered as a
+  `stringvalidator`.** The allowed-keys check is covered by
+  `DiscriminatorValidator` instead. (Attribute-level enums elsewhere do render
+  `stringvalidator.OneOf` — see the G39 row in §23.1; this bullet is scoped to
+  the discriminator property only.)
+- **Standard validators are wired for managed resources and the provider
+  config schema only.** The `terraform-plugin-framework-validators` calls
+  (enum/const `OneOf`, length, pattern, numeric bounds, collection size)
+  derived from spec constraints are emitted by the managed-resource and
+  provider-config attribute renderers. Data sources, actions, ephemerals,
+  list resources, and functions carry the constraints in the IR but their
+  schema emitters do not call `AddValidators`, so no validators are emitted
+  there yet; the constraints are not dropped silently at the IR level and the
+  wiring is additive follow-up work.
 - **Nested `oneOf`/`anyOf`** (inside properties, collection elements) render as
   Dynamic attributes with a fail-loud `warnCompositionNotModeled` warning. The
   flat Terraform attribute model cannot represent alternatives, so the fallback
