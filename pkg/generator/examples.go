@@ -287,8 +287,11 @@ func writeHCLAttributeValue(attr ir.AttributeIR) (value string, single bool) {
 		case ir.List, ir.Set:
 			if schema.IsPrimitiveSchema(elem) {
 				// Primitive lists/sets render as compact single-line literals; keeping
-				// primitives on one line makes simple examples easier to scan.
-				return fmt.Sprintf("[ %s ]", primitiveExampleValue(elem.Type)), true
+				// primitives on one line makes simple examples easier to scan. The
+				// element placeholder honors the element's own constraints
+				// (e.g. an enum-constrained element validates against
+				// listvalidator ValueStringsAre emitted from the same schema).
+				return fmt.Sprintf("[ %s ]", schemaExampleLiteral(elem)), true
 			}
 			if !schema.IsObjectLike(elem) {
 				// Unsupported element (for example, a degenerate empty schema):
@@ -326,7 +329,10 @@ func writeHCLAttributeValue(attr ir.AttributeIR) (value string, single bool) {
 		return "", false
 	}
 
-	return primitiveExampleValue(s.Type), true
+	// The placeholder honors the schema's constraints (enum/const/bounds/
+	// length/pattern) so the example satisfies the validators the schema
+	// emits; an unconstrained schema keeps the type-only placeholder.
+	return schemaExampleLiteral(s), true
 }
 
 // writeHCLAttributeLiteral renders a configurable attribute as a multi-line
@@ -432,7 +438,7 @@ func writeHCLCollectionLiteral(h *hclBuilder, attr ir.AttributeIR) {
 		if schema.IsPrimitiveSchema(elem) {
 			h.writeLinef("%s = {", attr.Name)
 			h.indent++
-			h.writeLinef("%q = %s", key, primitiveExampleValue(elem.Type))
+			h.writeLinef("%q = %s", key, schemaExampleLiteral(elem))
 			h.indent--
 			h.writeLinef("}")
 			return

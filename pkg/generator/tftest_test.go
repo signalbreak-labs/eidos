@@ -215,23 +215,27 @@ func TestTerraformTestFiles_Multiple(t *testing.T) {
 	}
 }
 
-// TestTerraformTestPrimitiveValue_MatchesPrimitiveExampleValue asserts that
-// terraformTestPrimitiveValue stays in sync with primitiveExampleValue for every
-// primitive type. If the two helpers drift, generated test modules and generated
-// examples would use different placeholder values.
-func TestTerraformTestPrimitiveValue_MatchesPrimitiveExampleValue(t *testing.T) {
+// TestSchemaExampleLiteral_UnconstrainedMatchesPrimitiveExampleValue asserts
+// that schemaExampleLiteral keeps the unconstrained placeholder
+// (primitiveExampleValue) for every primitive type. Generated test modules,
+// acceptance configs, and generated examples all render placeholders through
+// schemaExampleLiteral, so if this invariant drifts, either those configs
+// change for specs without constraints or the three call sites disagree.
+func TestSchemaExampleLiteral_UnconstrainedMatchesPrimitiveExampleValue(t *testing.T) {
 	cases := []ir.PrimitiveType{
 		ir.TypeString,
 		ir.TypeInt,
 		ir.TypeFloat,
 		ir.TypeBool,
 		ir.TypeDynamic,
+		ir.TypeNull,
 		"unknown",
 	}
 	for _, tc := range cases {
 		t.Run(string(tc), func(t *testing.T) {
-			if got, want := terraformTestPrimitiveValue(tc), primitiveExampleValue(tc); got != want {
-				t.Errorf("terraformTestPrimitiveValue(%q) = %q, want %q", tc, got, want)
+			got := schemaExampleLiteral(ir.SchemaIR{Type: tc})
+			if want := primitiveExampleValue(tc); got != want {
+				t.Errorf("schemaExampleLiteral(%q) = %q, want %q", tc, got, want)
 			}
 		})
 	}

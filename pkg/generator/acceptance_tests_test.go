@@ -2,7 +2,6 @@ package generator
 
 import (
 	"bytes"
-	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -228,7 +227,6 @@ func TestAcceptanceParamAttribute_RequiredDynamicSkipped(t *testing.T) {
 		name     string
 		attrs    []ir.AttributeIR
 		wantName string
-		wantType ir.PrimitiveType
 		wantOK   bool
 	}{
 		{
@@ -239,7 +237,6 @@ func TestAcceptanceParamAttribute_RequiredDynamicSkipped(t *testing.T) {
 				strAttr("name", true),
 			},
 			wantName: "name",
-			wantType: ir.TypeString,
 			wantOK:   true,
 		},
 		{
@@ -250,7 +247,6 @@ func TestAcceptanceParamAttribute_RequiredDynamicSkipped(t *testing.T) {
 				strAttr("tag", false),
 			},
 			wantName: "tag",
-			wantType: ir.TypeString,
 			wantOK:   true,
 		},
 		{
@@ -260,17 +256,20 @@ func TestAcceptanceParamAttribute_RequiredDynamicSkipped(t *testing.T) {
 				reqDynamic,
 			},
 			wantName: "",
-			wantType: "",
 			wantOK:   false,
 		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			r := ir.ResourceIR{Schema: ir.ObjectSchemaIR{Attributes: tc.attrs}}
-			gotName, gotType, gotOK := acceptanceParamAttribute(r)
-			if gotName != tc.wantName || gotType != tc.wantType || gotOK != tc.wantOK {
-				t.Errorf("acceptanceParamAttribute() = (%q, %q, %v), want (%q, %q, %v)",
-					gotName, gotType, gotOK, tc.wantName, tc.wantType, tc.wantOK)
+			gotName, gotCreate, gotUpdated, gotOK := acceptanceParamAttribute(r)
+			if gotName != tc.wantName || gotOK != tc.wantOK {
+				t.Errorf("acceptanceParamAttribute() = (%q, %q, %q, %v), want name %q, ok %v",
+					gotName, gotCreate, gotUpdated, gotOK, tc.wantName, tc.wantOK)
+			}
+			if gotOK && gotCreate == gotUpdated {
+				t.Errorf("acceptanceParamAttribute() create %q == updated %q; the update step must vary the value",
+					gotCreate, gotUpdated)
 			}
 		})
 	}
@@ -605,86 +604,152 @@ func generateResourceAcceptanceTestModule(t *testing.T, pir ir.ProviderIR) strin
 	return tmp
 }
 
-func TestAcceptanceExampleValue_Known(t *testing.T) {
+// TestAcceptanceParamPair covers acceptanceParamPair across the primitive types
+// and the constraint shapes that must reject an attribute as a mutation
+// target: const and one-member enums pin the value, a two-member enum varies
+// across its members, numeric bounds clamp the historical "1"/"2" defaults,
+// and a pattern admits at most the candidates on the deterministic list.
+func TestAcceptanceParamPair(t *testing.T) {
+	strPtr := func(v string) *any {
+		x := any(v)
+		return &x
+	}
+	intPtr := func(v int) *int {
+		return &v
+	}
+	floatPtr := func(v float64) *float64 {
+		return &v
+	}
 	cases := []struct {
-		typ  ir.PrimitiveType
-		want string
+		name        string
+		schema      ir.SchemaIR
+		wantCreate  string
+		wantUpdated string
+		wantOK      bool
 	}{
-		{ir.TypeString, "example"},
-		{ir.TypeInt, "1"},
-		{ir.TypeFloat, "1.0"},
-		{ir.TypeBool, "true"},
-		{ir.TypeNull, "null"},
-		{ir.TypeDynamic, "null"},
+		{
+			name:        "unconstrained string",
+			schema:      ir.SchemaIR{Type: ir.TypeString},
+			wantCreate:  "example",
+			wantUpdated: "updated",
+			wantOK:      true,
+		},
+		{
+			name:        "unconstrained int",
+			schema:      ir.SchemaIR{Type: ir.TypeInt},
+			wantCreate:  "1",
+			wantUpdated: "2",
+			wantOK:      true,
+		},
+		{
+			name:        "unconstrained float",
+			schema:      ir.SchemaIR{Type: ir.TypeFloat},
+			wantCreate:  "1.0",
+			wantUpdated: "2.0",
+			wantOK:      true,
+		},
+		{
+			name:        "unconstrained bool",
+			schema:      ir.SchemaIR{Type: ir.TypeBool},
+			wantCreate:  "true",
+			wantUpdated: "false",
+			wantOK:      true,
+		},
+		{
+			name:        "string enum with two members",
+			schema:      ir.SchemaIR{Type: ir.TypeString, EnumValues: []any{"alpha", "beta", "gamma"}},
+			wantCreate:  "alpha",
+			wantUpdated: "beta",
+			wantOK:      true,
+		},
+		{
+			name:   "string enum with one member is pinned",
+			schema: ir.SchemaIR{Type: ir.TypeString, EnumValues: []any{"alpha"}},
+			wantOK: false,
+		},
+		{
+			name:   "string const is pinned",
+			schema: ir.SchemaIR{Type: ir.TypeString, Const: strPtr("standard")},
+			wantOK: false,
+		},
+		{
+			name:        "string length window keeps both values distinct",
+			schema:      ir.SchemaIR{Type: ir.TypeString, MinLength: intPtr(3), MaxLength: intPtr(64)},
+			wantCreate:  "example",
+			wantUpdated: "updated",
+			wantOK:      true,
+		},
+		{
+			name:        "string pattern admitting two candidates",
+			schema:      ir.SchemaIR{Type: ir.TypeString, Pattern: `^[a-z]+-[0-9]+$`},
+			wantCreate:  "example-1",
+			wantUpdated: "abc-1",
+			wantOK:      true,
+		},
+		{
+			name:   "string pattern admitting one candidate",
+			schema: ir.SchemaIR{Type: ir.TypeString, Pattern: `^[A-Z]{3}-[0-9]+$`},
+			wantOK: false,
+		},
+		{
+			name:        "int bounds clamp the defaults",
+			schema:      ir.SchemaIR{Type: ir.TypeInt, Minimum: floatPtr(2), Maximum: floatPtr(10)},
+			wantCreate:  "2",
+			wantUpdated: "3",
+			wantOK:      true,
+		},
+		{
+			name:        "int bounds admitting only one value",
+			schema:      ir.SchemaIR{Type: ir.TypeInt, Minimum: floatPtr(1), Maximum: floatPtr(1)},
+			wantCreate:  "1",
+			wantUpdated: "0",
+			wantOK:      false,
+		},
+		{
+			name:   "int enum with one member is pinned",
+			schema: ir.SchemaIR{Type: ir.TypeInt, EnumValues: []any{float64(3)}},
+			wantOK: false,
+		},
+		{
+			name:   "float range collapsing the defaults",
+			schema: ir.SchemaIR{Type: ir.TypeFloat, Minimum: floatPtr(0), Maximum: floatPtr(1)},
+			wantOK: false,
+		},
+		{
+			name:   "bool enum with one member is pinned",
+			schema: ir.SchemaIR{Type: ir.TypeBool, EnumValues: []any{true}},
+			wantOK: false,
+		},
+		{
+			name:   "null type is not a mutation candidate",
+			schema: ir.SchemaIR{Type: ir.TypeNull},
+			wantOK: false,
+		},
+		{
+			name:   "dynamic type is not a mutation candidate",
+			schema: ir.SchemaIR{Type: ir.TypeDynamic},
+			wantOK: false,
+		},
 	}
 	for _, tc := range cases {
-		t.Run(string(tc.typ), func(t *testing.T) {
-			if got := acceptanceExampleValue(tc.typ); got != tc.want {
-				t.Errorf("acceptanceExampleValue(%q) = %q, want %q", tc.typ, got, tc.want)
+		t.Run(tc.name, func(t *testing.T) {
+			create, updated, ok := acceptanceParamPair(tc.schema)
+			if ok != tc.wantOK {
+				t.Fatalf("acceptanceParamPair() ok = %v, want %v (create %q, updated %q)", ok, tc.wantOK, create, updated)
+			}
+			if !ok {
+				return
+			}
+			if create != tc.wantCreate || updated != tc.wantUpdated {
+				t.Errorf("acceptanceParamPair() = (%q, %q), want (%q, %q)",
+					create, updated, tc.wantCreate, tc.wantUpdated)
+			}
+			if create == updated {
+				t.Errorf("acceptanceParamPair() create %q == updated %q; the update step must vary the value",
+					create, updated)
 			}
 		})
 	}
-}
-
-func TestAcceptanceExampleValue_UnknownPanics(t *testing.T) {
-	defer func() {
-		r := recover()
-		if r == nil {
-			t.Fatal("expected panic for unknown PrimitiveType, got none")
-		}
-		err, ok := r.(error)
-		if !ok {
-			t.Fatalf("expected error panic, got %T", r)
-		}
-		if !errors.Is(err, ErrUnsupportedPrimitiveType) {
-			t.Fatalf("expected ErrUnsupportedPrimitiveType sentinel, got: %v", err)
-		}
-		if !strings.Contains(err.Error(), "unknown-type") {
-			t.Fatalf("panic message %q does not contain type name", err.Error())
-		}
-	}()
-	acceptanceExampleValue(ir.PrimitiveType("unknown-type"))
-}
-
-func TestUpdatedValue_Known(t *testing.T) {
-	cases := []struct {
-		typ  ir.PrimitiveType
-		want string
-	}{
-		{ir.TypeString, "updated"},
-		{ir.TypeInt, "2"},
-		{ir.TypeFloat, "2.0"},
-		{ir.TypeBool, "false"},
-		{ir.TypeNull, "null"},
-		{ir.TypeDynamic, "null"},
-	}
-	for _, tc := range cases {
-		t.Run(string(tc.typ), func(t *testing.T) {
-			if got := updatedValue(tc.typ); got != tc.want {
-				t.Errorf("updatedValue(%q) = %q, want %q", tc.typ, got, tc.want)
-			}
-		})
-	}
-}
-
-func TestUpdatedValue_UnknownPanics(t *testing.T) {
-	defer func() {
-		r := recover()
-		if r == nil {
-			t.Fatal("expected panic for unknown PrimitiveType, got none")
-		}
-		err, ok := r.(error)
-		if !ok {
-			t.Fatalf("expected error panic, got %T", r)
-		}
-		if !errors.Is(err, ErrUnsupportedPrimitiveType) {
-			t.Fatalf("expected ErrUnsupportedPrimitiveType sentinel, got: %v", err)
-		}
-		if !strings.Contains(err.Error(), "unknown-type") {
-			t.Fatalf("panic message %q does not contain type name", err.Error())
-		}
-	}()
-	updatedValue(ir.PrimitiveType("unknown-type"))
 }
 
 // sampleProviderWithAPIKeyAuthIR returns a provider fixture that declares an
