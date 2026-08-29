@@ -352,7 +352,9 @@ func applyResourceImportFormatOverride(r *ir.ResourceIR, override config.Resourc
 	if strings.TrimSpace(override.ImportFormat) != "" {
 		r.ImportIDFormat = override.ImportFormat
 		warnComputedOnlyImportTarget(r, r.ImportIDFormat, diags)
-		warnMissingRequiredReadParams(r, r.ImportIDFormat, diags)
+		extendImportFormatWithRequiredReadParams(r, diags)
+		// warnMissingRequiredReadParams runs inside the extension pass: after it,
+		// only parameters that could not be auto-extended still warn.
 		// Only mark the resource as importable when a Read operation is present;
 		// otherwise there is no GET-by-ID path to support import.
 		if r.CRUDMapping.Read.Method != "" || r.CRUDMapping.Read.PathTemplate != "" {
@@ -361,12 +363,85 @@ func applyResourceImportFormatOverride(r *ir.ResourceIR, override config.Resourc
 	}
 }
 
+// extendImportFormatWithRequiredReadParams appends the read operation's
+// required query parameters to the import format when the format does not
+// already populate them and the parameter maps to a user-settable schema
+// attribute. The refresh that follows an import sends those parameters from
+// state, so an import format that omits one (GigaVUE-FM's required clusterId
+// query parameter, across dozens of resources) produces a read the API
+// rejects with an empty value. Auto-extending keeps the import usable
+// without forcing every generator.yaml entry to spell the full cluster
+// addressing; the extension is surfaced with an Info diagnostic, never
+// silent. Parameters with no matching user-settable attribute are left to
+// warnMissingRequiredReadParams — they need a config decision, not an
+// invented attribute.
+func extendImportFormatWithRequiredReadParams(r *ir.ResourceIR, diags *diagnostics.Diagnostics) {
+	if r == nil || !strings.Contains(r.ImportIDFormat, "{") {
+		// Brace-less formats are parsed as bare attribute words; appending a
+		// braced segment would turn them into mixed static text, so leave them
+		// to the fail-loud warning instead.
+		if r != nil {
+			warnMissingRequiredReadParams(r, r.ImportIDFormat, diags)
+		}
+		return
+	}
+	covered := map[string]bool{}
+	for _, attr := range importFormatAttrs(r.ImportIDFormat) {
+		covered[attr] = true
+	}
+	original := r.ImportIDFormat
+	extended := original
+	var added []string
+	for _, p := range r.CRUDMapping.Read.QueryParams {
+		if !p.Required {
+			continue
+		}
+		attr := SanitizeAttributeName(p.Name)
+		if covered[attr] || !hasUserSettableAttribute(r, attr) {
+			continue
+		}
+		extended += "/{" + attr + "}"
+		covered[attr] = true
+		added = append(added, attr)
+	}
+	if len(added) == 0 {
+		warnMissingRequiredReadParams(r, r.ImportIDFormat, diags)
+		return
+	}
+	r.ImportIDFormat = extended
+	if diags != nil {
+		*diags = append(*diags, diagnostics.Diagnostic{
+			Severity: diagnostics.Info,
+			Summary:  "import format extended with required read parameters",
+			Detail: fmt.Sprintf(
+				"The import format on resource %q was extended from %q to %q so the read after import populates its required query parameter(s) (%s) instead of sending an empty value.",
+				r.Name, original, r.ImportIDFormat, strings.Join(added, ", "),
+			),
+		})
+	}
+	warnMissingRequiredReadParams(r, r.ImportIDFormat, diags)
+}
+
+// hasUserSettableAttribute reports whether the resource schema has an attribute
+// with the given name that the practitioner can set in configuration.
+func hasUserSettableAttribute(r *ir.ResourceIR, name string) bool {
+	for _, a := range r.Schema.Attributes {
+		if a.Name == name {
+			return a.Required || a.Optional
+		}
+	}
+	return false
+}
+
 // warnComputedOnlyImportTarget surfaces a fail-loud warning when an explicit
-// id_attribute or import_format references a Computed-only attribute: the
-// practitioner cannot know that value before the first read, so the import
-// cannot succeed (G39). The override still applies (explicit configuration
-// wins) so a genuinely externally-knowable identifier can be configured, but
-// the risk is never silent.
+// id_attribute or import_format references a Computed-only attribute: its
+// value is not part of the practitioner's configuration, so the import
+// relies on the practitioner supplying an externally-assigned value. That is
+// legitimate when the API assigns the identifier server-side and the
+// practitioner can learn it out of band (the FM UI, a collection read), but
+// when the spec also offers a user-settable identifier, that one makes the
+// import frictionless — hence the warning rather than silence (G39). The
+// override still applies: explicit configuration wins.
 func warnComputedOnlyImportTarget(r *ir.ResourceIR, format string, diags *diagnostics.Diagnostics) {
 	if diags == nil || r == nil {
 		return
@@ -378,7 +453,7 @@ func warnComputedOnlyImportTarget(r *ir.ResourceIR, format string, diags *diagno
 					Severity: diagnostics.Warning,
 					Summary:  "import target is computed-only",
 					Detail: fmt.Sprintf(
-						"The import format %q on resource %q targets attribute %q, which is Computed-only — the practitioner cannot know its value before the first read, so the import likely cannot succeed. Choose a user-settable identifier (required or optional in the request).",
+						"The import format %q on resource %q targets attribute %q, which is Computed-only, so importing requires the practitioner to supply its externally-assigned value (from the API or its UI). If the spec offers a user-settable identifier (required or optional in the request), importing by that instead avoids the out-of-band lookup.",
 						format, r.Name, attr,
 					),
 				})

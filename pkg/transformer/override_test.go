@@ -350,6 +350,86 @@ func TestApplyOverrides_IDAttributeKeepsRealEchoedAttribute(t *testing.T) {
 	}
 }
 
+func TestApplyOverrides_ImportFormatAutoExtendedWithReadParams(t *testing.T) {
+	strSchema := ir.SchemaIR{Type: ir.TypeString}
+	provider := &ir.ProviderIR{
+		Resources: []ir.ResourceIR{{
+			Name:     "tool",
+			TypeName: "tool",
+			Schema: ir.ObjectSchemaIR{Attributes: []ir.AttributeIR{
+				{Name: "alias", Required: true, WireName: "alias", Schema: strSchema},
+				{Name: "cluster_id", Required: true, WireName: "clusterId", Schema: strSchema},
+			}},
+			CRUDMapping: ir.CRUDMappingIR{
+				Read: ir.OperationMappingIR{
+					Method:       "GET",
+					PathTemplate: "/tools/{alias}",
+					QueryParams:  []ir.ParamIR{{Name: "clusterId", Required: true}},
+				},
+			},
+		}},
+	}
+	cfg := &config.Config{
+		Provider: config.ProviderConfig{Name: "test", Version: "0.0.1"},
+		ResourceOverrides: []config.ResourceOverride{{
+			Schema:       "tool",
+			ImportFormat: "{alias}",
+		}},
+	}
+
+	if err := ApplyOverrides(provider, cfg); err != nil {
+		t.Fatalf("ApplyOverrides() = %v, want nil", err)
+	}
+
+	r := provider.Resources[0]
+	if r.ImportIDFormat != "{alias}/{cluster_id}" {
+		t.Errorf("ImportIDFormat = %q, want %q", r.ImportIDFormat, "{alias}/{cluster_id}")
+	}
+	if !r.Importable {
+		t.Errorf("Importable = false, want true")
+	}
+}
+
+func TestApplyOverrides_ImportFormatNotExtendedWithoutAttribute(t *testing.T) {
+	strSchema := ir.SchemaIR{Type: ir.TypeString}
+	provider := &ir.ProviderIR{
+		Resources: []ir.ResourceIR{{
+			Name:     "tool",
+			TypeName: "tool",
+			Schema: ir.ObjectSchemaIR{Attributes: []ir.AttributeIR{
+				{Name: "alias", Required: true, WireName: "alias", Schema: strSchema},
+				{Name: "cluster_id", Computed: true, WireName: "clusterId", Schema: strSchema},
+			}},
+			CRUDMapping: ir.CRUDMappingIR{
+				Read: ir.OperationMappingIR{
+					Method:       "GET",
+					PathTemplate: "/tools/{alias}",
+					QueryParams:  []ir.ParamIR{{Name: "clusterId", Required: true}},
+				},
+			},
+		}},
+	}
+	cfg := &config.Config{
+		Provider: config.ProviderConfig{Name: "test", Version: "0.0.1"},
+		ResourceOverrides: []config.ResourceOverride{{
+			Schema:       "tool",
+			ImportFormat: "{alias}",
+		}},
+	}
+
+	if err := ApplyOverrides(provider, cfg); err != nil {
+		t.Fatalf("ApplyOverrides() = %v, want nil", err)
+	}
+
+	// cluster_id is Computed-only, so the practitioner cannot know it to type it
+	// into an import ID; the format stays as configured and the fail-loud
+	// warning keeps responsibility with the config author.
+	r := provider.Resources[0]
+	if r.ImportIDFormat != "{alias}" {
+		t.Errorf("ImportIDFormat = %q, want %q (no auto-extension off a Computed-only attribute)", r.ImportIDFormat, "{alias}")
+	}
+}
+
 func TestApplyOverrides_ImportFormatWithoutRead(t *testing.T) {
 	provider := &ir.ProviderIR{
 		Resources: []ir.ResourceIR{{
