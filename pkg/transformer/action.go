@@ -412,7 +412,54 @@ func schemaIRFromSpec(spec SchemaSpec) ir.SchemaIR {
 			kind = ir.Set
 		}
 		return ir.SchemaIR{Collection: &ir.CollectionType{Kind: kind, ElementType: schemaIRFromSpec(*spec.Items)}}
+	case "object", "":
+		// Map an object body/property to nested attributes (SingleNestedAttribute)
+		// or a map (MapNestedAttribute/MapAttribute) instead of degrading to a
+		// bare DynamicAttribute, so action/ephemeral config schemas retain the
+		// request body's structure. Nested attributes are Required/Optional per
+		// the nested schema's required list, mirroring requestBodyAttributes'
+		// top-level mapping. A degenerate object (no properties, no
+		// additionalProperties) still degrades to Dynamic.
+		if len(spec.Properties) > 0 {
+			return ir.SchemaIR{Attributes: requestNestedAttributesFromSpec(spec)}
+		}
+		if spec.AdditionalProperties != nil {
+			elem := schemaIRFromSpec(*spec.AdditionalProperties)
+			return ir.SchemaIR{Collection: &ir.CollectionType{Kind: ir.Map, ElementType: elem}}
+		}
+		return ir.SchemaIR{Type: ir.TypeDynamic}
 	default:
 		return ir.SchemaIR{Type: ir.TypeDynamic}
 	}
+}
+
+// requestNestedAttributesFromSpec builds nested attributes for an object-typed
+// request-body property, marking each Required/Optional per the nested schema's
+// required list (mirroring requestBodyAttributes' top-level mapping). WireName
+// carries the original property name so the generated model field gets a
+// `json:"<wireName>"` tag and modelToJSONMap emits the API's wire name as the
+// nested request-body key (G18).
+func requestNestedAttributesFromSpec(spec SchemaSpec) []ir.AttributeIR {
+	required := make(map[string]bool, len(spec.Required))
+	for _, name := range spec.Required {
+		required[name] = true
+	}
+	names := make([]string, 0, len(spec.Properties))
+	for name := range spec.Properties {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	attrs := make([]ir.AttributeIR, 0, len(names))
+	for _, name := range names {
+		prop := spec.Properties[name]
+		attrs = append(attrs, ir.AttributeIR{
+			Name:        SanitizeAttributeName(name),
+			WireName:    name,
+			Schema:      schemaIRFromSpec(prop),
+			Description: prop.Description,
+			Required:    required[name],
+			Optional:    !required[name],
+		})
+	}
+	return attrs
 }

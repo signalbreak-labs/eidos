@@ -23,7 +23,7 @@
     {
       "path": "docs/actions/create_shipment.md",
       "reason": "documentation for action create_shipment",
-      "body_hash": "ee9a9880f9853e57"
+      "body_hash": "ca4080402adead76"
     },
     {
       "path": "docs/data-sources/get_shipment.md",
@@ -38,7 +38,7 @@
     {
       "path": "examples/actions/create_shipment/action.tf",
       "reason": "example for action create_shipment",
-      "body_hash": "acf18165294c67a0"
+      "body_hash": "c89298d9e42c1a1f"
     },
     {
       "path": "examples/data-sources/get_shipment/data-source.tf",
@@ -98,7 +98,7 @@
     {
       "path": "internal/provider/action_create_shipment.go",
       "reason": "action all-of-nesting-api_create_shipment",
-      "body_hash": "e16392ddbf3ef576"
+      "body_hash": "105be40a48e74398"
     },
     {
       "path": "internal/provider/action_create_shipment_remote_test.go",
@@ -123,7 +123,7 @@
     {
       "path": "internal/provider/json_convert.go",
       "reason": "JSON/model conversion helpers for wired CRUD bodies",
-      "body_hash": "7797506ef6ae4a23"
+      "body_hash": "7d1a1dadb3465fb8"
     },
     {
       "path": "internal/provider/provider.go",
