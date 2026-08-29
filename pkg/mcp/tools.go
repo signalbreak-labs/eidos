@@ -330,6 +330,7 @@ func HandleGenerate(ctx context.Context, req *sdkmcp.CallToolRequest, args Gener
 	// clobbering a hand-written source-of-truth config the CLI guards against
 	// (M-74).
 	genOpts := generateCollectOptions(configYAML)
+	limits := generateLimits(configYAML)
 	resp := validateContext(ctx, specBytes)
 	result := GenerateResult{
 		Valid:       resp.Valid,
@@ -372,6 +373,7 @@ func HandleGenerate(ctx context.Context, req *sdkmcp.CallToolRequest, args Gener
 		entries, runErr := generator.Run(resp.IRPreview, generator.Options{
 			Mode:           generator.ModeRecord,
 			CollectOptions: genOpts,
+			Limits:         limits,
 		})
 		if runErr != nil {
 			result.Diagnostics = append(result.Diagnostics, api.DiagnosticJSON{
@@ -393,7 +395,7 @@ func HandleGenerate(ctx context.Context, req *sdkmcp.CallToolRequest, args Gener
 			}
 		}
 	} else if output != "" {
-		entries, runErr := writeProvider(output, resp.IRPreview, genOpts, args.Force)
+		entries, runErr := writeProvider(output, resp.IRPreview, genOpts, args.Force, limits)
 		if runErr != nil {
 			result.Diagnostics = append(result.Diagnostics, api.DiagnosticJSON{
 				Severity: "error", Summary: "Provider generation failed", Detail: runErr.Error(),
@@ -1000,14 +1002,29 @@ func generateCollectOptions(configYAML string) generator.CollectOptions {
 // false, a write that would overwrite an existing file fails loud instead of
 // clobbering it (N-52). Previously this wrote with Force always true, so an MCP
 // caller (or a prompt-injected request) could silently overwrite a hand-edited
-// provider directory — or any writable path it pointed output at.
-func writeProvider(dir string, pir *ir.ProviderIR, opts generator.CollectOptions, force bool) ([]generator.FileEntry, error) {
+// provider directory — or any writable path it pointed output at. limits
+// carries the generator.yaml limits: section (nil uses the built-in Terraform
+// platform defaults, G39).
+func writeProvider(dir string, pir *ir.ProviderIR, opts generator.CollectOptions, force bool, limits *config.LimitsConfig) ([]generator.FileEntry, error) {
 	return generator.Run(pir, generator.Options{
 		Mode:           generator.ModeWrite,
 		OutputDir:      dir,
 		Force:          force,
 		CollectOptions: opts,
+		Limits:         limits,
 	})
+}
+
+// generateLimits extracts the generator.yaml limits: section so the MCP
+// generate path enforces the same Terraform platform size caps as the CLI
+// (G39). Nil (no config, or no limits section) uses the built-in defaults.
+func generateLimits(configYAML string) *config.LimitsConfig {
+	if strings.TrimSpace(configYAML) != "" {
+		if cfg, err := config.LoadBytes([]byte(configYAML)); err == nil {
+			return cfg.Limits
+		}
+	}
+	return nil
 }
 
 // fileSummaries maps planned file entries to FileSummary records. When outputDir

@@ -312,6 +312,50 @@ spec:
 	}
 }
 
+func TestLoad_LimitsSection(t *testing.T) {
+	yamlInput := `
+provider:
+  name: mycloud
+  version: "0.1.0"
+limits:
+  max_schema_size_bytes: 1048576
+  warn_schema_size_bytes: 524288
+  max_description_bytes: 1024
+  max_docs_file_bytes: 400000
+`
+	cfg, err := LoadBytes([]byte(yamlInput))
+	if err != nil {
+		t.Fatalf("LoadBytes failed: %v", err)
+	}
+	if cfg.Limits == nil {
+		t.Fatal("limits section must parse")
+	}
+	if cfg.Limits.MaxSchemaBytes != 1048576 {
+		t.Errorf("max_schema_size_bytes = %d, want 1048576", cfg.Limits.MaxSchemaBytes)
+	}
+	if cfg.Limits.WarnSchemaBytes != 524288 {
+		t.Errorf("warn_schema_size_bytes = %d, want 524288", cfg.Limits.WarnSchemaBytes)
+	}
+	if cfg.Limits.MaxDescriptionBytes != 1024 {
+		t.Errorf("max_description_bytes = %d, want 1024", cfg.Limits.MaxDescriptionBytes)
+	}
+	if cfg.Limits.MaxDocsFileBytes != 400000 {
+		t.Errorf("max_docs_file_bytes = %d, want 400000", cfg.Limits.MaxDocsFileBytes)
+	}
+
+	data, err := yaml.Marshal(cfg)
+	if err != nil {
+		t.Fatalf("Marshal failed: %v", err)
+	}
+	got, err := LoadBytes(data)
+	if err != nil {
+		t.Fatalf("round-trip LoadBytes failed: %v", err)
+	}
+	if got.Limits == nil || got.Limits.MaxDescriptionBytes != 1024 {
+		t.Errorf("limits round-trip mismatch: %+v", got.Limits)
+	}
+}
+
 func TestLoad_CursorPagination(t *testing.T) {
 	yamlInput := `
 provider:
