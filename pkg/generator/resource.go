@@ -370,6 +370,9 @@ func registerResourceImports(f *astgen.File, r ir.ResourceIR, wiring resourceWir
 	if objectSchemaNeedsValidators(r.Schema) {
 		f.AddImport("github.com/hashicorp/terraform-plugin-framework/schema/validator", "validator")
 	}
+	for _, imp := range standardValidatorImports(r.Schema) {
+		f.AddImport(imp[0], imp[1])
+	}
 	if ResourceImportable(r) {
 		f.AddImport("github.com/hashicorp/terraform-plugin-framework/path", "path")
 		parsed, err := parseImportIDFormat(r.ImportIDFormat, r.IDAttribute)

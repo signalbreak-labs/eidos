@@ -83,6 +83,26 @@ func (c *v30Converter) scalarFloat(n Node, field string) float64 {
 	return f
 }
 
+// scalarFloatPtr and scalarIntPtr wrap the scalar parsers so schema
+// constraints can distinguish a declared 0 bound from an absent one (G39):
+// nil node → nil pointer, otherwise a pointer to the parsed value (0
+// included).
+func (c *v30Converter) scalarFloatPtr(n Node, field string) *float64 {
+	if n == nil {
+		return nil
+	}
+	v := c.scalarFloat(n, field)
+	return &v
+}
+
+func (c *v30Converter) scalarIntPtr(n Node, field string) *int {
+	if n == nil {
+		return nil
+	}
+	v := c.scalarInt(n, field)
+	return &v
+}
+
 // scalarAnySlice extracts a sequence of arbitrary values from n, appending a
 // warning diagnostic when the node is present but not a sequence. Unlike the
 // silent nodeNativeSlice, a non-sequence enum value (e.g. `enum: 5`) is
@@ -1126,25 +1146,25 @@ func (c *v30Converter) convertSchema(n Node) *Schema {
 		case "default":
 			s.Default = nodeToNative(value)
 		case "multipleOf":
-			s.MultipleOf = c.scalarFloat(value, "multipleOf")
+			s.MultipleOf = c.scalarFloatPtr(value, "multipleOf")
 		case "maximum":
-			s.Maximum = c.scalarFloat(value, "maximum")
+			s.Maximum = c.scalarFloatPtr(value, "maximum")
 		case "exclusiveMaximum":
 			s.ExclusiveMaximum = nodeToNative(value)
 		case "minimum":
-			s.Minimum = c.scalarFloat(value, "minimum")
+			s.Minimum = c.scalarFloatPtr(value, "minimum")
 		case "exclusiveMinimum":
 			s.ExclusiveMinimum = nodeToNative(value)
 		case "maxLength":
-			s.MaxLength = c.scalarInt(value, "maxLength")
+			s.MaxLength = c.scalarIntPtr(value, "maxLength")
 		case "minLength":
-			s.MinLength = c.scalarInt(value, "minLength")
+			s.MinLength = c.scalarIntPtr(value, "minLength")
 		case "pattern":
 			s.Pattern = c.scalarString(value, "pattern")
 		case "maxItems":
-			s.MaxItems = c.scalarInt(value, "maxItems")
+			s.MaxItems = c.scalarIntPtr(value, "maxItems")
 		case "minItems":
-			s.MinItems = c.scalarInt(value, "minItems")
+			s.MinItems = c.scalarIntPtr(value, "minItems")
 		case "uniqueItems":
 			s.UniqueItems = c.scalarBool(value, "uniqueItems")
 		case "maxProperties":

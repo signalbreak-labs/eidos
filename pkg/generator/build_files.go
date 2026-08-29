@@ -50,6 +50,12 @@ const (
 	// timeouts block and CRUD wiring target (M-14). It requires framework
 	// >= v1.16.1, satisfied by the pinned framework version above.
 	TerraformPluginFrameworkTimeoutsVersion = "v0.7.0"
+	// TerraformPluginFrameworkValidatorsVersion is pinned to v0.19.0, the
+	// release compatible with the framework version pinned above (it requires
+	// framework >= v1.16.1). It supplies the standard validators
+	// (stringvalidator.OneOf, int64validator.Between, …) emitted for
+	// spec-declared enum/range/length/pattern constraints (G39).
+	TerraformPluginFrameworkValidatorsVersion = "v0.19.0"
 )
 
 // BuildVersions holds optional overrides for the pinned Terraform plugin
@@ -64,17 +70,21 @@ type BuildVersions struct {
 	// TimeoutsVersion pins the terraform-plugin-framework-timeouts module used
 	// by generated resources with configured timeouts (M-14).
 	TimeoutsVersion string
+	// ValidatorsVersion pins the terraform-plugin-framework-validators module
+	// supplying the standard constraint validators.
+	ValidatorsVersion string
 }
 
 // NewBuildVersions returns a BuildVersions populated with the package defaults.
 // Callers can then override only the fields they care about.
 func NewBuildVersions() BuildVersions {
 	return BuildVersions{
-		FrameworkVersion: TerraformPluginFrameworkVersion,
-		PluginGoVersion:  TerraformPluginGoVersion,
-		PluginLogVersion: TerraformPluginLogVersion,
-		TestingVersion:   TerraformPluginTestingVersion,
-		TimeoutsVersion:  TerraformPluginFrameworkTimeoutsVersion,
+		FrameworkVersion:  TerraformPluginFrameworkVersion,
+		PluginGoVersion:   TerraformPluginGoVersion,
+		PluginLogVersion:  TerraformPluginLogVersion,
+		TestingVersion:    TerraformPluginTestingVersion,
+		TimeoutsVersion:   TerraformPluginFrameworkTimeoutsVersion,
+		ValidatorsVersion: TerraformPluginFrameworkValidatorsVersion,
 	}
 }
 
@@ -180,11 +190,12 @@ func (cfg BuildConfig) protocolVersions() []string {
 // unset fields fall back to the pinned defaults.
 func (cfg BuildConfig) versions() BuildVersions {
 	defaults := BuildVersions{
-		FrameworkVersion: TerraformPluginFrameworkVersion,
-		PluginGoVersion:  TerraformPluginGoVersion,
-		PluginLogVersion: TerraformPluginLogVersion,
-		TestingVersion:   TerraformPluginTestingVersion,
-		TimeoutsVersion:  TerraformPluginFrameworkTimeoutsVersion,
+		FrameworkVersion:  TerraformPluginFrameworkVersion,
+		PluginGoVersion:   TerraformPluginGoVersion,
+		PluginLogVersion:  TerraformPluginLogVersion,
+		TestingVersion:    TerraformPluginTestingVersion,
+		TimeoutsVersion:   TerraformPluginFrameworkTimeoutsVersion,
+		ValidatorsVersion: TerraformPluginFrameworkValidatorsVersion,
 	}
 	if cfg.BuildVersions == nil {
 		return defaults
@@ -273,13 +284,14 @@ func isValidRegistrySegment(s string) bool {
 func GoMod(cfg BuildConfig) File {
 	versions := cfg.versions()
 	return Template("go.mod", goModTemplate, map[string]any{
-		"ModulePath":       cfg.modulePath(),
-		"GoVersion":        cfg.goVersion(),
-		"FrameworkVersion": versions.FrameworkVersion,
-		"PluginGoVersion":  versions.PluginGoVersion,
-		"PluginLogVersion": versions.PluginLogVersion,
-		"TestingVersion":   versions.TestingVersion,
-		"TimeoutsVersion":  versions.TimeoutsVersion,
+		"ModulePath":        cfg.modulePath(),
+		"GoVersion":         cfg.goVersion(),
+		"FrameworkVersion":  versions.FrameworkVersion,
+		"ValidatorsVersion": versions.ValidatorsVersion,
+		"PluginGoVersion":   versions.PluginGoVersion,
+		"PluginLogVersion":  versions.PluginLogVersion,
+		"TestingVersion":    versions.TestingVersion,
+		"TimeoutsVersion":   versions.TimeoutsVersion,
 	})
 }
 
@@ -290,6 +302,7 @@ go {{.GoVersion}}
 require (
 	github.com/hashicorp/terraform-plugin-framework {{.FrameworkVersion}}
 	github.com/hashicorp/terraform-plugin-framework-timeouts {{.TimeoutsVersion}}
+	github.com/hashicorp/terraform-plugin-framework-validators {{.ValidatorsVersion}}
 	github.com/hashicorp/terraform-plugin-go {{.PluginGoVersion}}
 	github.com/hashicorp/terraform-plugin-log {{.PluginLogVersion}}
 	github.com/hashicorp/terraform-plugin-testing {{.TestingVersion}}

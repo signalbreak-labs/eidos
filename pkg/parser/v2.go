@@ -818,14 +818,14 @@ func parseSchema(node Node) (*Schema, []Diagnostic) {
 		Title:            v2ScalarString(findEntryValue(m, "title"), "schema.title", &diags),
 		Description:      v2ScalarString(findEntryValue(m, "description"), "schema.description", &diags),
 		Default:          nodeToNative(findEntryValue(m, "default")),
-		MultipleOf:       v2ScalarFloat(findEntryValue(m, "multipleOf"), "schema.multipleOf", &diags),
-		Maximum:          v2ScalarFloat(findEntryValue(m, "maximum"), "schema.maximum", &diags),
-		Minimum:          v2ScalarFloat(findEntryValue(m, "minimum"), "schema.minimum", &diags),
-		MaxLength:        v2ScalarInt(findEntryValue(m, "maxLength"), "schema.maxLength", &diags),
-		MinLength:        v2ScalarInt(findEntryValue(m, "minLength"), "schema.minLength", &diags),
+		MultipleOf:       v2ScalarFloatPtr(findEntryValue(m, "multipleOf"), "schema.multipleOf", &diags),
+		Maximum:          v2ScalarFloatPtr(findEntryValue(m, "maximum"), "schema.maximum", &diags),
+		Minimum:          v2ScalarFloatPtr(findEntryValue(m, "minimum"), "schema.minimum", &diags),
+		MaxLength:        v2ScalarIntPtr(findEntryValue(m, "maxLength"), "schema.maxLength", &diags),
+		MinLength:        v2ScalarIntPtr(findEntryValue(m, "minLength"), "schema.minLength", &diags),
 		Pattern:          v2ScalarString(findEntryValue(m, "pattern"), "schema.pattern", &diags),
-		MaxItems:         v2ScalarInt(findEntryValue(m, "maxItems"), "schema.maxItems", &diags),
-		MinItems:         v2ScalarInt(findEntryValue(m, "minItems"), "schema.minItems", &diags),
+		MaxItems:         v2ScalarIntPtr(findEntryValue(m, "maxItems"), "schema.maxItems", &diags),
+		MinItems:         v2ScalarIntPtr(findEntryValue(m, "minItems"), "schema.minItems", &diags),
 		UniqueItems:      v2ScalarBool(findEntryValue(m, "uniqueItems"), "schema.uniqueItems", &diags),
 		MaxProperties:    v2ScalarInt(findEntryValue(m, "maxProperties"), "schema.maxProperties", &diags),
 		MinProperties:    v2ScalarInt(findEntryValue(m, "minProperties"), "schema.minProperties", &diags),
@@ -1539,6 +1539,26 @@ func v2ScalarFloat(n Node, path string, diags *[]Diagnostic) float64 {
 		*diags = append(*diags, v2ScalarTypeMismatchDiag(n, path, "number"))
 	}
 	return v
+}
+
+// v2ScalarFloatPtr and v2ScalarIntPtr wrap the scalar parsers so schema
+// constraints can distinguish a declared 0 bound from an absent one (G39):
+// nil node → nil pointer, otherwise a pointer to the parsed value (0
+// included).
+func v2ScalarFloatPtr(n Node, path string, diags *[]Diagnostic) *float64 {
+	if n == nil {
+		return nil
+	}
+	v := v2ScalarFloat(n, path, diags)
+	return &v
+}
+
+func v2ScalarIntPtr(n Node, path string, diags *[]Diagnostic) *int {
+	if n == nil {
+		return nil
+	}
+	v := v2ScalarInt(n, path, diags)
+	return &v
 }
 
 // swaggerVersion extracts the top-level Swagger 2.0 "swagger" version field. The

@@ -391,13 +391,21 @@ func requestBodyAttributes(spec SchemaSpec, diags *diagnostics.Diagnostics) []ir
 func schemaIRFromSpec(spec SchemaSpec) ir.SchemaIR {
 	switch strings.ToLower(strings.TrimSpace(spec.Type)) {
 	case "string":
-		return ir.SchemaIR{Type: ir.TypeString, Format: spec.Format}
+		s := ir.SchemaIR{Type: ir.TypeString, Format: spec.Format}
+		applyScalarConstraints(&s, spec)
+		return s
 	case "integer":
-		return ir.SchemaIR{Type: ir.TypeInt}
+		s := ir.SchemaIR{Type: ir.TypeInt}
+		applyScalarConstraints(&s, spec)
+		return s
 	case "number":
-		return ir.SchemaIR{Type: ir.TypeFloat}
+		s := ir.SchemaIR{Type: ir.TypeFloat}
+		applyScalarConstraints(&s, spec)
+		return s
 	case "boolean":
-		return ir.SchemaIR{Type: ir.TypeBool}
+		s := ir.SchemaIR{Type: ir.TypeBool}
+		applyScalarConstraints(&s, spec)
+		return s
 	case "array":
 		// Map an array body/property to a collection attribute, honoring
 		// uniqueItems as a Set. Elements are mapped with the same shallow mapper
@@ -411,7 +419,9 @@ func schemaIRFromSpec(spec SchemaSpec) ir.SchemaIR {
 		if spec.UniqueItems {
 			kind = ir.Set
 		}
-		return ir.SchemaIR{Collection: &ir.CollectionType{Kind: kind, ElementType: schemaIRFromSpec(*spec.Items)}}
+		s := ir.SchemaIR{Collection: &ir.CollectionType{Kind: kind, ElementType: schemaIRFromSpec(*spec.Items)}}
+		applyScalarConstraints(&s, spec)
+		return s
 	case "object", "":
 		// Map an object body/property to nested attributes (SingleNestedAttribute)
 		// or a map (MapNestedAttribute/MapAttribute) instead of degrading to a
@@ -425,7 +435,9 @@ func schemaIRFromSpec(spec SchemaSpec) ir.SchemaIR {
 		}
 		if spec.AdditionalProperties != nil {
 			elem := schemaIRFromSpec(*spec.AdditionalProperties)
-			return ir.SchemaIR{Collection: &ir.CollectionType{Kind: ir.Map, ElementType: elem}}
+			s := ir.SchemaIR{Collection: &ir.CollectionType{Kind: ir.Map, ElementType: elem}}
+			applyScalarConstraints(&s, spec)
+			return s
 		}
 		return ir.SchemaIR{Type: ir.TypeDynamic}
 	default:

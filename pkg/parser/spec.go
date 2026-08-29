@@ -477,22 +477,25 @@ type ExternalDocs struct {
 // Schema corresponds to the OpenAPI / JSON Schema object.
 // It carries the union of fields used across OpenAPI 2.0, 3.0.x, and 3.1.x.
 type Schema struct {
-	Ref                   string              `json:"$ref,omitempty"`
-	Type                  any                 `json:"type,omitempty"`
-	Format                string              `json:"format,omitempty"`
-	Title                 string              `json:"title,omitempty"`
-	Description           string              `json:"description,omitempty"`
-	Default               any                 `json:"default,omitempty"`
-	MultipleOf            float64             `json:"multipleOf,omitempty"`
-	Maximum               float64             `json:"maximum,omitempty"`
+	Ref         string `json:"$ref,omitempty"`
+	Type        any    `json:"type,omitempty"`
+	Format      string `json:"format,omitempty"`
+	Title       string `json:"title,omitempty"`
+	Description string `json:"description,omitempty"`
+	Default     any    `json:"default,omitempty"`
+	// Numeric and size constraints are pointers so a declared bound of 0 is
+	// distinct from an absent one: `minimum: 0` genuinely forbids negative
+	// values and must survive the trip to the generated validators (G39).
+	MultipleOf            *float64            `json:"multipleOf,omitempty"`
+	Maximum               *float64            `json:"maximum,omitempty"`
 	ExclusiveMaximum      any                 `json:"exclusiveMaximum,omitempty"`
-	Minimum               float64             `json:"minimum,omitempty"`
+	Minimum               *float64            `json:"minimum,omitempty"`
 	ExclusiveMinimum      any                 `json:"exclusiveMinimum,omitempty"`
-	MaxLength             int                 `json:"maxLength,omitempty"`
-	MinLength             int                 `json:"minLength,omitempty"`
+	MaxLength             *int                `json:"maxLength,omitempty"`
+	MinLength             *int                `json:"minLength,omitempty"`
 	Pattern               string              `json:"pattern,omitempty"`
-	MaxItems              int                 `json:"maxItems,omitempty"`
-	MinItems              int                 `json:"minItems,omitempty"`
+	MaxItems              *int                `json:"maxItems,omitempty"`
+	MinItems              *int                `json:"minItems,omitempty"`
 	UniqueItems           bool                `json:"uniqueItems,omitempty"`
 	MaxProperties         int                 `json:"maxProperties,omitempty"`
 	MinProperties         int                 `json:"minProperties,omitempty"`

@@ -48,13 +48,21 @@ func schemaIRFromSpecRecursive(spec SchemaSpec) ir.SchemaIR {
 	}
 	switch strings.ToLower(strings.TrimSpace(spec.Type)) {
 	case "string":
-		return ir.SchemaIR{Type: ir.TypeString, Format: spec.Format}
+		s := ir.SchemaIR{Type: ir.TypeString, Format: spec.Format}
+		applyScalarConstraints(&s, spec)
+		return s
 	case "integer":
-		return ir.SchemaIR{Type: ir.TypeInt, Format: spec.Format}
+		s := ir.SchemaIR{Type: ir.TypeInt, Format: spec.Format}
+		applyScalarConstraints(&s, spec)
+		return s
 	case "number":
-		return ir.SchemaIR{Type: ir.TypeFloat, Format: spec.Format}
+		s := ir.SchemaIR{Type: ir.TypeFloat, Format: spec.Format}
+		applyScalarConstraints(&s, spec)
+		return s
 	case "boolean":
-		return ir.SchemaIR{Type: ir.TypeBool}
+		s := ir.SchemaIR{Type: ir.TypeBool}
+		applyScalarConstraints(&s, spec)
+		return s
 	case "array":
 		if spec.Items == nil {
 			return ir.SchemaIR{Type: ir.TypeDynamic}
@@ -64,18 +72,44 @@ func schemaIRFromSpecRecursive(spec SchemaSpec) ir.SchemaIR {
 		if spec.UniqueItems {
 			kind = ir.Set
 		}
-		return ir.SchemaIR{Collection: &ir.CollectionType{Kind: kind, ElementType: elem}}
+		s := ir.SchemaIR{Collection: &ir.CollectionType{Kind: kind, ElementType: elem}}
+		applyScalarConstraints(&s, spec)
+		return s
 	case "object", "":
 		if len(spec.Properties) > 0 {
 			return ir.SchemaIR{Attributes: nestedAttributesFromSpec(spec)}
 		}
 		if spec.AdditionalProperties != nil {
 			elem := schemaIRFromSpecRecursive(*spec.AdditionalProperties)
-			return ir.SchemaIR{Collection: &ir.CollectionType{Kind: ir.Map, ElementType: elem}}
+			s := ir.SchemaIR{Collection: &ir.CollectionType{Kind: ir.Map, ElementType: elem}}
+			applyScalarConstraints(&s, spec)
+			return s
 		}
 		return ir.SchemaIR{Type: ir.TypeDynamic}
 	}
 	return ir.SchemaIR{Type: ir.TypeDynamic}
+}
+
+// applyScalarConstraints copies the scalar constraints carried on a SchemaSpec
+// (populated from the parser's schema by applyConstraintsFromParser) onto the
+// converted ir.SchemaIR so the generator can emit framework validators
+// (OneOf/Between/LengthBetween/RegexMatches and the custom
+// exclusive-bound/multipleOf validators). Without this copy every constraint
+// declared on a property or array element is silently dropped during
+// SchemaSpec→SchemaIR conversion (G39).
+func applyScalarConstraints(s *ir.SchemaIR, spec SchemaSpec) {
+	s.EnumValues = spec.Enum
+	s.Const = spec.Const
+	s.Pattern = spec.Pattern
+	s.MinLength = spec.MinLength
+	s.MaxLength = spec.MaxLength
+	s.Minimum = spec.Minimum
+	s.Maximum = spec.Maximum
+	s.ExclusiveMinimum = spec.ExclusiveMinimum
+	s.ExclusiveMaximum = spec.ExclusiveMaximum
+	s.MultipleOf = spec.MultipleOf
+	s.MinItems = spec.MinItems
+	s.MaxItems = spec.MaxItems
 }
 
 // nestedAttributesFromSpec builds the nested attribute list for an object-typed

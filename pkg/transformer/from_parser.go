@@ -720,6 +720,63 @@ func schemaSpecFromParser(spec *parser.Spec, s *parser.Schema, diags *diagnostic
 	return schemaSpecFromParserDepth(spec, s, 0, 0, nil, make(schemaMemo), diags)
 }
 
+// applyConstraintsFromParser copies the scalar constraints (enum, const,
+// pattern, length/bounds, multipleOf, collection sizes) from a parser.Schema
+// onto a SchemaSpec so they survive into the ir.SchemaIR and the generated
+// provider's validators. Without it, every enum/bound declared in a spec is
+// silently dropped during conversion (G39).
+//
+// The parser's numeric and size bounds are pointers, so a declared bound of 0
+// (e.g. `minimum: 0`, which genuinely forbids negative values) is preserved.
+// OpenAPI 3.0's boolean exclusiveMinimum/exclusiveMaximum are normalized to
+// their 2020-12 numeric form: the flag migrates the sibling minimum/maximum
+// into the exclusive field instead of setting both (which would emit
+// contradictory validators).
+func applyConstraintsFromParser(out *SchemaSpec, s *parser.Schema) {
+	if s == nil {
+		return
+	}
+	if len(s.Enum) > 0 {
+		out.Enum = append([]any(nil), s.Enum...)
+	}
+	if s.Const != nil {
+		c := s.Const
+		out.Const = &c
+	}
+	out.Pattern = s.Pattern
+	out.MinLength = s.MinLength
+	out.MaxLength = s.MaxLength
+	out.MinItems = s.MinItems
+	out.MaxItems = s.MaxItems
+	out.Minimum = s.Minimum
+	out.Maximum = s.Maximum
+	switch v := s.ExclusiveMinimum.(type) {
+	case bool:
+		// OpenAPI 3.0: the flag makes the sibling minimum exclusive. Migrating
+		// the bound clears the inclusive field so the generator emits only the
+		// exclusive validator.
+		if v && s.Minimum != nil {
+			out.ExclusiveMinimum = s.Minimum
+			out.Minimum = nil
+		}
+	case float64:
+		out.ExclusiveMinimum = &v
+	}
+	switch v := s.ExclusiveMaximum.(type) {
+	case bool:
+		if v && s.Maximum != nil {
+			out.ExclusiveMaximum = s.Maximum
+			out.Maximum = nil
+		}
+	case float64:
+		out.ExclusiveMaximum = &v
+	}
+	if s.MultipleOf != nil {
+		v := *s.MultipleOf
+		out.MultipleOf = &v
+	}
+}
+
 // schemaSpecFromParserDepth converts a parser.Schema into a SchemaSpec, recursing
 // into items, object properties, and additionalProperties. A nested schema that
 // is itself a $ref is resolved against spec.Components before descent (via
@@ -761,13 +818,15 @@ func schemaSpecFromParserDepth(spec *parser.Spec, s *parser.Schema, depth, cycle
 			// added to the visited set: cycleDepth is the only path-varying
 			// dimension, which keeps the (schema, cycleDepth) memo sound.
 			if cycleDepth >= maxCyclicDepth {
-				return &SchemaSpec{
+				cut := &SchemaSpec{
 					Type:        schemaTypeString(s.Type),
 					Description: s.Description,
 					Format:      s.Format,
 					Nullable:    s.Nullable,
 					RefName:     refName,
 				}
+				applyConstraintsFromParser(cut, s)
+				return cut
 			}
 			resolved := resolveSchemaRef(spec, s)
 			out := schemaSpecFromParserDepth(spec, resolved, depth+1, cycleDepth+1, visited, memo, diags)
@@ -784,13 +843,15 @@ func schemaSpecFromParserDepth(spec *parser.Spec, s *parser.Schema, depth, cycle
 		// nesting. Treat the boundary as opaque (scalar fields only, no descent),
 		// matching the Opaque handling below.
 		if visited[s.Ref] {
-			return &SchemaSpec{
+			cut := &SchemaSpec{
 				Type:        schemaTypeString(s.Type),
 				Description: s.Description,
 				Format:      s.Format,
 				Nullable:    s.Nullable,
 				RefName:     refName,
 			}
+			applyConstraintsFromParser(cut, s)
+			return cut
 		}
 		// Copy the path-local visited set and add this ref so descendants see it,
 		// without mutating the set shared with sibling properties.
@@ -812,12 +873,14 @@ func schemaSpecFromParserDepth(spec *parser.Spec, s *parser.Schema, depth, cycle
 	// bare $ref that closes a cycle) is an opaque boundary too: keep its scalar
 	// fields but do not descend, which would recurse forever (M-41).
 	if s.Opaque {
-		return &SchemaSpec{
+		cut := &SchemaSpec{
 			Type:        schemaTypeString(s.Type),
 			Description: s.Description,
 			Format:      s.Format,
 			Nullable:    s.Nullable,
 		}
+		applyConstraintsFromParser(cut, s)
+		return cut
 	}
 	// A non-ref schema is converted once per (schema, cycleDepth) and memoized:
 	// the schema graph is a DAG whose shared sub-schemas would otherwise be
@@ -858,6 +921,7 @@ func schemaSpecFromParserDepthInner(spec *parser.Spec, s *parser.Schema, depth, 
 		ReadOnly:    s.ReadOnly,
 		Required:    s.Required,
 	}
+	applyConstraintsFromParser(out, s)
 	// A depth backstop keeps a pathologically deep (non-cyclic) schema from
 	// stack-overflowing; the Opaque/visited/cycleDepth guards above handle
 	// cycles.

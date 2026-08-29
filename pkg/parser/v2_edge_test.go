@@ -487,7 +487,7 @@ func TestConvertV2Edge_SchemaMetadata(t *testing.T) {
 	if len(pet.Enum) != 3 {
 		t.Errorf("pet enum = %v", pet.Enum)
 	}
-	if pet.MultipleOf != 0.5 || pet.Maximum != 10 || pet.Minimum != 0 {
+	if pet.MultipleOf == nil || *pet.MultipleOf != 0.5 || pet.Maximum == nil || *pet.Maximum != 10 || pet.Minimum == nil || *pet.Minimum != 0 {
 		t.Errorf("pet numeric bounds = %v/%v/%v", pet.MultipleOf, pet.Maximum, pet.Minimum)
 	}
 	if pet.Properties["owner"] == nil || pet.Properties["owner"].Ref != "#/definitions/Owner" {
@@ -537,7 +537,7 @@ func TestConvertV2Edge_CompositeEdges(t *testing.T) {
 	if thing.Contains == nil || thing.Contains.Type != "string" {
 		t.Errorf("thing contains = %+v", thing.Contains)
 	}
-	if thing.PropertyNames == nil || thing.PropertyNames.MaxLength != 10 {
+	if thing.PropertyNames == nil || thing.PropertyNames.MaxLength == nil || *thing.PropertyNames.MaxLength != 10 {
 		t.Errorf("thing propertyNames = %+v", thing.PropertyNames)
 	}
 	if len(thing.PrefixItems) != 1 || thing.PrefixItems[0].Type != "string" {

@@ -53,7 +53,7 @@
     {
       "path": "go.mod",
       "reason": "Go module definition",
-      "body_hash": "96d0c1654c9157f8"
+      "body_hash": "9d3856e494ebc01b"
     },
     {
       "path": "internal/client/client.go",

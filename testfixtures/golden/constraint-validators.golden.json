@@ -3,12 +3,12 @@
     {
       "path": ".github/workflows/release.yml",
       "reason": "GitHub Actions release workflow",
-      "body_hash": "bd287ed351132df3"
+      "body_hash": "14eca6b1c51c64e2"
     },
     {
       "path": ".goreleaser.yml",
       "reason": "GoReleaser release configuration",
-      "body_hash": "bafa50779cdb3e56"
+      "body_hash": "bee89ba75ee0f8dd"
     },
     {
       "path": "GNUmakefile",
@@ -18,52 +18,42 @@
     {
       "path": "README.md",
       "reason": "provider overview and usage guide",
-      "body_hash": "fe2d18d7c2cc85e3"
-    },
-    {
-      "path": "docs/actions/create_shipment.md",
-      "reason": "documentation for action create_shipment",
-      "body_hash": "ab1f3ca84d15770c"
-    },
-    {
-      "path": "docs/data-sources/get_shipment.md",
-      "reason": "documentation for data source get_shipment",
-      "body_hash": "b8bf81895604406c"
+      "body_hash": "f2cdb1df2ddc6625"
     },
     {
       "path": "docs/index.md",
       "reason": "provider overview and authentication guide",
-      "body_hash": "dd684762bc7b0406"
+      "body_hash": "257f593362440286"
     },
     {
-      "path": "examples/actions/create_shipment/action.tf",
-      "reason": "example for action create_shipment",
-      "body_hash": "c89298d9e42c1a1f"
+      "path": "docs/resources/widget.md",
+      "reason": "documentation for resource widget",
+      "body_hash": "2a2c8479fb1d0054"
     },
     {
-      "path": "examples/data-sources/get_shipment/data-source.tf",
-      "reason": "example for data source get_shipment",
-      "body_hash": "380abc58eca151fe"
+      "path": "examples/resources/widget/resource.tf",
+      "reason": "example for resource widget",
+      "body_hash": "c00acecc65081d44"
     },
     {
       "path": "generator.yaml",
       "reason": "generated generator configuration",
-      "body_hash": "34f42c703ede4d26"
+      "body_hash": "84235e8e326ce97b"
     },
     {
       "path": "go.mod",
       "reason": "Go module definition",
-      "body_hash": "d01f72e48f16dbb9"
+      "body_hash": "10c21e79737f5e6d"
     },
     {
       "path": "internal/client/client.go",
       "reason": "generated HTTP client",
-      "body_hash": "8d49aecbcffa7f8d"
+      "body_hash": "eb18017a1beb2ffd"
     },
     {
       "path": "internal/client/client_test.go",
       "reason": "generated HTTP client unit tests",
-      "body_hash": "269234701b828124"
+      "body_hash": "d4ba29c4c7fb8a9e"
     },
     {
       "path": "internal/client/errors.go",
@@ -96,49 +86,44 @@
       "body_hash": "bf53c919903fb008"
     },
     {
-      "path": "internal/provider/action_create_shipment.go",
-      "reason": "action all-of-nesting-api_create_shipment",
-      "body_hash": "105be40a48e74398"
-    },
-    {
-      "path": "internal/provider/action_create_shipment_remote_test.go",
-      "reason": "coverage tests for action create_shipment remote helper",
-      "body_hash": "37b49eb028d46f47"
-    },
-    {
-      "path": "internal/provider/data_source_get_shipment.go",
-      "reason": "data source all-of-nesting-api_get_shipment",
-      "body_hash": "7ffe36fb1ffe1f07"
-    },
-    {
-      "path": "internal/provider/data_source_get_shipment_remote_test.go",
-      "reason": "coverage tests for data source get_shipment remote helpers",
-      "body_hash": "dc984ed273d72d47"
-    },
-    {
-      "path": "internal/provider/data_source_get_shipment_test.go",
-      "reason": "unit tests for data source get_shipment",
-      "body_hash": "d86cb199e584e879"
-    },
-    {
       "path": "internal/provider/json_convert.go",
       "reason": "JSON/model conversion helpers for wired CRUD bodies",
-      "body_hash": "7d1a1dadb3465fb8"
+      "body_hash": "2e5c42d5708d0aa8"
     },
     {
       "path": "internal/provider/provider.go",
       "reason": "provider schema and registration",
-      "body_hash": "3f34a6dc62779549"
+      "body_hash": "38346fdcc3db5fba"
     },
     {
       "path": "internal/provider/provider_test.go",
       "reason": "provider-level unit tests",
-      "body_hash": "97a3877fadd92113"
+      "body_hash": "d6efbf6b9f104561"
+    },
+    {
+      "path": "internal/provider/resource_widget.go",
+      "reason": "resource constraint-api_widget",
+      "body_hash": "3015902d12aee864"
+    },
+    {
+      "path": "internal/provider/resource_widget_acceptance_test.go",
+      "reason": "acceptance tests for resource widget",
+      "body_hash": "7a06e1ed06acfbb4"
+    },
+    {
+      "path": "internal/provider/resource_widget_remote_test.go",
+      "reason": "coverage tests for resource widget remote helpers",
+      "body_hash": "ba96000479c4feaa"
+    },
+    {
+      "path": "internal/provider/resource_widget_test.go",
+      "reason": "unit tests for resource widget",
+      "body_hash": "556840b6b745c4a5"
     },
     {
       "path": "internal/provider/testing_helpers_test.go",
       "reason": "shared httptest helpers for coverage tests",
-      "body_hash": "b11c7dffd4fbe18a"
+      "body_hash": "f1de2f9edaa34d7e"
     },
     {
       "path": "internal/provider/validators.go",
@@ -148,12 +133,15 @@
     {
       "path": "main.go",
       "reason": "provider server entrypoint",
-      "body_hash": "0fab34c2fcdd6bfa"
+      "body_hash": "8e2740562f4fe9a4"
     },
     {
       "path": "terraform-registry-manifest.json",
       "reason": "Terraform Registry manifest",
       "body_hash": "76ac85aa7f3a523b"
     }
+  ],
+  "warnings": [
+    "import suppressed: import target is computed-only"
   ]
 }

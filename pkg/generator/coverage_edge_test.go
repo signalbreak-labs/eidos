@@ -15,15 +15,17 @@ import (
 
 // TestNewBuildVersions asserts NewBuildVersions populates every field with the
 // pinned package default, including the framework-timeouts version added for
-// the M-14 timeouts wiring.
+// the M-14 timeouts wiring and the framework-validators version added for the
+// G39 standard validators wiring.
 func TestNewBuildVersions(t *testing.T) {
 	v := NewBuildVersions()
 	want := BuildVersions{
-		FrameworkVersion: TerraformPluginFrameworkVersion,
-		PluginGoVersion:  TerraformPluginGoVersion,
-		PluginLogVersion: TerraformPluginLogVersion,
-		TestingVersion:   TerraformPluginTestingVersion,
-		TimeoutsVersion:  TerraformPluginFrameworkTimeoutsVersion,
+		FrameworkVersion:  TerraformPluginFrameworkVersion,
+		PluginGoVersion:   TerraformPluginGoVersion,
+		PluginLogVersion:  TerraformPluginLogVersion,
+		TestingVersion:    TerraformPluginTestingVersion,
+		TimeoutsVersion:   TerraformPluginFrameworkTimeoutsVersion,
+		ValidatorsVersion: TerraformPluginFrameworkValidatorsVersion,
 	}
 	if v != want {
 		t.Errorf("NewBuildVersions() = %+v, want %+v", v, want)
