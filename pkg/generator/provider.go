@@ -1467,6 +1467,9 @@ func modelFieldTags(attr ir.AttributeIR) string {
 	if attr.WireName != "" && attr.WireName != attr.Name {
 		tags += fmt.Sprintf(" json:%q", attr.WireName)
 	}
+	if attr.WirePath != "" {
+		tags += fmt.Sprintf(" jsonpath:%q", attr.WirePath)
+	}
 	return tags
 }
 

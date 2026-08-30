@@ -361,6 +361,9 @@ func ManagedResourceSchemaWithDiagnostics(c ResourceCRUD, diags *diagnostics.Dia
 		requestSpec = c.Create.RequestSchema
 	}
 	requestSpec = mergeUpdateRequestSpec(requestSpec, c.Update)
+	var wirePaths map[string]string
+	var ambiguousNested map[string]bool
+	stateSpec, requestSpec, wirePaths, ambiguousNested = promoteNestedPathParameters(stateSpec, requestSpec, c, diags)
 	formData := createFormDataParams(c.Create)
 	requestProps, requestRequired := requestPropertySets(requestSpec, formData)
 
@@ -396,6 +399,7 @@ func ManagedResourceSchemaWithDiagnostics(c ResourceCRUD, diags *diagnostics.Dia
 		attr := ir.AttributeIR{
 			Name:        snake,
 			WireName:    name,
+			WirePath:    wirePaths[name],
 			Schema:      schemaIRFromSpecRecursive(prop),
 			Description: prop.Description,
 		}
@@ -455,7 +459,7 @@ func ManagedResourceSchemaWithDiagnostics(c ResourceCRUD, diags *diagnostics.Dia
 				break
 			}
 		}
-		if !alreadyPresent {
+		if !alreadyPresent && !ambiguousNested[idAttribute] {
 			// Prefer a practitioner-supplied identifier over the synthetic
 			// placeholder (see resolveIdentifierAttribute). skipUserSettableID (an
 			// explicit id_attribute/import_format override) disables the preference
@@ -481,6 +485,211 @@ func ManagedResourceSchemaWithDiagnostics(c ResourceCRUD, diags *diagnostics.Dia
 
 	sort.Slice(attrs, func(i, j int) bool { return attrs[i].Name < attrs[j].Name })
 	return ir.ObjectSchemaIR{Attributes: attrs}, resolvedID
+}
+
+type nestedPathPromotion struct {
+	parent string
+	child  string
+}
+
+// promoteNestedPathParameters promotes a primitive response property nested
+// one object level below the resource into a top-level Terraform attribute when
+// it uniquely matches a path parameter. The generated JSON mapper uses the
+// returned wire path to keep request and response payloads nested on the API
+// wire. Existing top-level properties win, and ambiguous nested matches are
+// warned and left unpromoted so path substitution cannot guess.
+func promoteNestedPathParameters(stateSpec, requestSpec *SchemaSpec, c ResourceCRUD, diags *diagnostics.Diagnostics) (*SchemaSpec, *SchemaSpec, map[string]string, map[string]bool) {
+	if stateSpec == nil || len(stateSpec.Properties) == 0 {
+		return stateSpec, requestSpec, nil, nil
+	}
+
+	topLevel := make(map[string]bool, len(stateSpec.Properties))
+	for name := range stateSpec.Properties {
+		topLevel[SanitizeAttributeName(name)] = true
+	}
+
+	parents := make([]string, 0, len(stateSpec.Properties))
+	for name := range stateSpec.Properties {
+		parents = append(parents, name)
+	}
+	sort.Strings(parents)
+
+	promotions := map[string]nestedPathPromotion{}
+	ambiguous := map[string]bool{}
+	for _, param := range resourcePathParameterNames(c) {
+		attrName := SanitizeAttributeName(param)
+		if topLevel[attrName] {
+			continue
+		}
+
+		var candidates []nestedPathPromotion
+		for _, parent := range parents {
+			wrapper := stateSpec.Properties[parent]
+			children := make([]string, 0, len(wrapper.Properties))
+			for child := range wrapper.Properties {
+				children = append(children, child)
+			}
+			sort.Strings(children)
+			for _, child := range children {
+				if SanitizeAttributeName(child) != attrName || !primitiveSchemaSpec(wrapper.Properties[child]) {
+					continue
+				}
+				candidates = append(candidates, nestedPathPromotion{parent: parent, child: child})
+			}
+		}
+
+		switch len(candidates) {
+		case 1:
+			promotions[attrName] = candidates[0]
+		case 0:
+			continue
+		default:
+			ambiguous[attrName] = true
+			if diags == nil {
+				continue
+			}
+			paths := make([]string, 0, len(candidates))
+			for _, candidate := range candidates {
+				paths = append(paths, candidate.parent+"."+candidate.child)
+			}
+			*diags = diags.Append(diagnostics.Diagnostic{
+				Severity: diagnostics.Warning,
+				Summary:  "ambiguous nested path parameter",
+				Detail: fmt.Sprintf(
+					"path parameter %q matches multiple one-level response properties (%s); none was promoted, so generated CRUD will remain unwired unless an explicit top-level identity is provided",
+					param, strings.Join(paths, ", "),
+				),
+			})
+		}
+	}
+	if len(promotions) == 0 {
+		return stateSpec, requestSpec, nil, ambiguous
+	}
+
+	wirePaths := make(map[string]string, len(promotions))
+	for _, promotion := range promotions {
+		wirePaths[promotion.child] = promotion.parent
+	}
+	return promoteNestedProperties(stateSpec, promotions), promoteNestedProperties(requestSpec, promotions), wirePaths, ambiguous
+}
+
+func resourcePathParameterNames(c ResourceCRUD) []string {
+	names := make(map[string]string, len(c.ID.ParameterNames))
+	for _, name := range c.ID.ParameterNames {
+		names[SanitizeAttributeName(name)] = name
+	}
+	for _, op := range []*Operation{c.Create, c.Read, c.Update, c.Delete} {
+		if op == nil {
+			continue
+		}
+		for _, param := range op.Parameters {
+			if strings.EqualFold(param.In, "path") {
+				names[SanitizeAttributeName(param.Name)] = param.Name
+			}
+		}
+	}
+	keys := make([]string, 0, len(names))
+	for key := range names {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	out := make([]string, 0, len(keys))
+	for _, key := range keys {
+		out = append(out, names[key])
+	}
+	return out
+}
+
+func primitiveSchemaSpec(spec SchemaSpec) bool {
+	mapped := schemaIRFromSpecRecursive(spec)
+	if mapped.Collection != nil || mapped.Union != nil || len(mapped.Attributes) > 0 || len(mapped.Blocks) > 0 {
+		return false
+	}
+	switch mapped.Type {
+	case ir.TypeString, ir.TypeInt, ir.TypeFloat, ir.TypeBool:
+		return true
+	default:
+		return false
+	}
+}
+
+func promoteNestedProperties(spec *SchemaSpec, promotions map[string]nestedPathPromotion) *SchemaSpec {
+	if spec == nil {
+		return nil
+	}
+	out := *spec
+	out.Required = append([]string(nil), spec.Required...)
+	out.Properties = make(map[string]SchemaSpec, len(spec.Properties)+len(promotions))
+	for name, prop := range spec.Properties {
+		out.Properties[name] = prop
+	}
+
+	keys := make([]string, 0, len(promotions))
+	for key := range promotions {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		promotion := promotions[key]
+		wrapper, ok := out.Properties[promotion.parent]
+		if !ok {
+			continue
+		}
+		child, ok := wrapper.Properties[promotion.child]
+		if !ok {
+			continue
+		}
+
+		wrapper.Properties = cloneSchemaProperties(wrapper.Properties)
+		wrapper.Required = append([]string(nil), wrapper.Required...)
+		delete(wrapper.Properties, promotion.child)
+		wrapper.Required = removeRequiredName(wrapper.Required, promotion.child)
+		out.Properties[promotion.child] = child
+		if requiredName(out.Required, promotion.parent) && requiredName(spec.Properties[promotion.parent].Required, promotion.child) {
+			out.Required = appendRequiredName(out.Required, promotion.child)
+		}
+		if len(wrapper.Properties) == 0 && wrapper.AdditionalProperties == nil && len(wrapper.OneOf) == 0 && len(wrapper.AnyOf) == 0 {
+			delete(out.Properties, promotion.parent)
+			out.Required = removeRequiredName(out.Required, promotion.parent)
+		} else {
+			out.Properties[promotion.parent] = wrapper
+		}
+	}
+	return &out
+}
+
+func cloneSchemaProperties(properties map[string]SchemaSpec) map[string]SchemaSpec {
+	out := make(map[string]SchemaSpec, len(properties))
+	for name, prop := range properties {
+		out[name] = prop
+	}
+	return out
+}
+
+func requiredName(required []string, name string) bool {
+	for _, candidate := range required {
+		if candidate == name {
+			return true
+		}
+	}
+	return false
+}
+
+func appendRequiredName(required []string, name string) []string {
+	if requiredName(required, name) {
+		return required
+	}
+	return append(required, name)
+}
+
+func removeRequiredName(required []string, name string) []string {
+	out := required[:0]
+	for _, candidate := range required {
+		if candidate != name {
+			out = append(out, candidate)
+		}
+	}
+	return out
 }
 
 // resolveIdentifierAttribute decides how a resource whose response lacks an

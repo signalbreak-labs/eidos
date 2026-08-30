@@ -70,11 +70,42 @@ func modelToJSONMap(model any) (map[string]any, error) {
 			return nil, fmt.Errorf("attribute %q: %w", name, err)
 		}
 		if keep {
+			{{ if .IncludeWirePath -}}
+			putJSONValue(out, t.Field(i).Tag.Get("jsonpath"), wire, converted)
+			{{ else -}}
 			out[wire] = converted
+			{{ end -}}
 		}
 	}
 	return out, nil
 }
+
+{{ if .IncludeWirePath -}}
+// putJSONValue writes an ordinary top-level API field or a managed-resource
+// path parameter promoted from one nested object. Map values are merged so a
+// retained wrapper attribute and its promoted identity fields can share the
+// same wire object regardless of generated struct-field order.
+func putJSONValue(out map[string]any, parent, name string, value any) {
+	if parent == "" {
+		if incoming, ok := value.(map[string]any); ok {
+			if existing, ok := out[name].(map[string]any); ok {
+				for key, nested := range incoming {
+					existing[key] = nested
+				}
+				return
+			}
+		}
+		out[name] = value
+		return
+	}
+	nested, ok := out[parent].(map[string]any)
+	if !ok {
+		nested = make(map[string]any)
+		out[parent] = nested
+	}
+	nested[name] = value
+}
+{{ end -}}
 
 // applyJSONToModel updates the fields of a generated Terraform model struct
 // from a decoded JSON object keyed by tfsdk attribute name. Keys absent from
@@ -102,10 +133,17 @@ func applyJSONToModel(model any, data map[string]any) error {
 		if wire == "" {
 			wire = name
 		}
+		{{ if .IncludeWirePath -}}
+		raw, ok, err := jsonFieldValue(data, t.Field(i).Tag.Get("jsonpath"), name, wire)
+		if err != nil {
+			return fmt.Errorf("attribute %q: %w", name, err)
+		}
+		{{ else -}}
 		raw, ok := data[name]
 		if !ok {
 			raw, ok = data[wire]
 		}
+		{{ end -}}
 		if !ok {
 			continue
 		}
@@ -140,6 +178,34 @@ func applyJSONToModel(model any, data map[string]any) error {
 	}
 	return nil
 }
+
+{{ if .IncludeWirePath -}}
+// jsonFieldValue reads an ordinary top-level API field or unwraps a field that
+// the managed-resource schema promoted from one nested object. A top-level
+// fallback keeps generated coverage fixtures and APIs that return either shape
+// compatible while nested wire data remains authoritative when present.
+func jsonFieldValue(data map[string]any, parent, name, wire string) (any, bool, error) {
+	if parent != "" {
+		if parentValue, exists := data[parent]; exists {
+			nested, ok := parentValue.(map[string]any)
+			if !ok {
+				return nil, false, fmt.Errorf("expected wire parent %q to be an object", parent)
+			}
+			if raw, ok := nested[name]; ok {
+				return raw, true, nil
+			}
+			if raw, ok := nested[wire]; ok {
+				return raw, true, nil
+			}
+		}
+	}
+	if raw, ok := data[name]; ok {
+		return raw, true, nil
+	}
+	raw, ok := data[wire]
+	return raw, ok, nil
+}
+{{ end -}}
 
 // attrValueToJSON converts a framework attribute value to a JSON-ready Go
 // value. The boolean result reports whether the value should be included in
