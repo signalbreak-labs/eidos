@@ -174,7 +174,7 @@ func writeTerraformTestProviderAttribute(h *hclBuilder, attr ir.AttributeIR) {
 		return
 	}
 
-	h.writeLinef("%s = %s", attr.Name, terraformTestPrimitiveValue(s.Type))
+	h.writeLinef("%s = %s", attr.Name, schemaExampleLiteral(s))
 }
 
 func writeTerraformTestProviderBody(h *hclBuilder, obj ir.ObjectSchemaIR) {
@@ -219,7 +219,7 @@ func writeTerraformTestResourceBody(h *hclBuilder, obj ir.ObjectSchemaIR, useVar
 		if useVars {
 			h.writeLinef("%s = var.%s", attr.Name, attr.Name)
 		} else {
-			h.writeLinef("%s = %s", attr.Name, terraformTestPrimitiveValue(attr.Schema.Type))
+			h.writeLinef("%s = %s", attr.Name, schemaExampleLiteral(attr.Schema))
 		}
 	}
 	for _, block := range obj.Blocks {
@@ -248,7 +248,7 @@ func writeTerraformTestResourceAttribute(h *hclBuilder, attr ir.AttributeIR) {
 		return
 	}
 
-	h.writeLinef("%s = %s", attr.Name, terraformTestPrimitiveValue(s.Type))
+	h.writeLinef("%s = %s", attr.Name, schemaExampleLiteral(s))
 }
 
 func writeTerraformTestResourceBlock(h *hclBuilder, block ir.BlockIR) {
@@ -267,7 +267,7 @@ func writeTerraformTestCollectionAttribute(h *hclBuilder, attr ir.AttributeIR, _
 	switch s.Collection.Kind {
 	case ir.List, ir.Set:
 		if schema.IsPrimitiveSchema(elem) {
-			h.writeLinef("%s = [ %s ]", attr.Name, terraformTestPrimitiveValue(elem.Type))
+			h.writeLinef("%s = [ %s ]", attr.Name, schemaExampleLiteral(elem))
 			return
 		}
 		if schema.IsObjectLike(elem) {
@@ -283,7 +283,7 @@ func writeTerraformTestCollectionAttribute(h *hclBuilder, attr ir.AttributeIR, _
 		if schema.IsPrimitiveSchema(elem) {
 			h.writeLinef("%s = {", attr.Name)
 			h.indent++
-			h.writeLinef("\"key\" = %s", terraformTestPrimitiveValue(elem.Type))
+			h.writeLinef("\"key\" = %s", schemaExampleLiteral(elem))
 			h.indent--
 			h.writeLinef("}")
 			return
@@ -367,7 +367,9 @@ func terraformTestPrimitiveTypeName(t ir.PrimitiveType) string {
 }
 
 // terraformTestVariableValue returns a concrete HCL literal suitable for the
-// variables block in a .tftest.hcl run block.
+// variables block in a .tftest.hcl run block. The literal honors the schema's
+// constraints so the variable values satisfy the validators emitted from the
+// same schema.
 func terraformTestVariableValue(attr ir.AttributeIR) string {
 	s := attr.Schema
 	if s.Collection != nil {
@@ -375,23 +377,16 @@ func terraformTestVariableValue(attr ir.AttributeIR) string {
 		switch s.Collection.Kind {
 		case ir.List, ir.Set:
 			if schema.IsPrimitiveSchema(elem) {
-				return fmt.Sprintf("[ %s ]", terraformTestPrimitiveValue(elem.Type))
+				return fmt.Sprintf("[ %s ]", schemaExampleLiteral(elem))
 			}
 		case ir.Map:
 			if schema.IsPrimitiveSchema(elem) {
-				return fmt.Sprintf("{ key = %s }", terraformTestPrimitiveValue(elem.Type))
+				return fmt.Sprintf("{ key = %s }", schemaExampleLiteral(elem))
 			}
 		}
 		return "[]"
 	}
-	return terraformTestPrimitiveValue(s.Type)
-}
-
-// terraformTestPrimitiveValue returns a deterministic placeholder literal for
-// a primitive HCL type. It delegates to primitiveExampleValue so the test
-// module and the generated examples always use the same placeholder values.
-func terraformTestPrimitiveValue(t ir.PrimitiveType) string {
-	return primitiveExampleValue(t)
+	return schemaExampleLiteral(s)
 }
 
 // terraformTestExpectedIDValue returns the HCL literal expected for the

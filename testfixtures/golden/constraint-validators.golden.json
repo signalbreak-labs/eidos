@@ -28,12 +28,12 @@
     {
       "path": "docs/resources/widget.md",
       "reason": "documentation for resource widget",
-      "body_hash": "2a2c8479fb1d0054"
+      "body_hash": "d5b6fab8c5582606"
     },
     {
       "path": "examples/resources/widget/resource.tf",
       "reason": "example for resource widget",
-      "body_hash": "c00acecc65081d44"
+      "body_hash": "0d458e1bdfa66cae"
     },
     {
       "path": "generator.yaml",
@@ -108,7 +108,7 @@
     {
       "path": "internal/provider/resource_widget_acceptance_test.go",
       "reason": "acceptance tests for resource widget",
-      "body_hash": "7a06e1ed06acfbb4"
+      "body_hash": "4f29ece2847659a5"
     },
     {
       "path": "internal/provider/resource_widget_remote_test.go",

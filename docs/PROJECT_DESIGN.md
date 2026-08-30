@@ -3234,6 +3234,18 @@ upstream constraint changes or a product decision is made.
   schema emitters do not call `AddValidators`, so no validators are emitted
   there yet; the constraints are not dropped silently at the IR level and the
   wiring is additive follow-up work.
+- **Pattern-constrained placeholders are best-effort.** Placeholder values in
+  generated configuration text (docs examples, acceptance-test configs,
+  `.tftest.hcl` modules) are derived from the same constraints the validators
+  come from (const, first enum member, bounds-clamped, length-adjusted), so a
+  generated config satisfies the generated validators by construction. A
+  `pattern` constraint is matched against a small deterministic candidate list
+  (`example`, `ABC-1`, `abc-1`, digits, …); when no candidate matches (e.g. a
+  UUID shape), the placeholder stays `"example"` and the pattern validator
+  rejects it at plan time — synthesizing an arbitrary regex match is out of
+  scope. An acceptance-test update step never varies an attribute whose
+  constraints (const, one-member enum, degenerate numeric range, or a pattern
+  admitting no second candidate) pin a single valid value.
 - **Nested `oneOf`/`anyOf`** (inside properties, collection elements) render as
   Dynamic attributes with a fail-loud `warnCompositionNotModeled` warning. The
   flat Terraform attribute model cannot represent alternatives, so the fallback

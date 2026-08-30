@@ -1,7 +1,6 @@
 package generator
 
 import (
-	"errors"
 	"fmt"
 	"go/ast"
 	"go/token"
@@ -14,12 +13,6 @@ import (
 	"github.com/signalbreak-labs/eidos/pkg/generator/internal/schema"
 	"github.com/signalbreak-labs/eidos/pkg/ir"
 )
-
-// ErrUnsupportedPrimitiveType is the sentinel panicked by acceptanceExampleValue
-// and updatedValue when given a PrimitiveType they do not recognize. It matches
-// the sentinel-wrapped panic style used elsewhere in the package (e.g. action.go)
-// rather than a bare string (L-27).
-var ErrUnsupportedPrimitiveType = errors.New("unsupported primitive type")
 
 // caseWithBody creates a switch case clause with the given case expressions and
 // body statements. It wraps astgen.CaseClause, which only accepts case values.
@@ -103,7 +96,7 @@ func generateResourceAcceptanceTestFile(pir ir.ProviderIR, r ir.ResourceIR, cfg 
 	configFuncName := "testAcc" + structName + "Config"
 	mockFuncName := "new" + structName + "MockServer"
 
-	paramAttr, paramType, hasParam := acceptanceParamAttribute(r)
+	paramAttr, paramCreate, paramUpdated, hasParam := acceptanceParamAttribute(r)
 	hasEndpoint := providerHasEndpointAttr(pir)
 	// The token URL placeholders are only injected when the provider config
 	// schema actually carries the attribute (the real pipeline merges the auth
@@ -163,7 +156,7 @@ func generateResourceAcceptanceTestFile(pir ir.ProviderIR, r ir.ResourceIR, cfg 
 	}
 	generateMockServerFunction(f, r, mockFuncName, routes, pir.SecurityIR.Schemes)
 
-	steps, err := acceptanceTestSteps(r, resourceAddr, configFuncName, hasEndpoint, hasTokenURL, hasOIDCTokenURL, hasParam, paramAttr, paramType)
+	steps, err := acceptanceTestSteps(r, resourceAddr, configFuncName, hasEndpoint, hasTokenURL, hasOIDCTokenURL, hasParam, paramAttr, paramCreate, paramUpdated)
 	if err != nil {
 		return nil, err
 	}
@@ -228,15 +221,15 @@ func protoV6ProviderFactories(providerName string) ast.Expr {
 // be parsed, the error is returned (and surfaced as a generation error by
 // ResourceAcceptanceTestFile) rather than silently dropping the import step,
 // which would invisibly lose import test coverage (L-26).
-func acceptanceTestSteps(r ir.ResourceIR, resourceAddr, configFuncName string, hasEndpoint, hasTokenURL, hasOIDCTokenURL, hasParam bool, paramAttr string, paramType ir.PrimitiveType) (ast.Expr, error) {
-	elems := []ast.Expr{createTestStep(r, resourceAddr, configFuncName, hasEndpoint, hasTokenURL, hasOIDCTokenURL, hasParam, paramAttr, paramType)}
+func acceptanceTestSteps(r ir.ResourceIR, resourceAddr, configFuncName string, hasEndpoint, hasTokenURL, hasOIDCTokenURL, hasParam bool, paramAttr, paramCreate, paramUpdated string) (ast.Expr, error) {
+	elems := []ast.Expr{createTestStep(r, resourceAddr, configFuncName, hasEndpoint, hasTokenURL, hasOIDCTokenURL, hasParam, paramAttr, paramCreate)}
 	// The update step applies a changed config and expects the resource to be
 	// updated. A resource whose Update is a scaffold (no update operation in the
 	// spec, or an unresolvable mapping) reports "Update is not wired to a remote
 	// API endpoint" as a diagnostic, so the step could never pass; skip it and
 	// keep the lifecycle test to create/import/destroy (G-21).
 	if hasParam && planResourceWiring(r).update {
-		elems = append(elems, updateTestStep(r, resourceAddr, configFuncName, hasEndpoint, hasTokenURL, hasOIDCTokenURL, paramAttr, paramType))
+		elems = append(elems, updateTestStep(r, resourceAddr, configFuncName, hasEndpoint, hasTokenURL, hasOIDCTokenURL, paramAttr, paramUpdated))
 	}
 	if r.Importable {
 		importID, err := acceptanceImportID(r)
@@ -251,10 +244,10 @@ func acceptanceTestSteps(r ir.ResourceIR, resourceAddr, configFuncName string, h
 	), nil
 }
 
-func createTestStep(r ir.ResourceIR, resourceAddr, configFuncName string, hasEndpoint, hasTokenURL, hasOIDCTokenURL, hasParam bool, paramAttr string, paramType ir.PrimitiveType) ast.Expr {
+func createTestStep(r ir.ResourceIR, resourceAddr, configFuncName string, hasEndpoint, hasTokenURL, hasOIDCTokenURL, hasParam bool, paramAttr, paramCreate string) ast.Expr {
 	paramValue := ""
 	if hasParam {
-		paramValue = acceptanceExampleValue(paramType)
+		paramValue = paramCreate
 	}
 	args := configFuncCallArgs(hasEndpoint, hasTokenURL, hasOIDCTokenURL, hasParam, paramValue)
 	checks := []ast.Expr{}
@@ -274,7 +267,7 @@ func createTestStep(r ir.ResourceIR, resourceAddr, configFuncName string, hasEnd
 			astgen.QualExpr("resource", "TestCheckResourceAttr"),
 			astgen.Lit(resourceAddr),
 			astgen.Lit(paramAttr),
-			astgen.Lit(acceptanceExampleValue(paramType)),
+			astgen.Lit(paramCreate),
 		))
 	}
 	return astgen.CompositeLit(
@@ -284,8 +277,8 @@ func createTestStep(r ir.ResourceIR, resourceAddr, configFuncName string, hasEnd
 	)
 }
 
-func updateTestStep(r ir.ResourceIR, resourceAddr, configFuncName string, hasEndpoint, hasTokenURL, hasOIDCTokenURL bool, paramAttr string, paramType ir.PrimitiveType) ast.Expr {
-	args := configFuncCallArgs(hasEndpoint, hasTokenURL, hasOIDCTokenURL, true, updatedValue(paramType))
+func updateTestStep(r ir.ResourceIR, resourceAddr, configFuncName string, hasEndpoint, hasTokenURL, hasOIDCTokenURL bool, paramAttr, paramUpdated string) ast.Expr {
+	args := configFuncCallArgs(hasEndpoint, hasTokenURL, hasOIDCTokenURL, true, paramUpdated)
 	checks := []ast.Expr{}
 	if idInfo := resourceIDFieldInfo(r); idInfo.found {
 		checks = append(checks, astgen.Call(
@@ -298,7 +291,7 @@ func updateTestStep(r ir.ResourceIR, resourceAddr, configFuncName string, hasEnd
 		astgen.QualExpr("resource", "TestCheckResourceAttr"),
 		astgen.Lit(resourceAddr),
 		astgen.Lit(paramAttr),
-		astgen.Lit(updatedValue(paramType)),
+		astgen.Lit(paramUpdated),
 	))
 	return astgen.CompositeLit(
 		astgen.QualExpr("resource", "TestStep"),
@@ -536,7 +529,11 @@ func writeHCLAcceptanceAttribute(h *hclBuilder, attr ir.AttributeIR, _ string) {
 		h.writeLinef("}")
 		return
 	}
-	h.writeLinef("%s = %s", attr.Name, primitiveExampleValue(s.Type))
+	// The placeholder honors the schema's constraints (enum/const/bounds/
+	// length/pattern) so the acceptance config satisfies the validators the
+	// schema emits at plan time; an unconstrained schema keeps the type-only
+	// placeholder.
+	h.writeLinef("%s = %s", attr.Name, schemaExampleLiteral(s))
 }
 
 func writeHCLAcceptanceCollectionAttribute(h *hclBuilder, attr ir.AttributeIR) {
@@ -546,7 +543,10 @@ func writeHCLAcceptanceCollectionAttribute(h *hclBuilder, attr ir.AttributeIR) {
 	switch s.Collection.Kind {
 	case ir.List, ir.Set:
 		if schema.IsPrimitiveSchema(elem) {
-			h.writeLinef("%s = [ %s ]", attr.Name, primitiveExampleValue(elem.Type))
+			// The element placeholder honors the element's own constraints so
+			// enum-constrained elements validate against the ValueStringsAre
+			// validator emitted from the same schema.
+			h.writeLinef("%s = [ %s ]", attr.Name, schemaExampleLiteral(elem))
 			return
 		}
 		if schema.IsObjectLike(elem) {
@@ -561,7 +561,7 @@ func writeHCLAcceptanceCollectionAttribute(h *hclBuilder, attr ir.AttributeIR) {
 		if schema.IsPrimitiveSchema(elem) {
 			h.writeLinef("%s = {", attr.Name)
 			h.indent++
-			h.writeLinef(`"key" = %s`, primitiveExampleValue(elem.Type))
+			h.writeLinef(`"key" = %s`, schemaExampleLiteral(elem))
 			h.indent--
 			h.writeLinef("}")
 			return
@@ -592,9 +592,13 @@ func writeHCLAcceptanceBlock(h *hclBuilder, block ir.BlockIR) {
 }
 
 // acceptanceParamAttribute selects the first configurable primitive attribute to
-// vary across the create and update test steps. It prefers a required or
-// optional string attribute and falls back to any primitive attribute.
-func acceptanceParamAttribute(r ir.ResourceIR) (string, ir.PrimitiveType, bool) {
+// vary across the create and update test steps, along with the constraint-aware
+// create and updated values for it. It prefers a required or optional string
+// attribute and falls back to any primitive attribute. An attribute whose
+// constraints admit no two distinct valid values (const, a one-member enum, a
+// degenerate numeric range, an unmatchable pattern) is skipped, so the update
+// step never varies a value the generated validators would reject.
+func acceptanceParamAttribute(r ir.ResourceIR) (name, create, updated string, ok bool) {
 	// The update step mutates this attribute to verify the resource was
 	// updated. The identifier (id) attribute must never be the mutation target:
 	// changing it rewrites the resource's identity and, for a PUT-as-create
@@ -606,12 +610,13 @@ func acceptanceParamAttribute(r ir.ResourceIR) (string, ir.PrimitiveType, bool) 
 	}
 	// candidate reports whether the attribute can serve as the create/update
 	// mutation parameter: a configurable scalar (not a collection or object),
-	// included in the example config, and not the identifier. A Required Dynamic
-	// is excluded: acceptanceExampleValue/updatedValue emit the null literal for
-	// a Dynamic, and Terraform rejects null for a Required attribute at plan time
-	// ("Missing Configuration for Required Attribute"). writeHCLAcceptanceAttribute
-	// configures a Required Dynamic with a string scalar ("example") instead, so
-	// it round-trips without needing a parameter placeholder.
+	// included in the example config, not the identifier, and admitting two
+	// distinct values its validators accept (acceptanceParamPair). A Required
+	// Dynamic is excluded: Terraform rejects null for a Required attribute at
+	// plan time ("Missing Configuration for Required Attribute"), and
+	// writeHCLAcceptanceAttribute configures a Required Dynamic with a string
+	// scalar ("example") instead, so it round-trips without needing a parameter
+	// placeholder.
 	candidate := func(attr ir.AttributeIR) bool {
 		if !includeInExample(attr) || attr.Name == idAttr {
 			return false
@@ -622,25 +627,26 @@ func acceptanceParamAttribute(r ir.ResourceIR) (string, ir.PrimitiveType, bool) 
 		if attr.Required && schema.IsDynamicAttribute(attr.Schema) {
 			return false
 		}
+		var createVal, updatedVal string
+		var pairOK bool
+		createVal, updatedVal, pairOK = acceptanceParamPair(attr.Schema)
+		if !pairOK {
+			return false
+		}
+		create, updated = createVal, updatedVal
 		return true
 	}
 	for _, attr := range r.Schema.Attributes {
-		if !candidate(attr) {
-			continue
-		}
-		if attr.Schema.Type == ir.TypeString {
-			return attr.Name, attr.Schema.Type, true
+		if candidate(attr) && attr.Schema.Type == ir.TypeString {
+			return attr.Name, create, updated, true
 		}
 	}
 	for _, attr := range r.Schema.Attributes {
-		if !candidate(attr) {
-			continue
-		}
-		if attr.Schema.Type != "" {
-			return attr.Name, attr.Schema.Type, true
+		if candidate(attr) && attr.Schema.Type != "" {
+			return attr.Name, create, updated, true
 		}
 	}
-	return "", "", false
+	return "", "", "", false
 }
 
 func providerHasEndpointAttr(pir ir.ProviderIR) bool {
@@ -696,38 +702,6 @@ func findAcceptancePlaceholderAttr(pir ir.ProviderIR, name string) *ir.Attribute
 		}
 	}
 	return nil
-}
-
-func acceptanceExampleValue(t ir.PrimitiveType) string {
-	switch t {
-	case ir.TypeString:
-		return "example"
-	case ir.TypeInt:
-		return "1"
-	case ir.TypeFloat:
-		return "1.0"
-	case ir.TypeBool:
-		return "true"
-	case ir.TypeNull, ir.TypeDynamic:
-		return "null"
-	}
-	panic(fmt.Errorf("%w: %q in acceptanceExampleValue", ErrUnsupportedPrimitiveType, t))
-}
-
-func updatedValue(t ir.PrimitiveType) string {
-	switch t {
-	case ir.TypeString:
-		return "updated"
-	case ir.TypeInt:
-		return "2"
-	case ir.TypeFloat:
-		return "2.0"
-	case ir.TypeBool:
-		return "false"
-	case ir.TypeNull, ir.TypeDynamic:
-		return "null"
-	}
-	panic(fmt.Errorf("%w: %q in updatedValue", ErrUnsupportedPrimitiveType, t))
 }
 
 // acceptanceImportSegment returns the import ID segment for one attribute.
