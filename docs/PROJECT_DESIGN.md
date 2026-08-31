@@ -1589,14 +1589,24 @@ The Terraform Plugin Framework (v1.x) is the primary target. Each `SchemaIR` nod
 
 ### 8.3 Plan Modifiers & Validators
 
-**Plan modifiers**: The generator does not currently emit typed plan-modifier
-constructors (`planmodifier.RequiresReplace`, `stringplanmodifier.UseStateForUnknown`,
-`stringdefault.StaticString`, etc.) into generated schemas. Force-new attributes
-(`forceNew` / `x-terraform-force-new: true`) are tracked in the IR
-(`PlanModifierIR` with `planmodifier.RequiresReplace`) and surfaced in the
-generated `generator.yaml` as `force_new` entries, but the schema itself does not
-attach a `RequiresReplace` modifier. Attribute default values are carried on the
-IR but are not rendered as `Default` schema fields.
+**Plan modifiers**: The generator emits typed plan-modifier constructors into
+generated schemas: `force_new` overrides (`generator.yaml`) and
+`PlanModifierTypeRequiresReplace` IR entries resolve to the attribute kind's
+typed `RequiresReplace()` constructor (e.g. `stringplanmodifier.RequiresReplace`
+on a string attribute), and typed `<pkg>.UseStateForUnknown` entries emit the
+named constructor. The plugin framework has no generic planmodifiers package —
+modifiers are typed per attribute kind — so the emission site resolves the IR's
+generic `planmodifier.RequiresReplace` marker to the constructor matching the
+attribute being rendered, and a modifier whose typed package does not match the
+attribute kind is a render error rather than a silently inert modifier. Two
+gaps remain: argument-bearing (static-default) modifiers such as
+`stringdefault.StaticString` have no emission path and fail loud, and attribute
+default values are carried on the IR but are not rendered as `Default` schema
+fields. Additionally, a wired resource whose Update mapping is absent or does
+not resolve gets `RequiresReplace` injected on every config-settable attribute
+(the generator's local copy of the schema only — not the provider IR), because
+its generated Update body keeps the honest not-wired scaffold error and an
+in-place update plan could never succeed at apply.
 
 **Validators emitted by the generator**: The generator renders validators
 directly from schema constraints — not from the IR's generic `ValidatorIR`

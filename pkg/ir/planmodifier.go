@@ -10,13 +10,15 @@ package ir
 // The Type field names the plan modifier constructor (e.g.
 // "stringplanmodifier.UseStateForUnknown" or "stringdefault.StaticString").
 //
-// Args holds literal argument values for the constructor. It is populated by
-// the transformer for default-value modifiers (e.g. the default string/int64)
-// and round-trips through JSON, but the generator does not currently emit Args
-// into the generated provider — PlanModifierIR metadata is not yet mapped to
-// typed plan-modifier expressions in the generator (L-61 corrects the prior
-// doc, which described a code-generation path no generator implements). The
-// field is retained so the IR stays forward-compatible with that mapping.
+// The generator maps Type entries to typed plan-modifier expressions:
+// PlanModifierTypeRequiresReplace resolves to the attribute kind's typed
+// RequiresReplace() constructor, and "<typedpkg>.UseStateForUnknown" emits the
+// named constructor (H-15's silent contract gap). Args holds literal argument
+// values for constructors that take them (the static-default modifiers) and
+// round-trips through JSON, but the generator has no emission path for
+// argument-bearing modifiers and fails loud (a render error) rather than
+// emitting a modifier whose arguments were dropped. The field is retained so
+// the IR stays forward-compatible with that mapping.
 type PlanModifierIR struct {
 	Type string   `json:"type,omitempty"`
 	Args []string `json:"args,omitempty"`

@@ -1221,3 +1221,146 @@ func TestAttributeValues_RequiredComputedEmitsOptional(t *testing.T) {
 		t.Errorf("datasource attribute must not emit Required for Required+Computed\ncontent:\n%s", string(dsGot))
 	}
 }
+
+// renderResourceFile renders a single resource file to source, failing the
+// test on error. Shared by the plan-modifier injection tests.
+func renderResourceFile(t *testing.T, r ir.ResourceIR) string {
+	t.Helper()
+	file := ResourceFile(r, testClientImport)
+	var buf bytes.Buffer
+	if err := file.Render(&buf); err != nil {
+		t.Fatalf("Render() error = %v", err)
+	}
+	return buf.String()
+}
+
+// TestResourceFile_WiredUpdateEmitsNoPlanModifiers confirms the baseline: a
+// resource wired with a resolvable Update mapping performs in-place updates
+// and must not carry injected RequiresReplace modifiers or plan-modifier
+// imports.
+func TestResourceFile_WiredUpdateEmitsNoPlanModifiers(t *testing.T) {
+	got := renderResourceFile(t, sampleResourceIR())
+	for _, unwanted := range []string{
+		"RequiresReplace",
+		`resource/schema/planmodifier"`,
+		"planmodifier.",
+	} {
+		if strings.Contains(got, unwanted) {
+			t.Errorf("wired-update resource should not emit %q\ncontent:\n%s", unwanted, got)
+		}
+	}
+}
+
+// TestResourceFile_UnwiredUpdateRequiresReplace verifies the injection: a
+// resource wired for create/read/delete but with no Update mapping gets
+// RequiresReplace on every config-settable attribute (at every nesting depth)
+// so Terraform proposes replacement instead of an update whose body errors.
+// Computed-only attributes are skipped, and the typed packages plus the
+// shared planmodifier package are imported.
+func TestResourceFile_UnwiredUpdateRequiresReplace(t *testing.T) {
+	r := sampleResourceIR()
+	r.CRUDMapping.Update = nil
+
+	got := renderResourceFile(t, r)
+	for _, want := range []string{
+		"PlanModifiers: []planmodifier.String{stringplanmodifier.RequiresReplace()}",
+		"PlanModifiers: []planmodifier.Int64{int64planmodifier.RequiresReplace()}",
+		"PlanModifiers: []planmodifier.List{listplanmodifier.RequiresReplace()}",
+		`planmodifier "github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"`,
+		`stringplanmodifier "github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"`,
+		`int64planmodifier "github.com/hashicorp/terraform-plugin-framework/resource/schema/int64planmodifier"`,
+		`listplanmodifier "github.com/hashicorp/terraform-plugin-framework/resource/schema/listplanmodifier"`,
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("unwired-update resource missing %q\ncontent:\n%s", want, got)
+		}
+	}
+	// The nested owner.email attribute is config-settable, so it carries a
+	// modifier too (rendered inside the owner SingleNestedAttribute map).
+	if !strings.Contains(got, "PlanModifiers: []planmodifier.String{stringplanmodifier.RequiresReplace()}") {
+		t.Errorf("nested attribute missing RequiresReplace\ncontent:\n%s", got)
+	}
+	// Exactly one owner attribute and one nested email attribute carry String
+	// modifiers (name, tag, owner.email): the count proves the computed-only id
+	// attribute was skipped and no attribute got a duplicate entry.
+	if n := strings.Count(got, "stringplanmodifier.RequiresReplace()"); n != 3 {
+		t.Errorf("string RequiresReplace count = %d, want 3 (name, tag, owner.email)\ncontent:\n%s", n, got)
+	}
+	// The Update method keeps its honest scaffold body.
+	if !strings.Contains(got, "is not wired to a remote API endpoint") {
+		t.Errorf("unwired Update body should keep the scaffold diagnostic\ncontent:\n%s", got)
+	}
+}
+
+// TestResourceFile_UnwiredUpdateInjectionIdempotent verifies an attribute that
+// already forces replacement (a generator.yaml force_new override) is not
+// given a second RequiresReplace entry.
+func TestResourceFile_UnwiredUpdateInjectionIdempotent(t *testing.T) {
+	r := sampleResourceIR()
+	r.CRUDMapping.Update = nil
+	r.Schema.Attributes[1].ForceNew = true // name
+
+	got := renderResourceFile(t, r)
+	if n := strings.Count(got, "PlanModifiers: []planmodifier.String{stringplanmodifier.RequiresReplace()}"); n != 3 {
+		t.Errorf("force_new attr should keep a single RequiresReplace entry; string modifier count = %d, want 3\ncontent:\n%s", n, got)
+	}
+	// The force_new attribute renders exactly one modifier entry (no
+	// duplicate inside its own composite literal).
+	if strings.Contains(got, "stringplanmodifier.RequiresReplace(), stringplanmodifier.RequiresReplace()") {
+		t.Errorf("force_new attribute received a duplicate RequiresReplace\ncontent:\n%s", got)
+	}
+}
+
+// TestResourceFile_UnwiredUpdateInjectionDoesNotMutateIR verifies the
+// injection operates on the generator's local copy: the caller's ResourceIR
+// (shared with the docs and generate-config renderers) keeps its original
+// PlanModifiers so the emitted generator.yaml does not grow force_new
+// entries that were never configured.
+func TestResourceFile_UnwiredUpdateInjectionDoesNotMutateIR(t *testing.T) {
+	r := sampleResourceIR()
+	r.CRUDMapping.Update = nil
+
+	_ = renderResourceFile(t, r)
+	for _, attr := range r.Schema.Attributes {
+		if len(attr.PlanModifiers) > 0 {
+			t.Errorf("attribute %q mutated with %d plan modifiers; injection must not touch the caller's IR", attr.Name, len(attr.PlanModifiers))
+		}
+		if attr.ForceNew {
+			t.Errorf("attribute %q gained ForceNew; injection must not touch the caller's IR", attr.Name)
+		}
+	}
+}
+
+// TestResourceFile_ScaffoldedResourceNoInjection confirms a resource that is
+// not wired at all (no complete create/read/delete mapping) keeps its fully
+// scaffolded body without plan modifiers: every operation errors honestly, so
+// there is no update-vs-replace decision to fix up.
+func TestResourceFile_ScaffoldedResourceNoInjection(t *testing.T) {
+	r := sampleResourceIR()
+	r.CRUDMapping = ir.CRUDMappingIR{}
+
+	got := renderResourceFile(t, r)
+	if strings.Contains(got, "RequiresReplace") {
+		t.Errorf("unwired resource should not emit plan modifiers\ncontent:\n%s", got)
+	}
+}
+
+// TestResourceFile_ForceNewOverrideEmitted verifies the pre-existing gap fixed
+// alongside the injection: a generator.yaml force_new override on a wired
+// resource with a resolvable Update now renders as a typed RequiresReplace
+// modifier instead of being silently inert.
+func TestResourceFile_ForceNewOverrideEmitted(t *testing.T) {
+	r := sampleResourceIR()
+	r.Schema.Attributes[1].ForceNew = true // name
+
+	got := renderResourceFile(t, r)
+	for _, want := range []string{
+		"PlanModifiers: []planmodifier.String{stringplanmodifier.RequiresReplace()}",
+		`planmodifier "github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"`,
+		`stringplanmodifier "github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"`,
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("force_new override missing %q\ncontent:\n%s", want, got)
+		}
+	}
+}
