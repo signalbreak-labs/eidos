@@ -974,6 +974,10 @@ func generateCollectOptions(configYAML string) generator.CollectOptions {
 			if cfg.SignRelease != nil {
 				opts.SignRelease = cfg.SignRelease
 			}
+			// provider.namespace — or the repository owner it resolves from —
+			// overrides the provider-name default (§3.9), mirrored from the
+			// CLI's collectOptionsFor.
+			opts.RegistryNamespace = cfg.Provider.RegistryNamespace()
 			// Dynamic release is opt-in via generation.dynamic_release.enabled.
 			// Thread the image and spec_path through so the emitted
 			// regenerate-and-release workflow regenerates from the configured

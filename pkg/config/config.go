@@ -122,15 +122,70 @@ type SpecAuthConfig struct {
 
 // ProviderConfig holds provider metadata.
 type ProviderConfig struct {
-	Name            string `yaml:"name" json:"name"`
-	DisplayName     string `yaml:"display_name,omitempty" json:"display_name,omitempty"`
-	Version         string `yaml:"version" json:"version"`
-	Description     string `yaml:"description,omitempty" json:"description,omitempty"`
-	Author          string `yaml:"author,omitempty" json:"author,omitempty"`
-	ContactEmail    string `yaml:"contact_email,omitempty" json:"contact_email,omitempty"`
-	License         string `yaml:"license,omitempty" json:"license,omitempty"`
-	Repository      string `yaml:"repository,omitempty" json:"repository,omitempty"`
+	Name         string `yaml:"name" json:"name"`
+	DisplayName  string `yaml:"display_name,omitempty" json:"display_name,omitempty"`
+	Version      string `yaml:"version" json:"version"`
+	Description  string `yaml:"description,omitempty" json:"description,omitempty"`
+	Author       string `yaml:"author,omitempty" json:"author,omitempty"`
+	ContactEmail string `yaml:"contact_email,omitempty" json:"contact_email,omitempty"`
+	License      string `yaml:"license,omitempty" json:"license,omitempty"`
+	Repository   string `yaml:"repository,omitempty" json:"repository,omitempty"`
+	// Namespace is the Terraform Registry namespace the generated README and
+	// build scaffolding address (registry.terraform.io/<namespace>/<name>).
+	// When empty, RegistryNamespace derives it from Repository.
+	Namespace       string `yaml:"namespace,omitempty" json:"namespace,omitempty"`
 	ProtocolVersion int    `yaml:"protocol_version,omitempty" json:"protocol_version,omitempty"`
+}
+
+// RegistryNamespace returns the Terraform Registry namespace for the provider:
+// an explicit namespace key wins; otherwise the owner segment of repository
+// (e.g. "github.com/JUSTINWMYLES/gigavuecore" → "JUSTINWMYLES"); empty when
+// neither is set, so the caller falls back to the provider name. Without this,
+// the generated README advertised a registry address under a namespace that
+// may not exist (§3.9).
+func (p ProviderConfig) RegistryNamespace() string {
+	if ns := strings.TrimSpace(p.Namespace); ns != "" {
+		return ns
+	}
+	return namespaceFromRepository(p.Repository)
+}
+
+// namespaceFromRepository extracts the owner segment from a repository
+// address. It accepts the spellings generator.yaml users write —
+// "owner/repo", "github.com/owner/repo", "https://github.com/owner/repo",
+// "git@github.com:owner/repo.git" — and returns "" for anything without an
+// owner/repo structure rather than guessing.
+func namespaceFromRepository(repo string) string {
+	repo = strings.TrimSpace(repo)
+	if repo == "" {
+		return ""
+	}
+	if i := strings.Index(repo, "://"); i >= 0 {
+		repo = repo[i+3:]
+		// Drop the host segment of a scheme-qualified URL.
+		if j := strings.Index(repo, "/"); j >= 0 {
+			repo = repo[j+1:]
+		} else {
+			return ""
+		}
+	} else if strings.HasPrefix(repo, "git@") {
+		if j := strings.Index(repo, ":"); j >= 0 {
+			repo = repo[j+1:]
+		} else {
+			return ""
+		}
+	}
+	repo = strings.TrimSuffix(repo, "/")
+	parts := strings.Split(repo, "/")
+	// A leading host without a scheme (e.g. "github.com/owner/repo") carries a
+	// dot or colon, which a registry namespace never does; drop it.
+	if len(parts) > 1 && strings.ContainsAny(parts[0], ".:") {
+		parts = parts[1:]
+	}
+	if len(parts) < 2 {
+		return ""
+	}
+	return strings.TrimSpace(parts[0])
 }
 
 // ServerConfig describes an API server and its template variables.

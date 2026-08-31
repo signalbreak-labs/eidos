@@ -23,12 +23,12 @@
     {
       "path": "docs/ephemeral-resources/issue_credentials.md",
       "reason": "documentation for ephemeral resource issue_credentials",
-      "body_hash": "0b9169e5026745c5"
+      "body_hash": "06eeb603ab6eeef5"
     },
     {
       "path": "docs/index.md",
       "reason": "provider overview and authentication guide",
-      "body_hash": "d6675a21cf911349"
+      "body_hash": "d8770bfd207a2b6d"
     },
     {
       "path": "examples/ephemeral-resources/issue_credentials/ephemeral-resource.tf",

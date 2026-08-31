@@ -546,7 +546,7 @@ func writeHCLAcceptanceCollectionAttribute(h *hclBuilder, attr ir.AttributeIR) {
 			// The element placeholder honors the element's own constraints so
 			// enum-constrained elements validate against the ValueStringsAre
 			// validator emitted from the same schema.
-			h.writeLinef("%s = [ %s ]", attr.Name, schemaExampleLiteral(elem))
+			h.writeLinef("%s = [%s]", attr.Name, schemaExampleLiteral(elem))
 			return
 		}
 		if schema.IsObjectLike(elem) {

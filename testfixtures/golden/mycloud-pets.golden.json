@@ -33,7 +33,7 @@
     {
       "path": "docs/list-resources/pet.md",
       "reason": "documentation for list resource pet",
-      "body_hash": "db8395016762ee97"
+      "body_hash": "34d8f233305b64e5"
     },
     {
       "path": "docs/resources/pet.md",
@@ -44,6 +44,11 @@
       "path": "examples/data-sources/list_pets/data-source.tf",
       "reason": "example for data source list_pets",
       "body_hash": "b7d8929219cce037"
+    },
+    {
+      "path": "examples/list-resources/pet/list.tfquery.hcl",
+      "reason": "example for list resource pet",
+      "body_hash": "47e02557402b1276"
     },
     {
       "path": "examples/resources/pet/resource.tf",

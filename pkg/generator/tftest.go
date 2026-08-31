@@ -267,7 +267,7 @@ func writeTerraformTestCollectionAttribute(h *hclBuilder, attr ir.AttributeIR, _
 	switch s.Collection.Kind {
 	case ir.List, ir.Set:
 		if schema.IsPrimitiveSchema(elem) {
-			h.writeLinef("%s = [ %s ]", attr.Name, schemaExampleLiteral(elem))
+			h.writeLinef("%s = [%s]", attr.Name, schemaExampleLiteral(elem))
 			return
 		}
 		if schema.IsObjectLike(elem) {
@@ -377,7 +377,7 @@ func terraformTestVariableValue(attr ir.AttributeIR) string {
 		switch s.Collection.Kind {
 		case ir.List, ir.Set:
 			if schema.IsPrimitiveSchema(elem) {
-				return fmt.Sprintf("[ %s ]", schemaExampleLiteral(elem))
+				return fmt.Sprintf("[%s]", schemaExampleLiteral(elem))
 			}
 		case ir.Map:
 			if schema.IsPrimitiveSchema(elem) {

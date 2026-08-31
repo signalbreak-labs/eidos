@@ -25,7 +25,7 @@ func TestResourceExampleFile_Render(t *testing.T) {
 		"name = \"example\"",
 		"tag  = \"example\"",
 		"age  = 0",
-		"tags = [ \"example\" ]",
+		"tags = [\"example\"]",
 		"owner = {",
 		"email = \"example\"",
 		"}",
@@ -396,8 +396,8 @@ func TestWriteHCLCollectionAttribute_UnionElementGraceful(t *testing.T) {
 		kind ir.CollectionKind
 		want string
 	}{
-		{name: "list", kind: ir.List, want: `bad = [ "example" ]`},
-		{name: "set", kind: ir.Set, want: `bad = [ "example" ]`},
+		{name: "list", kind: ir.List, want: `bad = ["example"]`},
+		{name: "set", kind: ir.Set, want: `bad = ["example"]`},
 		{name: "map", kind: ir.Map, want: `bad = { "key" = "example" }`},
 	}
 	for _, tc := range cases {
@@ -598,7 +598,7 @@ func TestWriteHCLAttributeValue_DynamicCollection(t *testing.T) {
 					},
 				},
 			},
-			want:   `[ "example" ]`,
+			want:   `["example"]`,
 			single: true,
 		},
 		{
@@ -628,7 +628,7 @@ func TestWriteHCLAttributeValue_DynamicCollection(t *testing.T) {
 					},
 				},
 			},
-			want:   `[ "example" ]`,
+			want:   `["example"]`,
 			single: true,
 		},
 		{
@@ -658,10 +658,10 @@ func TestDynamicCollectionExampleValue(t *testing.T) {
 	if got := dynamicCollectionExampleValue(&ir.CollectionType{Kind: ir.Map}); got != `{ "key" = "example" }` {
 		t.Errorf("map placeholder = %q, want { \"key\" = \"example\" }", got)
 	}
-	if got := dynamicCollectionExampleValue(&ir.CollectionType{Kind: ir.List}); got != `[ "example" ]` {
-		t.Errorf("list placeholder = %q, want [ \"example\" ]", got)
+	if got := dynamicCollectionExampleValue(&ir.CollectionType{Kind: ir.List}); got != `["example"]` {
+		t.Errorf("list placeholder = %q, want [\"example\"]", got)
 	}
-	if got := dynamicCollectionExampleValue(&ir.CollectionType{Kind: ir.Set}); got != `[ "example" ]` {
-		t.Errorf("set placeholder = %q, want [ \"example\" ]", got)
+	if got := dynamicCollectionExampleValue(&ir.CollectionType{Kind: ir.Set}); got != `["example"]` {
+		t.Errorf("set placeholder = %q, want [\"example\"]", got)
 	}
 }

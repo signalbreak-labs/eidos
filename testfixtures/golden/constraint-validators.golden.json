@@ -23,17 +23,17 @@
     {
       "path": "docs/index.md",
       "reason": "provider overview and authentication guide",
-      "body_hash": "257f593362440286"
+      "body_hash": "ef4bb09ae019f0ec"
     },
     {
       "path": "docs/resources/widget.md",
       "reason": "documentation for resource widget",
-      "body_hash": "07b73857dff89970"
+      "body_hash": "05a44869de11c008"
     },
     {
       "path": "examples/resources/widget/resource.tf",
       "reason": "example for resource widget",
-      "body_hash": "0d458e1bdfa66cae"
+      "body_hash": "d0b935e06a14c426"
     },
     {
       "path": "generator.yaml",
@@ -108,7 +108,7 @@
     {
       "path": "internal/provider/resource_widget_acceptance_test.go",
       "reason": "acceptance tests for resource widget",
-      "body_hash": "4f29ece2847659a5"
+      "body_hash": "7e6e0fe7ae57a6d5"
     },
     {
       "path": "internal/provider/resource_widget_remote_test.go",

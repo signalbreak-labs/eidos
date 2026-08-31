@@ -157,7 +157,7 @@ func TestFunctionDocsFile_Render(t *testing.T) {
 		"Joins a list of tags with a separator.",
 		"# concat_tags Function",
 		"## Example Usage",
-		`provider::mycloud::concat_tags("<separator>", [ "<tags>" ])`,
+		`provider::mycloud::concat_tags("<separator>", ["<tags>"])`,
 		"## Signature",
 		"concat_tags(separator: String, tags: List of String) -> String",
 		"## Arguments",
@@ -309,7 +309,7 @@ func TestFunctionArgumentPlaceholder(t *testing.T) {
 				},
 			},
 			label: "tags",
-			want:  `[ "<tags>" ]`,
+			want:  `["<tags>"]`,
 		},
 		{
 			name: "list of objects",
@@ -320,7 +320,7 @@ func TestFunctionArgumentPlaceholder(t *testing.T) {
 				},
 			},
 			label: "owners",
-			want:  `[ { name = "<name>", age = 0 } ]`,
+			want:  `[{ name = "<name>", age = 0 }]`,
 		},
 		{
 			name: "map of strings",

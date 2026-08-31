@@ -97,6 +97,7 @@ func overlayBaseConfig(cfg, base *config.Config) {
 	cfg.Provider.ContactEmail = base.Provider.ContactEmail
 	cfg.Provider.License = base.Provider.License
 	cfg.Provider.Repository = base.Provider.Repository
+	cfg.Provider.Namespace = base.Provider.Namespace
 	cfg.Client = base.Client
 	cfg.Security = base.Security
 	cfg.Naming = base.Naming

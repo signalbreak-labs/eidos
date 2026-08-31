@@ -52,9 +52,9 @@ func TestSchemaExampleLiteral_Constraints(t *testing.T) {
 			want:   `"alpha"`,
 		},
 		{
-			name:   "string minLength grows the placeholder to exactly the window",
+			name:   "string minLength picks the shortest dictionary entry in the window",
 			schema: ir.SchemaIR{Type: ir.TypeString, MinLength: intPtr(12)},
-			want:   `"exampleexamp"`,
+			want:   `"example-value"`,
 		},
 		{
 			name:   "string maxLength truncates the placeholder",
@@ -150,7 +150,7 @@ func TestSchemaExampleLiteral_CollectionElementEnum(t *testing.T) {
 	if !single {
 		t.Fatalf("writeHCLAttributeValue() single = false, want true for a primitive list")
 	}
-	if want := `[ "info" ]`; value != want {
+	if want := `["info"]`; value != want {
 		t.Errorf("writeHCLAttributeValue() = %s, want %s", value, want)
 	}
 }

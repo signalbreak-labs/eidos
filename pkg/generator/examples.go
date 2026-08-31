@@ -82,21 +82,70 @@ func ActionExampleFiles(actions []ir.ActionIR) []File {
 	return files
 }
 
+// FunctionExampleFile returns the generated
+// examples/functions/<name>/function.tf file for a single provider-defined
+// function built from the supplied FunctionIR. providerName is the provider
+// type (e.g. "mycloud") used in the provider::<name>::<function>(...) example
+// invocation.
+func FunctionExampleFile(fn ir.FunctionIR, providerName string) File {
+	relPath := path.Join("examples", "functions", naming.SnakeCase(fn.Name), "function.tf")
+	return staticFile(relPath, generateFunctionExampleHCL(fn, providerName))
+}
+
+// FunctionExampleFiles returns the generated function example files for every
+// FunctionIR in the provider. providerName is the provider type used in the
+// example invocations.
+func FunctionExampleFiles(functions []ir.FunctionIR, providerName string) []File {
+	files := make([]File, 0, len(functions))
+	for _, fn := range functions {
+		files = append(files, FunctionExampleFile(fn, providerName))
+	}
+	return files
+}
+
+// ListResourceExampleFile returns the generated
+// examples/list-resources/<name>/list.tfquery.hcl file for a single list
+// resource built from the supplied ListResourceIR. The example is a `list`
+// block consumed by `terraform query`, so it carries the .tfquery.hcl
+// extension rather than .tf. Unregisterable list resources (no paired managed
+// resource) get no example, mirroring their suppressed docs: terraform query
+// never exposes them, so an example would advertise a construct the provider
+// cannot serve (§3.13).
+func ListResourceExampleFile(lr ir.ListResourceIR) File {
+	relPath := path.Join("examples", "list-resources", naming.SnakeCase(lr.Name), "list.tfquery.hcl")
+	return staticFile(relPath, generateListResourceExampleHCL(lr))
+}
+
+// ListResourceExampleFiles returns the generated list resource example files
+// for every registerable ListResourceIR in the provider.
+func ListResourceExampleFiles(lrs []ir.ListResourceIR) []File {
+	files := make([]File, 0, len(lrs))
+	for _, lr := range lrs {
+		if !lr.Registerable {
+			continue
+		}
+		files = append(files, ListResourceExampleFile(lr))
+	}
+	return files
+}
+
 // ExampleFiles returns the complete set of generated HCL example files for a
-// provider. It includes resources, data sources, ephemeral resources, and
-// actions when the provider defines them. Both a nil provider and a non-nil
-// provider that produces no files return nil, so callers can rely on a single
-// zero-state value.
+// provider. It includes resources, data sources, ephemeral resources,
+// actions, list resources, and functions when the provider defines them. Both
+// a nil provider and a non-nil provider that produces no files return nil, so
+// callers can rely on a single zero-state value.
 func ExampleFiles(pir *ir.ProviderIR) []File {
 	if pir == nil {
 		return nil
 	}
 
-	files := make([]File, 0, 4)
+	files := make([]File, 0, 6)
 	files = append(files, ResourceExampleFiles(pir.Resources)...)
 	files = append(files, DataSourceExampleFiles(pir.DataSources)...)
 	files = append(files, EphemeralResourceExampleFiles(pir.EphemeralResources)...)
 	files = append(files, ActionExampleFiles(pir.Actions)...)
+	files = append(files, ListResourceExampleFiles(pir.ListResources)...)
+	files = append(files, FunctionExampleFiles(pir.Functions, providerDocsTypeName(*pir))...)
 	if len(files) == 0 {
 		return nil
 	}
@@ -114,6 +163,14 @@ func (h *hclBuilder) writeLinef(format string, args ...any) {
 	h.b.WriteString(strings.Repeat("  ", h.indent))
 	fmt.Fprintf(&h.b, format, args...)
 	h.b.WriteByte('\n')
+}
+
+// trimTrailingNewline strips trailing newlines from an example HCL body
+// embedded in a docs template. The hclBuilder helpers terminate every line,
+// so an untrimmed body leaves a stray blank line before the template's
+// closing code fence (§3.8).
+func trimTrailingNewline(s string) string {
+	return strings.TrimRight(s, "\n")
 }
 
 // generateResourceExampleHCL builds the HCL body for a managed resource example.
@@ -291,7 +348,7 @@ func writeHCLAttributeValue(attr ir.AttributeIR) (value string, single bool) {
 				// element placeholder honors the element's own constraints
 				// (e.g. an enum-constrained element validates against
 				// listvalidator ValueStringsAre emitted from the same schema).
-				return fmt.Sprintf("[ %s ]", schemaExampleLiteral(elem)), true
+				return fmt.Sprintf("[%s]", schemaExampleLiteral(elem)), true
 			}
 			if !schema.IsObjectLike(elem) {
 				// Unsupported element (for example, a degenerate empty schema):
@@ -524,7 +581,7 @@ func dynamicCollectionExampleValue(c *ir.CollectionType) string {
 	if c.Kind == ir.Map {
 		return `{ "key" = "example" }`
 	}
-	return `[ "example" ]`
+	return `["example"]`
 }
 
 // primitiveExampleValue returns a placeholder HCL literal for a primitive type.

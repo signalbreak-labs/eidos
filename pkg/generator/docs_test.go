@@ -69,7 +69,7 @@ func TestResourceDocsFile_Render(t *testing.T) {
 		"  name = \"example\"",
 		"  tag  = \"example\"",
 		"  age  = 0",
-		"  tags = [ \"example\" ]",
+		"  tags = [\"example\"]",
 		"  owner = {",
 		"    email = \"example\"",
 		"  }",
@@ -309,7 +309,7 @@ func TestRenderExampleArguments_CollectionsAndObjects(t *testing.T) {
 	got := renderExampleArguments(attrs)
 	want := []string{
 		"  name = \"example\"",
-		"  tags = [ \"example\" ]",
+		"  tags = [\"example\"]",
 		"  metadata = {",
 		`    "metadata" = "example"`,
 		"  }",
