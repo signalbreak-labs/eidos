@@ -19,38 +19,38 @@ import (
 )
 
 // Compile-time interface assertion.
-var _ list.ListResource = (*ListInstancesListResource)(nil)
-var _ list.ListResourceWithConfigure = (*ListInstancesListResource)(nil)
+var _ list.ListResource = (*ProjectListResource)(nil)
+var _ list.ListResourceWithConfigure = (*ProjectListResource)(nil)
 
-// ListInstancesListResource is the generated Terraform list resource implementation.
-type ListInstancesListResource struct {
+// ProjectListResource is the generated Terraform list resource implementation.
+type ProjectListResource struct {
 	client *client.Client
 }
 
-// ListInstancesListResourceModel describes the mycloud_list_instances list filter configuration shape.
-type ListInstancesListResourceModel struct {
-	Workspace types.String `tfsdk:"workspace"`
+// ProjectListResourceModel describes the mycloud_project list filter configuration shape.
+type ProjectListResourceModel struct {
+	Organization types.String `tfsdk:"organization"`
 }
 
-// NewListInstancesListResource returns a new instance of the generated list resource.
-func NewListInstancesListResource() list.ListResource {
-	return &ListInstancesListResource{}
+// NewProjectListResource returns a new instance of the generated list resource.
+func NewProjectListResource() list.ListResource {
+	return &ProjectListResource{}
 }
 
 // Metadata returns the list resource type name.
-func (l *ListInstancesListResource) Metadata(_ context.Context, _ resource.MetadataRequest, resp *resource.MetadataResponse) {
-	resp.TypeName = "mycloud_list_instances"
+func (l *ProjectListResource) Metadata(_ context.Context, _ resource.MetadataRequest, resp *resource.MetadataResponse) {
+	resp.TypeName = "mycloud_project"
 }
 
 // ListResourceConfigSchema returns the list resource config schema.
-func (l *ListInstancesListResource) ListResourceConfigSchema(_ context.Context, _ list.ListResourceSchemaRequest, resp *list.ListResourceSchemaResponse) {
-	resp.Schema = listschema.Schema{MarkdownDescription: "List Instances", Attributes: map[string]listschema.Attribute{"workspace": listschema.StringAttribute{Required: true}}}
+func (l *ProjectListResource) ListResourceConfigSchema(_ context.Context, _ list.ListResourceSchemaRequest, resp *list.ListResourceSchemaResponse) {
+	resp.Schema = listschema.Schema{MarkdownDescription: "List organization projects", Attributes: map[string]listschema.Attribute{"organization": listschema.StringAttribute{Required: true}}}
 }
 
 // List streams matching resource instances for terraform query.
-func (l *ListInstancesListResource) List(ctx context.Context, req list.ListRequest, stream *list.ListResultsStream) {
+func (l *ProjectListResource) List(ctx context.Context, req list.ListRequest, stream *list.ListResultsStream) {
 	stream.Results = func(push func(list.ListResult) bool) {
-		var config ListInstancesListResourceModel
+		var config ProjectListResourceModel
 		diags := req.Config.Get(ctx, &config)
 		if diags.HasError() {
 			result := req.NewListResult(ctx)
@@ -69,56 +69,56 @@ func (l *ListInstancesListResource) List(ctx context.Context, req list.ListReque
 			result := req.NewListResult(ctx)
 			itemMap := map[string]json.RawMessage{}
 			if err := json.Unmarshal(item, &itemMap); err != nil {
-				result.Diagnostics.AddError("Error listing mycloud_list_instances", fmt.Sprintf("Could not decode list item: %s", err))
+				result.Diagnostics.AddError("Error listing mycloud_project", fmt.Sprintf("Could not decode list item: %s", err))
 				if !push(result) {
 					return
 				}
 				continue
 			}
 			identity := map[string]json.RawMessage{}
-			workspaceValue, ok := itemMap["workspace"]
+			organizationValue, ok := itemMap["organization"]
 			if !ok {
 				if itemMap["metadata"] != nil {
 					metaMap := map[string]json.RawMessage{}
 					if json.Unmarshal(itemMap["metadata"], &metaMap) == nil {
-						workspaceValue, ok = metaMap["workspace"]
+						organizationValue, ok = metaMap["organization"]
 					}
 				}
 			}
 			if !ok {
-				workspaceValue, ok = itemMap["id"]
+				organizationValue, ok = itemMap["id"]
 			}
 			if !ok {
-				result.Diagnostics.AddError("Error listing mycloud_list_instances", "List item is missing identity attribute \"workspace\".")
+				result.Diagnostics.AddError("Error listing mycloud_project", "List item is missing identity attribute \"organization\".")
 				if !push(result) {
 					return
 				}
 				continue
 			}
-			identity["workspace"] = workspaceValue
-			nameValue, ok := itemMap["name"]
+			identity["organization"] = organizationValue
+			projectValue, ok := itemMap["project"]
 			if !ok {
 				if itemMap["metadata"] != nil {
 					metaMap := map[string]json.RawMessage{}
 					if json.Unmarshal(itemMap["metadata"], &metaMap) == nil {
-						nameValue, ok = metaMap["name"]
+						projectValue, ok = metaMap["project"]
 					}
 				}
 			}
 			if !ok {
-				nameValue, ok = itemMap["id"]
+				projectValue, ok = itemMap["id"]
 			}
 			if !ok {
-				result.Diagnostics.AddError("Error listing mycloud_list_instances", "List item is missing identity attribute \"name\".")
+				result.Diagnostics.AddError("Error listing mycloud_project", "List item is missing identity attribute \"project\".")
 				if !push(result) {
 					return
 				}
 				continue
 			}
-			identity["name"] = nameValue
+			identity["project"] = projectValue
 			idJSON, err := json.Marshal(identity)
 			if err != nil {
-				result.Diagnostics.AddError("Error listing mycloud_list_instances", fmt.Sprintf("Could not encode list item identity: %s", err))
+				result.Diagnostics.AddError("Error listing mycloud_project", fmt.Sprintf("Could not encode list item identity: %s", err))
 				if !push(result) {
 					return
 				}
@@ -126,7 +126,7 @@ func (l *ListInstancesListResource) List(ctx context.Context, req list.ListReque
 			}
 			idVal, err := tftypes.ValueFromJSON(idJSON, req.ResourceIdentitySchema.Type().TerraformType(ctx))
 			if err != nil {
-				result.Diagnostics.AddError("Error listing mycloud_list_instances", fmt.Sprintf("Could not decode list item identity: %s", err))
+				result.Diagnostics.AddError("Error listing mycloud_project", fmt.Sprintf("Could not decode list item identity: %s", err))
 				if !push(result) {
 					return
 				}
@@ -136,7 +136,7 @@ func (l *ListInstancesListResource) List(ctx context.Context, req list.ListReque
 			if req.IncludeResource {
 				resVal, err := tftypes.ValueFromJSON(item, req.ResourceSchema.Type().TerraformType(ctx))
 				if err != nil {
-					result.Diagnostics.AddWarning("Error listing mycloud_list_instances", fmt.Sprintf("Could not decode list item into the resource schema: %s", err))
+					result.Diagnostics.AddWarning("Error listing mycloud_project", fmt.Sprintf("Could not decode list item into the resource schema: %s", err))
 				} else {
 					result.Resource.Raw = resVal
 				}
@@ -149,14 +149,14 @@ func (l *ListInstancesListResource) List(ctx context.Context, req list.ListReque
 }
 
 // listRemote fetches and decodes the collection pages, returning the items and any diagnostics for the List iterator to surface.
-func (l *ListInstancesListResource) listRemote(ctx context.Context, config *ListInstancesListResourceModel) ([]json.RawMessage, diag.Diagnostics) {
+func (l *ProjectListResource) listRemote(ctx context.Context, config *ProjectListResourceModel) ([]json.RawMessage, diag.Diagnostics) {
 	var diags diag.Diagnostics
 	if l.client == nil {
 		diags.AddError("Client Not Configured", "The API client was not set on the list resource. The provider Configure method must run before list operations; this is a bug in the generated provider.")
 		return nil, diags
 	}
-	reqPath := "/workspaces/{workspace}/instances"
-	reqPath = strings.ReplaceAll(reqPath, "{workspace}", url.PathEscape(config.Workspace.ValueString()))
+	reqPath := "/organizations/{organization}/projects"
+	reqPath = strings.ReplaceAll(reqPath, "{organization}", url.PathEscape(config.Organization.ValueString()))
 	params := url.Values{}
 	var nextURL string
 	fetch := func(ctx context.Context, p url.Values) (*http.Response, error) {
@@ -177,14 +177,14 @@ func (l *ListInstancesListResource) listRemote(ctx context.Context, config *List
 	}
 	pages, err := client.ListAllPages(ctx, params, fetch, nil)
 	if err != nil {
-		diags.AddError("Error listing mycloud_list_instances", fmt.Sprintf("Could not read list response: %s", err))
+		diags.AddError("Error listing mycloud_project", fmt.Sprintf("Could not read list response: %s", err))
 		return nil, diags
 	}
 	allItems := []json.RawMessage{}
 	for _, page := range pages {
 		items := []json.RawMessage{}
 		if err := json.Unmarshal(page, &items); err != nil {
-			diags.AddError("Error listing mycloud_list_instances", fmt.Sprintf("Could not decode list page: %s", err))
+			diags.AddError("Error listing mycloud_project", fmt.Sprintf("Could not decode list page: %s", err))
 			return nil, diags
 		}
 		allItems = append(allItems, items...)
@@ -193,7 +193,7 @@ func (l *ListInstancesListResource) listRemote(ctx context.Context, config *List
 }
 
 // Configure stores the API client supplied by the provider.
-func (l *ListInstancesListResource) Configure(_ context.Context, req resource.ConfigureRequest, resp *resource.ConfigureResponse) {
+func (l *ProjectListResource) Configure(_ context.Context, req resource.ConfigureRequest, resp *resource.ConfigureResponse) {
 	if req.ProviderData == nil {
 		return
 	}

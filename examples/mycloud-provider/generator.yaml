@@ -7,16 +7,14 @@ provider:
 servers:
     - url: https://api.mycloud.example/v1
 resource_overrides:
-    - schema: config
-      operation: createConfig
+    - operation: createConfig
       resource_name: config
       id_attribute: id
       import_format: '{workspace}:{name}'
       computed_attributes:
         - id
       description: Read a Config
-    - schema: instance
-      operation: createInstance
+    - operation: createInstance
       resource_name: instance
       id_attribute: id
       import_format: '{workspace}:{name}'
@@ -27,8 +25,7 @@ resource_overrides:
         - image_pull_policy
         - phase
       description: Read an Instance
-    - schema: network
-      operation: createNetwork
+    - operation: createNetwork
       resource_name: network
       id_attribute: id
       import_format: '{workspace}:{name}'
@@ -41,21 +38,18 @@ resource_overrides:
         - selector
         - load_balancer
       description: Read a Network
-    - schema: project
-      operation: createProjectForOrganization
+    - operation: createProjectForOrganization
       resource_name: project
       import_format: '{organization}:{project}'
       description: Get a project
-    - schema: secret
-      operation: createSecret
+    - operation: createSecret
       resource_name: secret
       id_attribute: id
       import_format: '{workspace}:{name}'
       computed_attributes:
         - id
       description: Read a Secret
-    - schema: stack
-      operation: createStack
+    - operation: createStack
       resource_name: stack
       id_attribute: id
       import_format: '{workspace}:{name}'
@@ -65,8 +59,7 @@ resource_overrides:
         - selector
         - ready_replicas
       description: Read a Stack
-    - schema: workspace
-      operation: createWorkspace
+    - operation: createWorkspace
       resource_name: workspace
       id_attribute: name
       import_format: '{name}'
@@ -122,15 +115,15 @@ action_overrides:
       name: update_task
       description: Update an task
 list_resource_overrides:
-    - resource: list_members
+    - resource: ""
       operation: listMembers
-    - resource: list_projects_for_organization
+    - resource: ""
       operation: listProjectsForOrganization
       config_schema:
         - name: organization
           type: string
           optional: false
-    - resource: list_branches
+    - resource: ""
       operation: listBranches
       config_schema:
         - name: organization
@@ -139,7 +132,7 @@ list_resource_overrides:
         - name: project
           type: string
           optional: false
-    - resource: list_commits
+    - resource: ""
       operation: listCommits
       config_schema:
         - name: organization
@@ -148,7 +141,7 @@ list_resource_overrides:
         - name: project
           type: string
           optional: false
-    - resource: list_pull_requests
+    - resource: ""
       operation: listPullRequests
       config_schema:
         - name: organization
@@ -157,7 +150,7 @@ list_resource_overrides:
         - name: project
           type: string
           optional: false
-    - resource: list_tasks
+    - resource: ""
       operation: listTasks
       config_schema:
         - name: organization
@@ -166,33 +159,33 @@ list_resource_overrides:
         - name: project
           type: string
           optional: false
-    - resource: list_workspaces
+    - resource: ""
       operation: listWorkspaces
-    - resource: list_configs
+    - resource: ""
       operation: listConfigs
       config_schema:
         - name: workspace
           type: string
           optional: false
-    - resource: list_instances
+    - resource: ""
       operation: listInstances
       config_schema:
         - name: workspace
           type: string
           optional: false
-    - resource: list_networks
+    - resource: ""
       operation: listNetworks
       config_schema:
         - name: workspace
           type: string
           optional: false
-    - resource: list_secrets
+    - resource: ""
       operation: listSecrets
       config_schema:
         - name: workspace
           type: string
           optional: false
-    - resource: list_stacks
+    - resource: ""
       operation: listStacks
       config_schema:
         - name: workspace

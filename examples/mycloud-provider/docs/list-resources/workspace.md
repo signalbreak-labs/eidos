@@ -1,22 +1,23 @@
 ---
-page_title: "mycloud_list_workspaces List Resource - mycloud"
+page_title: "mycloud_workspace List Resource - mycloud"
 subcategory: ""
 description: |-
   List Workspaces
 ---
 
-# mycloud_list_workspaces List Resource
+# mycloud_workspace List Resource
 
 List Workspaces
+
+-> **Note:** This list resource requires Terraform 1.14 or later and is used through the `terraform query` command, not in configuration files.
 
 ## Example Usage
 
 ```terraform
-list "mycloud_list_workspaces" "example" {
+list "mycloud_workspace" "example" {
   provider = mycloud
   limit    = 100
 }
-
 ```
 ## Schema
 

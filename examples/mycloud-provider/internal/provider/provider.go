@@ -181,5 +181,19 @@ func (p *mycloudProvider) EphemeralResources(_ context.Context) []func() ephemer
 
 // ListResources returns the list resources registered with this provider.
 func (p *mycloudProvider) ListResources(_ context.Context) []func() list.ListResource {
-	return nil
+	return []func() list.ListResource{func() list.ListResource {
+		return &ProjectListResource{}
+	}, func() list.ListResource {
+		return &WorkspaceListResource{}
+	}, func() list.ListResource {
+		return &ConfigListResource{}
+	}, func() list.ListResource {
+		return &InstanceListResource{}
+	}, func() list.ListResource {
+		return &NetworkListResource{}
+	}, func() list.ListResource {
+		return &SecretListResource{}
+	}, func() list.ListResource {
+		return &StackListResource{}
+	}}
 }

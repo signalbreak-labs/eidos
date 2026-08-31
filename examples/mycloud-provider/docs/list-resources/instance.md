@@ -1,25 +1,26 @@
 ---
-page_title: "mycloud_list_networks List Resource - mycloud"
+page_title: "mycloud_instance List Resource - mycloud"
 subcategory: ""
 description: |-
-  List Networks
+  List Instances
 ---
 
-# mycloud_list_networks List Resource
+# mycloud_instance List Resource
 
-List Networks
+List Instances
+
+-> **Note:** This list resource requires Terraform 1.14 or later and is used through the `terraform query` command, not in configuration files.
 
 ## Example Usage
 
 ```terraform
-list "mycloud_list_networks" "example" {
+list "mycloud_instance" "example" {
   provider = mycloud
   limit    = 100
   config {
     workspace = "example"
   }
 }
-
 ```
 ## Schema
 

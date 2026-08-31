@@ -1,25 +1,26 @@
 ---
-page_title: "mycloud_list_secrets List Resource - mycloud"
+page_title: "mycloud_stack List Resource - mycloud"
 subcategory: ""
 description: |-
-  List Secrets
+  List Stacks
 ---
 
-# mycloud_list_secrets List Resource
+# mycloud_stack List Resource
 
-List Secrets
+List Stacks
+
+-> **Note:** This list resource requires Terraform 1.14 or later and is used through the `terraform query` command, not in configuration files.
 
 ## Example Usage
 
 ```terraform
-list "mycloud_list_secrets" "example" {
+list "mycloud_stack" "example" {
   provider = mycloud
   limit    = 100
   config {
     workspace = "example"
   }
 }
-
 ```
 ## Schema
 

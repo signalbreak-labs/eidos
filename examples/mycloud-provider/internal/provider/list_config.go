@@ -19,38 +19,38 @@ import (
 )
 
 // Compile-time interface assertion.
-var _ list.ListResource = (*ListStacksListResource)(nil)
-var _ list.ListResourceWithConfigure = (*ListStacksListResource)(nil)
+var _ list.ListResource = (*ConfigListResource)(nil)
+var _ list.ListResourceWithConfigure = (*ConfigListResource)(nil)
 
-// ListStacksListResource is the generated Terraform list resource implementation.
-type ListStacksListResource struct {
+// ConfigListResource is the generated Terraform list resource implementation.
+type ConfigListResource struct {
 	client *client.Client
 }
 
-// ListStacksListResourceModel describes the mycloud_list_stacks list filter configuration shape.
-type ListStacksListResourceModel struct {
+// ConfigListResourceModel describes the mycloud_config list filter configuration shape.
+type ConfigListResourceModel struct {
 	Workspace types.String `tfsdk:"workspace"`
 }
 
-// NewListStacksListResource returns a new instance of the generated list resource.
-func NewListStacksListResource() list.ListResource {
-	return &ListStacksListResource{}
+// NewConfigListResource returns a new instance of the generated list resource.
+func NewConfigListResource() list.ListResource {
+	return &ConfigListResource{}
 }
 
 // Metadata returns the list resource type name.
-func (l *ListStacksListResource) Metadata(_ context.Context, _ resource.MetadataRequest, resp *resource.MetadataResponse) {
-	resp.TypeName = "mycloud_list_stacks"
+func (l *ConfigListResource) Metadata(_ context.Context, _ resource.MetadataRequest, resp *resource.MetadataResponse) {
+	resp.TypeName = "mycloud_config"
 }
 
 // ListResourceConfigSchema returns the list resource config schema.
-func (l *ListStacksListResource) ListResourceConfigSchema(_ context.Context, _ list.ListResourceSchemaRequest, resp *list.ListResourceSchemaResponse) {
-	resp.Schema = listschema.Schema{MarkdownDescription: "List Stacks", Attributes: map[string]listschema.Attribute{"workspace": listschema.StringAttribute{Required: true}}}
+func (l *ConfigListResource) ListResourceConfigSchema(_ context.Context, _ list.ListResourceSchemaRequest, resp *list.ListResourceSchemaResponse) {
+	resp.Schema = listschema.Schema{MarkdownDescription: "List Configs", Attributes: map[string]listschema.Attribute{"workspace": listschema.StringAttribute{Required: true}}}
 }
 
 // List streams matching resource instances for terraform query.
-func (l *ListStacksListResource) List(ctx context.Context, req list.ListRequest, stream *list.ListResultsStream) {
+func (l *ConfigListResource) List(ctx context.Context, req list.ListRequest, stream *list.ListResultsStream) {
 	stream.Results = func(push func(list.ListResult) bool) {
-		var config ListStacksListResourceModel
+		var config ConfigListResourceModel
 		diags := req.Config.Get(ctx, &config)
 		if diags.HasError() {
 			result := req.NewListResult(ctx)
@@ -69,7 +69,7 @@ func (l *ListStacksListResource) List(ctx context.Context, req list.ListRequest,
 			result := req.NewListResult(ctx)
 			itemMap := map[string]json.RawMessage{}
 			if err := json.Unmarshal(item, &itemMap); err != nil {
-				result.Diagnostics.AddError("Error listing mycloud_list_stacks", fmt.Sprintf("Could not decode list item: %s", err))
+				result.Diagnostics.AddError("Error listing mycloud_config", fmt.Sprintf("Could not decode list item: %s", err))
 				if !push(result) {
 					return
 				}
@@ -89,7 +89,7 @@ func (l *ListStacksListResource) List(ctx context.Context, req list.ListRequest,
 				workspaceValue, ok = itemMap["id"]
 			}
 			if !ok {
-				result.Diagnostics.AddError("Error listing mycloud_list_stacks", "List item is missing identity attribute \"workspace\".")
+				result.Diagnostics.AddError("Error listing mycloud_config", "List item is missing identity attribute \"workspace\".")
 				if !push(result) {
 					return
 				}
@@ -109,7 +109,7 @@ func (l *ListStacksListResource) List(ctx context.Context, req list.ListRequest,
 				nameValue, ok = itemMap["id"]
 			}
 			if !ok {
-				result.Diagnostics.AddError("Error listing mycloud_list_stacks", "List item is missing identity attribute \"name\".")
+				result.Diagnostics.AddError("Error listing mycloud_config", "List item is missing identity attribute \"name\".")
 				if !push(result) {
 					return
 				}
@@ -118,7 +118,7 @@ func (l *ListStacksListResource) List(ctx context.Context, req list.ListRequest,
 			identity["name"] = nameValue
 			idJSON, err := json.Marshal(identity)
 			if err != nil {
-				result.Diagnostics.AddError("Error listing mycloud_list_stacks", fmt.Sprintf("Could not encode list item identity: %s", err))
+				result.Diagnostics.AddError("Error listing mycloud_config", fmt.Sprintf("Could not encode list item identity: %s", err))
 				if !push(result) {
 					return
 				}
@@ -126,7 +126,7 @@ func (l *ListStacksListResource) List(ctx context.Context, req list.ListRequest,
 			}
 			idVal, err := tftypes.ValueFromJSON(idJSON, req.ResourceIdentitySchema.Type().TerraformType(ctx))
 			if err != nil {
-				result.Diagnostics.AddError("Error listing mycloud_list_stacks", fmt.Sprintf("Could not decode list item identity: %s", err))
+				result.Diagnostics.AddError("Error listing mycloud_config", fmt.Sprintf("Could not decode list item identity: %s", err))
 				if !push(result) {
 					return
 				}
@@ -136,7 +136,7 @@ func (l *ListStacksListResource) List(ctx context.Context, req list.ListRequest,
 			if req.IncludeResource {
 				resVal, err := tftypes.ValueFromJSON(item, req.ResourceSchema.Type().TerraformType(ctx))
 				if err != nil {
-					result.Diagnostics.AddWarning("Error listing mycloud_list_stacks", fmt.Sprintf("Could not decode list item into the resource schema: %s", err))
+					result.Diagnostics.AddWarning("Error listing mycloud_config", fmt.Sprintf("Could not decode list item into the resource schema: %s", err))
 				} else {
 					result.Resource.Raw = resVal
 				}
@@ -149,13 +149,13 @@ func (l *ListStacksListResource) List(ctx context.Context, req list.ListRequest,
 }
 
 // listRemote fetches and decodes the collection pages, returning the items and any diagnostics for the List iterator to surface.
-func (l *ListStacksListResource) listRemote(ctx context.Context, config *ListStacksListResourceModel) ([]json.RawMessage, diag.Diagnostics) {
+func (l *ConfigListResource) listRemote(ctx context.Context, config *ConfigListResourceModel) ([]json.RawMessage, diag.Diagnostics) {
 	var diags diag.Diagnostics
 	if l.client == nil {
 		diags.AddError("Client Not Configured", "The API client was not set on the list resource. The provider Configure method must run before list operations; this is a bug in the generated provider.")
 		return nil, diags
 	}
-	reqPath := "/workspaces/{workspace}/stacks"
+	reqPath := "/workspaces/{workspace}/configs"
 	reqPath = strings.ReplaceAll(reqPath, "{workspace}", url.PathEscape(config.Workspace.ValueString()))
 	params := url.Values{}
 	var nextURL string
@@ -177,14 +177,14 @@ func (l *ListStacksListResource) listRemote(ctx context.Context, config *ListSta
 	}
 	pages, err := client.ListAllPages(ctx, params, fetch, nil)
 	if err != nil {
-		diags.AddError("Error listing mycloud_list_stacks", fmt.Sprintf("Could not read list response: %s", err))
+		diags.AddError("Error listing mycloud_config", fmt.Sprintf("Could not read list response: %s", err))
 		return nil, diags
 	}
 	allItems := []json.RawMessage{}
 	for _, page := range pages {
 		items := []json.RawMessage{}
 		if err := json.Unmarshal(page, &items); err != nil {
-			diags.AddError("Error listing mycloud_list_stacks", fmt.Sprintf("Could not decode list page: %s", err))
+			diags.AddError("Error listing mycloud_config", fmt.Sprintf("Could not decode list page: %s", err))
 			return nil, diags
 		}
 		allItems = append(allItems, items...)
@@ -193,7 +193,7 @@ func (l *ListStacksListResource) listRemote(ctx context.Context, config *ListSta
 }
 
 // Configure stores the API client supplied by the provider.
-func (l *ListStacksListResource) Configure(_ context.Context, req resource.ConfigureRequest, resp *resource.ConfigureResponse) {
+func (l *ConfigListResource) Configure(_ context.Context, req resource.ConfigureRequest, resp *resource.ConfigureResponse) {
 	if req.ProviderData == nil {
 		return
 	}

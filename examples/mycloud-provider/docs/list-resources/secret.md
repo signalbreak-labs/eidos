@@ -1,25 +1,26 @@
 ---
-page_title: "mycloud_list_instances List Resource - mycloud"
+page_title: "mycloud_secret List Resource - mycloud"
 subcategory: ""
 description: |-
-  List Instances
+  List Secrets
 ---
 
-# mycloud_list_instances List Resource
+# mycloud_secret List Resource
 
-List Instances
+List Secrets
+
+-> **Note:** This list resource requires Terraform 1.14 or later and is used through the `terraform query` command, not in configuration files.
 
 ## Example Usage
 
 ```terraform
-list "mycloud_list_instances" "example" {
+list "mycloud_secret" "example" {
   provider = mycloud
   limit    = 100
   config {
     workspace = "example"
   }
 }
-
 ```
 ## Schema
 
