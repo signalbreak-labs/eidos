@@ -28,12 +28,12 @@
     {
       "path": "docs/resources/note.md",
       "reason": "documentation for resource note",
-      "body_hash": "7e4bbe9bee2cb259"
+      "body_hash": "8c42d19252fba67b"
     },
     {
       "path": "docs/resources/upload.md",
       "reason": "documentation for resource upload",
-      "body_hash": "4fff6aea08959d93"
+      "body_hash": "823d8c944718e395"
     },
     {
       "path": "examples/resources/note/resource.tf",

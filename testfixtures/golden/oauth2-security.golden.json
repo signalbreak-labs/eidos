@@ -23,12 +23,12 @@
     {
       "path": "docs/actions/create_protected.md",
       "reason": "documentation for action create_protected",
-      "body_hash": "bf76a60536d2ebcd"
+      "body_hash": "8ea06c4a90eae6e0"
     },
     {
       "path": "docs/data-sources/get_protected.md",
       "reason": "documentation for data source get_protected",
-      "body_hash": "1b920cf90c60ab27"
+      "body_hash": "0ae6d19e911e5798"
     },
     {
       "path": "docs/index.md",

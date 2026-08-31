@@ -3,11 +3,12 @@ package generator
 // Readme returns the generated README.md file for the provider.
 func Readme(cfg BuildConfig) File {
 	return Template("README.md", readmeTemplate, map[string]any{
-		"ProviderName":  cfg.providerName(),
-		"Namespace":     cfg.namespace(),
-		"SourceAddress": cfg.sourceAddress(),
-		"GoVersion":     cfg.goVersion(),
-		"Tick":          "`",
+		"ProviderName":     cfg.providerName(),
+		"Namespace":        cfg.namespace(),
+		"SourceAddress":    cfg.sourceAddress(),
+		"GoVersion":        cfg.goVersion(),
+		"TerraformVersion": cfg.terraformVersion(),
+		"Tick":             "`",
 	})
 }
 
@@ -17,7 +18,7 @@ The {{.Tick}}{{.ProviderName}}{{.Tick}} Terraform provider is used to manage res
 
 ## Requirements
 
-- [Terraform](https://www.terraform.io/downloads.html) >= 1.0
+- [Terraform](https://www.terraform.io/downloads.html) >= {{.TerraformVersion}}
 - [Go](https://golang.org/doc/install) >= {{.GoVersion}}
 
 ## Development

@@ -23,6 +23,7 @@ func ActionDocsFile(a ir.ActionIR) File {
 		"Arguments":       arguments,
 		"Blocks":          blocks,
 		"NestedSchemas":   nested,
+		"Notes":           actionDocsNotes(a),
 	}
 	return Template(path, actionTemplate, data)
 }
@@ -55,6 +56,7 @@ func EphemeralResourceDocsFile(er ir.EphemeralResourceIR) File {
 		"Attributes":            attributes,
 		"Blocks":                blocks,
 		"NestedSchemas":         nested,
+		"Notes":                 ephemeralResourceDocsNotes(er),
 	}
 	return Template(path, ephemeralResourceTemplate, data)
 }
@@ -85,6 +87,7 @@ func ListResourceDocsFile(lr ir.ListResourceIR) File {
 		"Attributes":       attributes,
 		"Blocks":           blocks,
 		"NestedSchemas":    nested,
+		"Notes":            listResourceDocsNotes(),
 	}
 	return Template(path, listResourceTemplate, data)
 }
@@ -121,6 +124,7 @@ func FunctionDocsFile(fn ir.FunctionIR, providerName string) File {
 		"ArgumentDetails": renderFunctionParameters(fn),
 		"ReturnType":      schemaTypeName(fn.ReturnType),
 		"Variadic":        fn.Variadic,
+		"Notes":           functionDocsNotes(),
 	}
 	return Template(path, functionTemplate, data)
 }
@@ -211,7 +215,9 @@ description: |-
 # {{.ActionName}} Action
 
 {{.DescriptionBody}}
-
+{{range .Notes}}
+{{.}}
+{{end}}
 ## Example Usage
 
 ` + "```terraform" + `
@@ -251,7 +257,9 @@ description: |-
 {{.DescriptionBody}}
 
 ~> **Note:** Ephemeral resources are only available within the context of a single Terraform operation and are never persisted to state or plan files.
-
+{{range .Notes}}
+{{.}}
+{{end}}
 ## Example Usage
 
 ` + "```terraform" + `
@@ -297,7 +305,9 @@ description: |-
 # {{.ListResourceName}} List Resource
 
 {{.DescriptionBody}}
-
+{{range .Notes}}
+{{.}}
+{{end}}
 ## Example Usage
 
 ` + "```terraform" + `
@@ -343,7 +353,9 @@ description: |-
 # {{.FunctionName}} Function
 
 {{.DescriptionBody}}
-
+{{range .Notes}}
+{{.}}
+{{end}}
 ## Example Usage
 
 ` + "```terraform" + `

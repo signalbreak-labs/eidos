@@ -28,7 +28,7 @@
     {
       "path": "docs/resources/pet.md",
       "reason": "documentation for resource pet",
-      "body_hash": "8232d435adeee225"
+      "body_hash": "78f04d2edc8d1d69"
     },
     {
       "path": "examples/resources/pet/resource.tf",
