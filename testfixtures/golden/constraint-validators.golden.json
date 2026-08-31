@@ -103,7 +103,7 @@
     {
       "path": "internal/provider/resource_widget.go",
       "reason": "resource constraint-api_widget",
-      "body_hash": "3015902d12aee864"
+      "body_hash": "c934feb2a889bf66"
     },
     {
       "path": "internal/provider/resource_widget_acceptance_test.go",

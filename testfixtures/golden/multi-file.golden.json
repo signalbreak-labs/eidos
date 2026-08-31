@@ -103,7 +103,7 @@
     {
       "path": "internal/provider/resource_pet.go",
       "reason": "resource multi-file-pets_pet",
-      "body_hash": "4eca53470a60b262"
+      "body_hash": "c5adf9c253b36fdb"
     },
     {
       "path": "internal/provider/resource_pet_acceptance_test.go",

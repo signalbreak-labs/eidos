@@ -87,7 +87,7 @@ func GenerateConfigWithBase(providerIR ir.ProviderIR, base *config.Config) (*con
 // IR does model (provider name/description, servers, auth, resource overrides,
 // timeouts, pagination, logging, tests) are deliberately left as the IR-derived
 // values: the IR already reflects whatever the base config contributed to them.
-func overlayBaseConfig(cfg *config.Config, base *config.Config) {
+func overlayBaseConfig(cfg, base *config.Config) {
 	if base == nil {
 		return
 	}

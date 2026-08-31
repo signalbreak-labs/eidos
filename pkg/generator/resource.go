@@ -63,6 +63,13 @@ func generateResourceFile(r ir.ResourceIR, clientImport string) (*ast.File, erro
 	structName := resourceStructName(r)
 	modelName := resourceModelName(r)
 	wiring := planResourceWiring(r)
+	// A wired resource whose Update mapping is absent or unresolvable cannot
+	// honor in-place updates: its generated Update body keeps the honest
+	// not-wired scaffold error, so an apply that changed any config attribute
+	// would fail. Mark every config-settable attribute RequiresReplace so
+	// Terraform proposes replacement — the only plan the resource can
+	// actually execute — instead of an update that always errors.
+	r = resourceWithUnwiredUpdateRequiresReplace(r, wiring)
 
 	f.AddComment("Compile-time interface assertions.")
 	f.AddDecl(astgen.VarDeclGen(resourceAssertSpecs(r, wiring, structName)...))
@@ -302,7 +309,7 @@ func generateResourceFile(r ir.ResourceIR, clientImport string) (*ast.File, erro
 	}
 
 	// Register imports used by the generated file.
-	if err := registerResourceImports(f, r, wiring, clientImport); err != nil {
+	if err := registerResourceImports(f, r, wiring, clientImport, schemaValues); err != nil {
 		return nil, err
 	}
 
@@ -343,7 +350,7 @@ func resourceAssertSpecs(r ir.ResourceIR, wiring resourceWiringPlan, structName 
 // needs, including the generated client and JSON/HTTP packages used by wired
 // CRUD bodies. It returns an error when the resource's import ID format is
 // invalid.
-func registerResourceImports(f *astgen.File, r ir.ResourceIR, wiring resourceWiringPlan, clientImport string) error {
+func registerResourceImports(f *astgen.File, r ir.ResourceIR, wiring resourceWiringPlan, clientImport string, schemaValues []ast.Expr) error {
 	f.AddImport("context", "")
 	f.AddImport("github.com/hashicorp/terraform-plugin-framework/resource", "resource")
 	f.AddImport("github.com/hashicorp/terraform-plugin-framework/resource/schema", "schema")
@@ -371,6 +378,13 @@ func registerResourceImports(f *astgen.File, r ir.ResourceIR, wiring resourceWir
 		f.AddImport("github.com/hashicorp/terraform-plugin-framework/schema/validator", "validator")
 	}
 	for _, imp := range standardValidatorImports(r.Schema) {
+		f.AddImport(imp[0], imp[1])
+	}
+	// Plan modifiers are typed per attribute kind (stringplanmodifier, ...),
+	// plus the shared planmodifier interface package that names the slice
+	// type. Derived from the rendered schema so an attribute the renderer
+	// drops (e.g. a nested dynamic inside a collection) registers no import.
+	for _, imp := range schema.UsedPlanModifierImports(schemaValues) {
 		f.AddImport(imp[0], imp[1])
 	}
 	if ResourceImportable(r) {
@@ -701,6 +715,81 @@ func resourceIdentityAttributeExpr(attr ir.AttributeIR) ast.Expr {
 	return astgen.CompositeLit(attrType, elems...)
 }
 
+// resourceWithUnwiredUpdateRequiresReplace returns a copy of r whose
+// config-settable attributes carry a RequiresReplace plan modifier when the
+// resource is wired for create/read/delete but has no usable Update mapping
+// (either the spec declares none, or the declared one does not resolve). Such
+// a resource can only be created, read, and destroyed: its generated Update
+// body keeps the honest not-wired scaffold error, so without these modifiers
+// Terraform would propose an in-place update that always fails at apply.
+// With them, any configuration change proposes replacement, which the wired
+// Create/Delete pair can execute.
+//
+// The injection is idempotent — attributes that already carry RequiresReplace
+// (a generator.yaml force_new override or transformer-inferred entry) are
+// left untouched — and operates on a deep copy so the provider IR shared with
+// other renderers (docs, generate-config) is not mutated. Read-only
+// (computed-only) attributes are skipped: they are not practitioner inputs,
+// so they cannot be the attribute whose change triggers the replace.
+func resourceWithUnwiredUpdateRequiresReplace(r ir.ResourceIR, wiring resourceWiringPlan) ir.ResourceIR {
+	if !wiring.wired || wiring.update {
+		return r
+	}
+	r.Schema = objectSchemaWithRequiresReplace(r.Schema)
+	return r
+}
+
+// objectSchemaWithRequiresReplace deep-copies s, adding a RequiresReplace plan
+// modifier to every config-settable attribute and recursing into nested
+// attribute schemas and blocks so a change at any depth forces replacement.
+func objectSchemaWithRequiresReplace(s ir.ObjectSchemaIR) ir.ObjectSchemaIR {
+	if len(s.Attributes) == 0 && len(s.Blocks) == 0 {
+		return s
+	}
+	attrs := make([]ir.AttributeIR, len(s.Attributes))
+	for i, attr := range s.Attributes {
+		attrs[i] = attrWithRequiresReplace(attr)
+	}
+	blocks := make([]ir.BlockIR, len(s.Blocks))
+	for i, block := range s.Blocks {
+		blocks[i] = block
+		blocks[i].Schema = objectSchemaWithRequiresReplace(block.Schema)
+	}
+	s.Attributes = attrs
+	s.Blocks = blocks
+	return s
+}
+
+// attrWithRequiresReplace deep-copies attr, recursing into its nested object
+// schema and appending a RequiresReplace plan modifier when the attribute is
+// config-settable (Required or Optional) and does not already carry one.
+func attrWithRequiresReplace(attr ir.AttributeIR) ir.AttributeIR {
+	if len(attr.Schema.Attributes) > 0 || len(attr.Schema.Blocks) > 0 {
+		attr.Schema = schemaWithRequiresReplace(attr.Schema)
+	}
+	if !attr.Required && !attr.Optional {
+		return attr
+	}
+	if attr.ForceNew || hasRequiresReplace(attr.PlanModifiers) {
+		return attr
+	}
+	modifiers := make([]ir.PlanModifierIR, 0, len(attr.PlanModifiers)+1)
+	modifiers = append(modifiers, attr.PlanModifiers...)
+	modifiers = append(modifiers, ir.PlanModifierIR{Type: ir.PlanModifierTypeRequiresReplace})
+	attr.PlanModifiers = modifiers
+	return attr
+}
+
+// schemaWithRequiresReplace is the SchemaIR counterpart of
+// objectSchemaWithRequiresReplace for an attribute's nested schema, which
+// stores its attributes and blocks as a plain ObjectSchemaIR.
+func schemaWithRequiresReplace(s ir.SchemaIR) ir.SchemaIR {
+	nested := objectSchemaWithRequiresReplace(ir.ObjectSchemaIR{Attributes: s.Attributes, Blocks: s.Blocks})
+	s.Attributes = nested.Attributes
+	s.Blocks = nested.Blocks
+	return s
+}
+
 func resourceSchemaValues(r ir.ResourceIR) []ast.Expr {
 	elems := []ast.Expr{}
 	if v := litOrOmit(r.Description); v != nil {
@@ -849,9 +938,10 @@ func frameworkResourceAttributeExpr(attr ir.AttributeIR, attrPath string) ast.Ex
 				astgen.KeyValue("Attributes", nestedResourceAttributesMapFromSchema(*merged, attrPath)),
 			})
 			d = append(d, schema.DiscriminatedUnionValidators(s))
+			d = schema.AddPlanModifiers(d, attr, "Object")
 			return astgen.CompositeLit(astgen.QualExpr("schema", "SingleNestedAttribute"), d...)
 		}
-		return astgen.CompositeLit(astgen.QualExpr("schema", "DynamicAttribute"), resourceAttributeValues(attr, nil)...)
+		return dynamicResourceAttributeExpr(attr)
 	}
 
 	// Object-like types (Attributes or Blocks present without explicit primitive type).
@@ -860,6 +950,7 @@ func frameworkResourceAttributeExpr(attr ir.AttributeIR, attrPath string) ast.Ex
 			astgen.KeyValue("Attributes", nestedResourceAttributesMapFromSchema(s, attrPath)),
 		})
 		d = schema.AddValidators(d, attr, "Object")
+		d = schema.AddPlanModifiers(d, attr, "Object")
 		return astgen.CompositeLit(astgen.QualExpr("schema", "SingleNestedAttribute"), d...)
 	}
 
@@ -870,7 +961,17 @@ func frameworkResourceAttributeExpr(attr ir.AttributeIR, attrPath string) ast.Ex
 	if strings.Contains(attrPath, ".") {
 		return nil
 	}
-	return astgen.CompositeLit(astgen.QualExpr("schema", "DynamicAttribute"), resourceAttributeValues(attr, nil)...)
+	return dynamicResourceAttributeExpr(attr)
+}
+
+// dynamicResourceAttributeExpr renders a DynamicAttribute, carrying any plan
+// modifiers (typed dynamicplanmodifier) the attribute declares. All
+// DynamicAttribute fallbacks route through here so force_new and the
+// unwired-update RequiresReplace injection apply uniformly.
+func dynamicResourceAttributeExpr(attr ir.AttributeIR) ast.Expr {
+	d := resourceAttributeValues(attr, nil)
+	d = schema.AddPlanModifiers(d, attr, "Dynamic")
+	return astgen.CompositeLit(astgen.QualExpr("schema", "DynamicAttribute"), d...)
 }
 
 // resourceCollectionAttributeExpr maps a collection-typed attribute to its
@@ -887,7 +988,7 @@ func resourceCollectionAttributeExpr(attr ir.AttributeIR, attrPath string) ast.E
 		if strings.Contains(attrPath, ".") {
 			return nil
 		}
-		return astgen.CompositeLit(astgen.QualExpr("schema", "DynamicAttribute"), resourceAttributeValues(attr, nil)...)
+		return dynamicResourceAttributeExpr(attr)
 	}
 	// A collection whose element is an object (or nested collection) that
 	// contains a dynamic at any depth cannot be rendered as a typed framework
@@ -899,7 +1000,7 @@ func resourceCollectionAttributeExpr(attr ir.AttributeIR, attrPath string) ast.E
 	// enclosing collection's ContainsNestedDynamic check has already promoted that
 	// ancestor, so this emission is never reached inside a collection.
 	if schema.ContainsNestedDynamic(elem) {
-		return astgen.CompositeLit(astgen.QualExpr("schema", "DynamicAttribute"), resourceAttributeValues(attr, nil)...)
+		return dynamicResourceAttributeExpr(attr)
 	}
 	switch attr.Schema.Collection.Kind {
 	case ir.List:
@@ -920,6 +1021,7 @@ func resourceListElementAttributeExpr(attr ir.AttributeIR, elem ir.SchemaIR, att
 			astgen.KeyValue("ElementType", primitiveAttrType(elem.Type)),
 		})
 		d = schema.AddValidators(d, attr, kind)
+		d = schema.AddPlanModifiers(d, attr, kind)
 		return astgen.CompositeLit(astgen.QualExpr("schema", kind+"Attribute"), d...)
 	}
 	if schema.IsObjectLike(elem) {
@@ -930,6 +1032,7 @@ func resourceListElementAttributeExpr(attr ir.AttributeIR, elem ir.SchemaIR, att
 			)),
 		})
 		d = schema.AddValidators(d, attr, "Object")
+		d = schema.AddPlanModifiers(d, attr, "Object")
 		return astgen.CompositeLit(astgen.QualExpr("schema", kind+"NestedAttribute"), d...)
 	}
 	return nil
@@ -943,6 +1046,7 @@ func resourceMapElementAttributeExpr(attr ir.AttributeIR, elem ir.SchemaIR, attr
 			astgen.KeyValue("ElementType", primitiveAttrType(elem.Type)),
 		})
 		d = schema.AddValidators(d, attr, "Map")
+		d = schema.AddPlanModifiers(d, attr, "Map")
 		return astgen.CompositeLit(astgen.QualExpr("schema", "MapAttribute"), d...)
 	}
 	if schema.IsObjectLike(elem) {
@@ -953,6 +1057,7 @@ func resourceMapElementAttributeExpr(attr ir.AttributeIR, elem ir.SchemaIR, attr
 			)),
 		})
 		d = schema.AddValidators(d, attr, "Object")
+		d = schema.AddPlanModifiers(d, attr, "Object")
 		return astgen.CompositeLit(astgen.QualExpr("schema", "MapNestedAttribute"), d...)
 	}
 	return nil
@@ -965,18 +1070,22 @@ func resourcePrimitiveAttributeExpr(attr ir.AttributeIR, attrPath string) ast.Ex
 	case ir.TypeString:
 		d := resourceAttributeValues(attr, nil)
 		d = schema.AddValidators(d, attr, "String")
+		d = schema.AddPlanModifiers(d, attr, "String")
 		return astgen.CompositeLit(astgen.QualExpr("schema", "StringAttribute"), d...)
 	case ir.TypeInt:
 		d := resourceAttributeValues(attr, nil)
 		d = schema.AddValidators(d, attr, "Int64")
+		d = schema.AddPlanModifiers(d, attr, "Int64")
 		return astgen.CompositeLit(astgen.QualExpr("schema", "Int64Attribute"), d...)
 	case ir.TypeFloat:
 		d := resourceAttributeValues(attr, nil)
 		d = schema.AddValidators(d, attr, "Float64")
+		d = schema.AddPlanModifiers(d, attr, "Float64")
 		return astgen.CompositeLit(astgen.QualExpr("schema", "Float64Attribute"), d...)
 	case ir.TypeBool:
 		d := resourceAttributeValues(attr, nil)
 		d = schema.AddValidators(d, attr, "Bool")
+		d = schema.AddPlanModifiers(d, attr, "Bool")
 		return astgen.CompositeLit(astgen.QualExpr("schema", "BoolAttribute"), d...)
 	case ir.TypeDynamic:
 		// A DynamicAttribute is only valid at the top level; nested inside a
@@ -985,7 +1094,7 @@ func resourcePrimitiveAttributeExpr(attr ir.AttributeIR, attrPath string) ast.Ex
 		if strings.Contains(attrPath, ".") {
 			return nil
 		}
-		return astgen.CompositeLit(astgen.QualExpr("schema", "DynamicAttribute"), resourceAttributeValues(attr, nil)...)
+		return dynamicResourceAttributeExpr(attr)
 	}
 	return nil
 }

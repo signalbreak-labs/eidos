@@ -153,7 +153,7 @@
     {
       "path": "internal/provider/resource_pet.go",
       "reason": "resource mycloud-pets_pet",
-      "body_hash": "fea7ac37e5b4033b"
+      "body_hash": "c613f15a79dc91b1"
     },
     {
       "path": "internal/provider/resource_pet_acceptance_test.go",

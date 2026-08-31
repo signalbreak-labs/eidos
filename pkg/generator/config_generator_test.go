@@ -1,6 +1,7 @@
 package generator
 
 import (
+	"bytes"
 	"strings"
 	"testing"
 	"time"
@@ -1400,7 +1401,7 @@ func TestGenerateConfigWithBase_NilBaseMatchesGenerateConfig(t *testing.T) {
 		t.Fatalf("GenerateConfigWithBase(nil) failed: %v", err)
 	}
 	wantBytes, gotBytes := marshalYAMLOrFatal(t, want), marshalYAMLOrFatal(t, got)
-	if string(wantBytes) != string(gotBytes) {
+	if !bytes.Equal(wantBytes, gotBytes) {
 		t.Errorf("GenerateConfigWithBase(nil) diverged from GenerateConfig:\nwant:\n%s\ngot:\n%s", wantBytes, gotBytes)
 	}
 }
