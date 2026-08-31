@@ -44,6 +44,12 @@ func ProviderDocsIndex(pir ir.ProviderIR) File {
 	}
 	listResources := make([]docsListResourceRef, 0, len(pir.ListResources))
 	for _, lr := range pir.ListResources {
+		// Only list resources the provider can register (they pair with a
+		// managed resource, so terraform query exposes them) are indexed;
+		// unregistered lists get no docs at all (ListResourceDocsFiles).
+		if !lr.Registerable {
+			continue
+		}
 		listResources = append(listResources, docsListResourceRef{
 			TypeName: listResourceDocsTypeName(lr),
 			FileName: naming.SnakeCase(lr.Name) + ".md",

@@ -502,7 +502,11 @@ func ephemeralRegistrationBody(ephemerals []ir.EphemeralResourceIR) *ast.BlockSt
 // The framework requires every registered ListResource type name to match a
 // managed Resource type name; a list resource whose type name has no matching
 // managed resource fails the whole provider schema load (G12). Only list
-// resources that pair with a managed resource are registered.
+// resources that pair with a managed resource are registered: the IR marks
+// them Registerable after pairListResourceRegistrations renames promoted
+// lists to their CRUD group's managed resource. The type-name check is kept
+// as a defensive fallback so an IR built without the pairing pass cannot
+// register an unpairable list.
 func listRegistrationBody(listResources []ir.ListResourceIR, resources []ir.ResourceIR) *ast.BlockStmt {
 	managed := make(map[string]struct{}, len(resources))
 	for _, r := range resources {
@@ -514,8 +518,10 @@ func listRegistrationBody(listResources []ir.ListResourceIR, resources []ir.Reso
 	)
 	factories := make([]ast.Expr, 0, len(listResources))
 	for _, lr := range listResources {
-		if _, ok := managed[lr.TypeName]; !ok {
-			continue
+		if !lr.Registerable {
+			if _, ok := managed[lr.TypeName]; !ok {
+				continue
+			}
 		}
 		factories = append(factories, astgen.FuncLit(
 			factoryType,

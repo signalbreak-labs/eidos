@@ -469,7 +469,14 @@ func collectListResourceFiles(rec *Recorder, lr ir.ListResourceIR, opts CollectO
 		}
 	}
 	if opts.IncludeDocs {
-		rec.Record(fmt.Sprintf("docs/list-resources/%s.md", name), fmt.Sprintf("documentation for list resource %s", lr.Name))
+		// Docs are suppressed for list resources the provider cannot register
+		// (no paired managed resource): terraform query never exposes them, so
+		// documenting them would advertise constructs the provider cannot
+		// serve. Mirrors ListResourceDocsFiles so record and write modes stay
+		// in lockstep.
+		if lr.Registerable {
+			rec.Record(fmt.Sprintf("docs/list-resources/%s.md", name), fmt.Sprintf("documentation for list resource %s", lr.Name))
+		}
 	}
 }
 

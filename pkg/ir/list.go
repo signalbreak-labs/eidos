@@ -20,4 +20,15 @@ type ListResourceIR struct {
 	PaginationStyle string             `json:"pagination_style,omitempty"`
 	Tags            []string           `json:"tags,omitempty"`
 	SourceOperation string             `json:"source_operation,omitempty"`
+	// CollectionPath records the OpenAPI path of the collection endpoint the
+	// list resource was inferred from. Metadata only — never emitted into
+	// generated code; it pairs a list resource with the managed resource
+	// inferred from the same CRUD group so the two can share a type name.
+	CollectionPath string `json:"collection_path,omitempty"`
+	// Registerable records whether the provider can register this list
+	// resource. The framework requires every registered ListResource type name
+	// to equal a managed resource type name, so a list resource with no paired
+	// managed resource must stay unregistered; docs and examples are suppressed
+	// for such lists so they are not advertised as usable.
+	Registerable bool `json:"registerable,omitempty"`
 }

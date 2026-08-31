@@ -134,7 +134,9 @@ func TestCollectFromProviderIR_FullProvider(t *testing.T) {
 			{Name: "temporaryCredential", FullName: "Temporary Credential"},
 		},
 		ListResources: []ir.ListResourceIR{
-			{Name: "pet", FullName: "Pet List"},
+			// Registerable so the provider documents it; an unregistered
+			// list's docs are suppressed (ListResourceDocsFiles).
+			{Name: "pet", FullName: "Pet List", Registerable: true},
 		},
 		Functions: []ir.FunctionIR{
 			{Name: "ipLookup", FullName: "IP Lookup"},

@@ -28,12 +28,12 @@
     {
       "path": "docs/index.md",
       "reason": "provider overview and authentication guide",
-      "body_hash": "bc9dd987615ee456"
+      "body_hash": "9318a4ba0dd4be3e"
     },
     {
-      "path": "docs/list-resources/list_pets.md",
-      "reason": "documentation for list resource list_pets",
-      "body_hash": "fb5fdbcf1b0403c5"
+      "path": "docs/list-resources/pet.md",
+      "reason": "documentation for list resource pet",
+      "body_hash": "c7eb5846bdbaeb23"
     },
     {
       "path": "docs/resources/pet.md",
@@ -53,7 +53,7 @@
     {
       "path": "generator.yaml",
       "reason": "generated generator configuration",
-      "body_hash": "63cdfcc4c6963930"
+      "body_hash": "ed318cb75eafd542"
     },
     {
       "path": "go.mod",
@@ -131,19 +131,19 @@
       "body_hash": "f6d9a056cb8d5d0d"
     },
     {
-      "path": "internal/provider/list_list_pets.go",
-      "reason": "list resource mycloud-pets_list_pets",
-      "body_hash": "ca7057b3665bb311"
+      "path": "internal/provider/list_pet.go",
+      "reason": "list resource mycloud-pets_pet",
+      "body_hash": "b368baac1d40a055"
     },
     {
-      "path": "internal/provider/list_list_pets_remote_test.go",
-      "reason": "coverage tests for list resource list_pets remote helper",
-      "body_hash": "9b48c97ef13067a3"
+      "path": "internal/provider/list_pet_remote_test.go",
+      "reason": "coverage tests for list resource pet remote helper",
+      "body_hash": "1a23816b5a494d46"
     },
     {
       "path": "internal/provider/provider.go",
       "reason": "provider schema and registration",
-      "body_hash": "57cfc0f30f5a3baf"
+      "body_hash": "39824794b5a277da"
     },
     {
       "path": "internal/provider/provider_test.go",
@@ -153,7 +153,7 @@
     {
       "path": "internal/provider/resource_pet.go",
       "reason": "resource mycloud-pets_pet",
-      "body_hash": "f7b06612aadd57f8"
+      "body_hash": "fea7ac37e5b4033b"
     },
     {
       "path": "internal/provider/resource_pet_acceptance_test.go",

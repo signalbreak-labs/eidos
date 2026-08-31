@@ -38,12 +38,7 @@
     {
       "path": "docs/index.md",
       "reason": "provider overview and authentication guide",
-      "body_hash": "784a239e2548453a"
-    },
-    {
-      "path": "docs/list-resources/list_items.md",
-      "reason": "documentation for list resource list_items",
-      "body_hash": "b96668f0f52d7f36"
+      "body_hash": "8e9284b3fe478c7c"
     },
     {
       "path": "examples/actions/delete_item/action.tf",
@@ -175,5 +170,8 @@
       "reason": "Terraform Registry manifest",
       "body_hash": "76ac85aa7f3a523b"
     }
+  ],
+  "warnings": [
+    "list resource \"list_items\" cannot be registered; terraform query will not expose it"
   ]
 }

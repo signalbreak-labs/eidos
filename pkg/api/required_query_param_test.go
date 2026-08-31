@@ -192,7 +192,17 @@ func TestListResource_EnvelopedCollectionKeepsRequiredQueryParam(t *testing.T) {
 		t.Fatal("expected IR preview")
 	}
 
-	lr := findListByName(t, resp.IRPreview.ListResources, "load_all_maps")
+	// The list resource is renamed to the managed resource inferred from the
+	// same CRUD group (/maps POST create + /maps/{id} GET/DELETE → "map") so
+	// the provider can register it: the framework only registers a list whose
+	// type name matches a managed resource (pairListResourceRegistrations).
+	lr := findListByName(t, resp.IRPreview.ListResources, "map")
+	if !lr.Registerable {
+		t.Errorf("list paired with managed resource %q must be Registerable, got false", "map")
+	}
+	if lr.TypeName != lr.FullName {
+		t.Errorf("TypeName %q should equal FullName %q for a paired list", lr.TypeName, lr.FullName)
+	}
 
 	clusterID, ok := attrByName(lr.ConfigSchema.Attributes, "cluster_id")
 	if !ok {
