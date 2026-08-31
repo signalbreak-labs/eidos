@@ -1031,8 +1031,12 @@ func resourceListElementAttributeExpr(attr ir.AttributeIR, elem ir.SchemaIR, att
 				astgen.KeyValue("Attributes", nestedResourceAttributesMapFromSchema(elem, attrPath)),
 			)),
 		})
+		// The validators kind stays "Object" (element-level validators live on
+		// the nested attributes), but plan modifiers are typed by the
+		// attribute's own collection kind: a ListNestedAttribute takes
+		// []planmodifier.List, a SetNestedAttribute []planmodifier.Set.
 		d = schema.AddValidators(d, attr, "Object")
-		d = schema.AddPlanModifiers(d, attr, "Object")
+		d = schema.AddPlanModifiers(d, attr, kind)
 		return astgen.CompositeLit(astgen.QualExpr("schema", kind+"NestedAttribute"), d...)
 	}
 	return nil
@@ -1056,8 +1060,11 @@ func resourceMapElementAttributeExpr(attr ir.AttributeIR, elem ir.SchemaIR, attr
 				astgen.KeyValue("Attributes", nestedResourceAttributesMapFromSchema(elem, attrPath)),
 			)),
 		})
+		// Plan modifiers on a MapNestedAttribute are typed []planmodifier.Map,
+		// so the kind follows the attribute's collection kind, not its
+		// object-like element.
 		d = schema.AddValidators(d, attr, "Object")
-		d = schema.AddPlanModifiers(d, attr, "Object")
+		d = schema.AddPlanModifiers(d, attr, "Map")
 		return astgen.CompositeLit(astgen.QualExpr("schema", "MapNestedAttribute"), d...)
 	}
 	return nil
