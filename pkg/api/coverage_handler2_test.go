@@ -1063,6 +1063,48 @@ func TestListResourceFromOperation(t *testing.T) {
 	}
 }
 
+// TestListResourceFromOperation_IdentityDescriptions covers the identity
+// attribute descriptions: the matching item property's description documents
+// what each identity attribute identifies, so it must be carried onto the
+// identity attribute for both the identity-params path and the id fallback.
+// Undescribed item properties leave the identity attribute undescribed.
+func TestListResourceFromOperation_IdentityDescriptions(t *testing.T) {
+	pathOps := map[string]map[transformer.HTTPMethod]transformer.Operation{
+		"/widgets": {transformer.MethodGet: {Method: transformer.MethodGet, Path: "/widgets", OperationID: "listWidgets",
+			ResponseSchema: &transformer.SchemaSpec{
+				Type: "array",
+				Items: &transformer.SchemaSpec{
+					Type: "object",
+					Properties: map[string]transformer.SchemaSpec{
+						"id":   {Type: "integer", Description: "Widget identifier."},
+						"name": {Type: "string", Description: "Widget name."},
+						"ok":   {Type: "boolean"},
+					},
+				},
+			}}},
+	}
+	// Identity params take the description of the matched item property.
+	lr := listResourceFromOperation(&parser.Operation{OperationID: "listWidgets"}, "acme", "/widgets", "GET", pathOps, []string{"name", "ok"}, nil)
+	descs := map[string]string{}
+	for _, a := range lr.IdentitySchema.Attributes {
+		descs[a.Name] = a.Description
+	}
+	if descs["name"] != "Widget name." {
+		t.Errorf("name description = %q, want %q", descs["name"], "Widget name.")
+	}
+	if descs["ok"] != "" {
+		t.Errorf("undescribed ok = %q, want empty", descs["ok"])
+	}
+	// The id fallback branch also carries the item property's description.
+	lr2 := listResourceFromOperation(&parser.Operation{OperationID: "listWidgets"}, "acme", "/widgets", "GET", pathOps, nil, nil)
+	if len(lr2.IdentitySchema.Attributes) != 1 || lr2.IdentitySchema.Attributes[0].Name != "id" {
+		t.Fatalf("id fallback = %+v", lr2.IdentitySchema.Attributes)
+	}
+	if got := lr2.IdentitySchema.Attributes[0].Description; got != "Widget identifier." {
+		t.Errorf("id description = %q, want %q", got, "Widget identifier.")
+	}
+}
+
 // TestFunctionReturnSchema drives the integer/boolean primitives, array-of-
 // primitives, non-flat object, and default branches.
 func TestFunctionReturnSchema(t *testing.T) {

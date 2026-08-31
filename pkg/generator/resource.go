@@ -678,7 +678,10 @@ func resourceIdentitySchemaValues(r ir.ResourceIR) []ast.Expr {
 // resourceIdentityAttributeExpr returns an identityschema attribute composite
 // literal for a primitive identity attribute. Non-primitive types fall back to
 // StringAttribute; identity derivation only produces primitives, so this is a
-// defensive default rather than an expected path.
+// defensive default rather than an expected path. identityschema attributes
+// carry a single Description field (no MarkdownDescription variant), populated
+// from the item property the identity was derived from when the spec described
+// it.
 func resourceIdentityAttributeExpr(attr ir.AttributeIR) ast.Expr {
 	var attrType ast.Expr
 	switch attr.Schema.Type {
@@ -691,7 +694,11 @@ func resourceIdentityAttributeExpr(attr ir.AttributeIR) ast.Expr {
 	default:
 		attrType = astgen.QualExpr("identityschema", "StringAttribute")
 	}
-	return astgen.CompositeLit(attrType, astgen.KeyValue("RequiredForImport", astgen.Ident("true")))
+	elems := []ast.Expr{astgen.KeyValue("RequiredForImport", astgen.Ident("true"))}
+	if v := litOrOmit(attr.Description); v != nil {
+		elems = append(elems, astgen.KeyValue("Description", v))
+	}
+	return astgen.CompositeLit(attrType, elems...)
 }
 
 func resourceSchemaValues(r ir.ResourceIR) []ast.Expr {

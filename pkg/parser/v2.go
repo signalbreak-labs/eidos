@@ -702,6 +702,13 @@ func parseParameter(node Node) (Parameter, []Diagnostic) {
 		param.Schema = schema
 	}
 
+	// A parameter may declare its description either on the parameter object or
+	// on its schema; fall back to the schema's when the object's is absent so
+	// the prose is not silently dropped (mirrors the v30 converter).
+	if param.Description == "" && param.Schema != nil {
+		param.Description = param.Schema.Description
+	}
+
 	param.Extensions = nodeExtensions(m)
 	// collectionFormat controls how array parameters serialize; translate it into
 	// the equivalent OpenAPI 3.0 style/explode values.
