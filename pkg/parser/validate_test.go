@@ -1503,3 +1503,89 @@ func hasDiag(diags []Diagnostic, severity Severity, summary, detailSubstr string
 	}
 	return false
 }
+
+// TestCanonicalSchemaType verifies the capitalization-variant and informal-type
+// normalization table: exact primitives pass through, case variants fold to
+// lowercase, "long" maps to "integer", and genuinely unknown names are
+// rejected (§3.13).
+func TestCanonicalSchemaType(t *testing.T) {
+	cases := []struct {
+		raw  string
+		want string
+		ok   bool
+	}{
+		{raw: "string", want: "string", ok: true},
+		{raw: "String", want: "string", ok: true},
+		{raw: "BOOLEAN", want: "boolean", ok: true},
+		{raw: " long ", want: "integer", ok: true},
+		{raw: "unknown", want: "", ok: false},
+		{raw: "", want: "", ok: false},
+	}
+	for _, tc := range cases {
+		got, ok := canonicalSchemaType(tc.raw)
+		if got != tc.want || ok != tc.ok {
+			t.Errorf("canonicalSchemaType(%q) = (%q, %v), want (%q, %v)", tc.raw, got, ok, tc.want, tc.ok)
+		}
+	}
+}
+
+// TestValidateSchemaTypeVariantNormalized asserts that recognized noncanonical
+// type spellings ("String", "Boolean", "long") surface as Info normalization
+// diagnostics instead of Warnings, and that the converter stores the canonical
+// primitive so the transformer maps a real Terraform type (§3.13).
+func TestValidateSchemaTypeVariantNormalized(t *testing.T) {
+	data := []byte(`openapi: 3.0.3
+info:
+  title: Test API
+  version: "1.0"
+paths: {}
+components:
+  schemas:
+    Widget:
+      type: object
+      properties:
+        name:
+          type: String
+        count:
+          type: long
+        enabled:
+          type: Boolean
+`)
+	root, err := LoadFile("variant-types.yaml", data)
+	if err != nil {
+		t.Fatalf("LoadFile: %v", err)
+	}
+
+	version, _ := DetectVersion(root)
+	spec, _, err := ConvertV30(root)
+	if err != nil {
+		t.Fatalf("ConvertV30: %v", err)
+	}
+
+	diags := Validate(root, spec, version)
+	for _, raw := range []string{"String", "long", "Boolean"} {
+		if hasDiag(diags, SeverityWarning, "Unsupported schema type", raw) {
+			t.Errorf("expected no Unsupported warning for variant %q, got %v", raw, diags)
+		}
+		if !hasDiag(diags, SeverityInfo, "Normalized schema type", raw) {
+			t.Errorf("expected Normalized schema type info for %q, got %v", raw, diags)
+		}
+	}
+
+	// The stored schema types must be canonical so downstream conversion maps
+	// real Terraform types instead of degrading to Dynamic.
+	widget := spec.Components.Schemas["Widget"]
+	if widget == nil {
+		t.Fatalf("Widget schema not found")
+	}
+	for name, want := range map[string]string{"name": "string", "count": "integer", "enabled": "boolean"} {
+		prop, ok := widget.Properties[name]
+		if !ok || prop == nil {
+			t.Fatalf("property %q not found", name)
+		}
+		got, _ := prop.Type.(string)
+		if got != want {
+			t.Errorf("property %q stored type %q, want %q", name, got, want)
+		}
+	}
+}

@@ -446,6 +446,13 @@ func warnComputedOnlyImportTarget(r *ir.ResourceIR, format string, diags *diagno
 	if diags == nil || r == nil {
 		return
 	}
+	// A singleton resource (parameterless read) accepts any import ID — the
+	// refresh repopulates the Computed-only target from the response — so a
+	// Computed-only import target is not a friction signal there; the import
+	// gate notes the placeholder semantics via its own Info diagnostic.
+	if singletonResourceRead(r) {
+		return
+	}
 	for _, attr := range importFormatAttrs(format) {
 		for _, a := range r.Schema.Attributes {
 			if a.Name == attr && a.ComputedOnly() {
@@ -460,6 +467,30 @@ func warnComputedOnlyImportTarget(r *ir.ResourceIR, format string, diags *diagno
 			}
 		}
 	}
+}
+
+// singletonResourceRead reports whether the resource's read operation takes no
+// path parameters and no required query/header parameters, so the refresh
+// after import succeeds regardless of the import ID's value.
+func singletonResourceRead(r *ir.ResourceIR) bool {
+	read := r.CRUDMapping.Read
+	if read.Method == "" && read.PathTemplate == "" {
+		return false
+	}
+	if len(read.PathParams) > 0 {
+		return false
+	}
+	for _, p := range read.QueryParams {
+		if p.Required {
+			return false
+		}
+	}
+	for _, p := range read.HeaderParams {
+		if p.Required {
+			return false
+		}
+	}
+	return true
 }
 
 // warnMissingRequiredReadParams surfaces a fail-loud warning when the explicit

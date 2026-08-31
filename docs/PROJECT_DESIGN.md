@@ -290,6 +290,7 @@ OpenAPI 3.1 aligns with JSON Schema Draft 2020-12 and introduces:
 |---------|-------------|-------------------|
 | `jsonSchemaDialect` | Default `$schema` for Schema Objects | Validated but not directly mapped |
 | `type` arrays (e.g., `["string", "null"]`) | Union types at the schema level | `Optional` + `Computed` with nullable handling |
+| Noncanonical `type` spellings (`String`, `BOOLEAN`, `long`) | Capitalization variants and the informal 64-bit integer alias, common in vendor specs | Normalized to the canonical primitive (`string`, `boolean`, `integer`) at parse time, surfaced as an Info diagnostic instead of an unsupported-type Warning; unrecognized spellings still warn and degrade to Dynamic |
 | `prefixItems` | Ordered tuple validation | Parsed but not mapped to a Terraform construct |
 | `contentMediaType` / `contentEncoding` | Binary data description | Parsed but not mapped; no format validators are emitted |
 | `$id` and `$ref` in Schema Objects | JSON Schema Draft 2020-12 reference resolution | `$ref` is dereferenced; `$id` is not used for base-URI resolution |
@@ -3282,6 +3283,18 @@ upstream constraint changes or a product decision is made.
   array declares `uniqueItems: true` is downgraded to List with a fail-loud
   `diagnostics.Warning` at transform time. Managed resources, data sources,
   ephemerals, and actions honor Set.
+- **Secret-named attributes in action and list schemas cannot be marked
+  Sensitive (upstream framework limit).** terraform-plugin-framework v1.19.0's
+  `action/schema` attributes reject `Sensitive` (`IsSensitive` always returns
+  false) and the experimental `list/schema` package has no Sensitive support,
+  so a secret-named string attribute (`password`, `api_key`, a `token`
+  suffix, …) on an action or list resource cannot be redacted. Eidos emits a
+  fail-loud Warning per attribute at generation time, records the wire names
+  in the IR (`ActionIR`/`ListResourceIR.UnmarkableSensitiveAttrs`), and
+  renders a practitioner-facing admonition on the affected doc page naming
+  the attributes and their plain-text exposure. Managed resources, data
+  sources, ephemerals, and the provider config do mark such attributes
+  Sensitive.
 - **Terraform State Stores (1.15+) are not generated.** State Stores are
   experimental and offered without compatibility promises; eidos tracks the
   feature but waits for GA.

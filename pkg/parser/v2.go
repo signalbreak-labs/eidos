@@ -820,7 +820,7 @@ func parseSchema(node Node) (*Schema, []Diagnostic) {
 	diags := make([]Diagnostic, 0, 8)
 	schema := &Schema{
 		Ref:              v2ScalarString(findEntryValue(m, "$ref"), "schema.$ref", &diags),
-		Type:             v2ScalarString(findEntryValue(m, "type"), "schema.type", &diags),
+		Type:             v2NormalizeSchemaType(v2ScalarString(findEntryValue(m, "type"), "schema.type", &diags)),
 		Format:           v2ScalarString(findEntryValue(m, "format"), "schema.format", &diags),
 		Title:            v2ScalarString(findEntryValue(m, "title"), "schema.title", &diags),
 		Description:      v2ScalarString(findEntryValue(m, "description"), "schema.description", &diags),
@@ -1507,6 +1507,18 @@ func v2ScalarString(n Node, path string, diags *[]Diagnostic) string {
 		*diags = append(*diags, v2ScalarTypeMismatchDiag(n, path, "string"))
 	}
 	return v
+}
+
+// v2NormalizeSchemaType canonicalizes recognized noncanonical schema `type`
+// spellings ("String", "Boolean", the informal 64-bit integer alias "long")
+// so the transformer maps them to a real Terraform type instead of degrading
+// to Dynamic; the validator surfaces the rewrite as an Info diagnostic
+// (§3.13). Unrecognized values pass through untouched.
+func v2NormalizeSchemaType(raw string) string {
+	if canonical, ok := canonicalSchemaType(raw); ok {
+		return canonical
+	}
+	return raw
 }
 
 // v2ScalarBool extracts a boolean scalar from n, appending a warning diagnostic

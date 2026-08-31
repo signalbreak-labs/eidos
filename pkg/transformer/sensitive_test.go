@@ -249,3 +249,29 @@ func TestInferSensitiveRecursive_Branches(t *testing.T) {
 		}
 	}
 }
+
+// TestWarnUnmarkableSensitiveCollectsNames verifies the returned wire-name
+// list — the generator renders a doc-page admonition from it (§3.6) — while
+// the warnings still fire.
+func TestWarnUnmarkableSensitiveCollectsNames(t *testing.T) {
+	obj := &ir.ObjectSchemaIR{
+		Attributes: []ir.AttributeIR{
+			{Name: "http_password", WireName: "httpPassword", Schema: ir.SchemaIR{Type: ir.TypeString}},
+			{Name: "token", Schema: ir.SchemaIR{Type: ir.TypeString}},
+			{Name: "label", Schema: ir.SchemaIR{Type: ir.TypeString}},
+		},
+	}
+	var diags diagnostics.Diagnostics
+	found := WarnUnmarkableSensitive(obj, "action", "mycloud_update_settings", &diags)
+	if len(diags) != 2 {
+		t.Fatalf("expected 2 warnings, got %d: %v", len(diags), diags)
+	}
+	if len(found) != 2 {
+		t.Fatalf("expected 2 collected names, got %v", found)
+	}
+	// Wire names are collected when recorded, falling back to the attribute
+	// name — the docs note names what the practitioner sees in the schema.
+	if found[0] != "httpPassword" || found[1] != "token" {
+		t.Errorf("collected names = %v, want [httpPassword token]", found)
+	}
+}

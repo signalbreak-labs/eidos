@@ -25,4 +25,11 @@ type ActionIR struct {
 	ProgressMessages      bool                `json:"progress_messages,omitempty"`
 	Tags                  []string            `json:"tags,omitempty"`
 	SourceOperation       string              `json:"source_operation,omitempty"`
+	// UnmarkableSensitiveAttrs records the wire names of string-typed
+	// attributes whose names indicate a secret but that the action schema
+	// cannot mark Sensitive (the plugin-framework action/schema package does
+	// not support Sensitive). The generator renders a doc-page admonition
+	// from this list so practitioners see that the values surface in plan
+	// and state output (§3.6).
+	UnmarkableSensitiveAttrs []string `json:"unmarkable_sensitive_attrs,omitempty"`
 }

@@ -505,7 +505,8 @@ func TestDeclaresOAuth2Flow(t *testing.T) {
 func TestWarnUnmarkableSensitiveRecursive(t *testing.T) {
 	// Nil schema is a no-op.
 	var diags diagnostics.Diagnostics
-	warnUnmarkableSensitiveRecursive(nil, "action", "do_thing", &diags)
+	var foundNil []string
+	warnUnmarkableSensitiveRecursive(nil, "action", "do_thing", &diags, &foundNil)
 	if len(diags) != 0 {
 		t.Errorf("nil schema must not emit warnings, got %d", len(diags))
 	}
@@ -516,7 +517,8 @@ func TestWarnUnmarkableSensitiveRecursive(t *testing.T) {
 			{Name: "password", Schema: ir.SchemaIR{Type: ir.TypeString}},
 		},
 	}
-	warnUnmarkableSensitiveRecursive(obj, "action", "do_thing", &diags)
+	var found []string
+	warnUnmarkableSensitiveRecursive(obj, "action", "do_thing", &diags, &found)
 	if len(diags) != 1 {
 		t.Errorf("object schema: expected 1 warning, got %d", len(diags))
 	}
@@ -529,7 +531,7 @@ func TestWarnUnmarkableSensitiveRecursive(t *testing.T) {
 			ElementType: ir.SchemaIR{Attributes: []ir.AttributeIR{{Name: "token", Schema: ir.SchemaIR{Type: ir.TypeString}}}},
 		},
 	}
-	warnUnmarkableSensitiveRecursive(col, "action", "do_thing", &diags)
+	warnUnmarkableSensitiveRecursive(col, "action", "do_thing", &diags, &found)
 	if len(diags) != 1 {
 		t.Errorf("collection schema: expected 1 warning, got %d", len(diags))
 	}
@@ -544,7 +546,7 @@ func TestWarnUnmarkableSensitiveRecursive(t *testing.T) {
 			},
 		},
 	}
-	warnUnmarkableSensitiveRecursive(uni, "action", "do_thing", &diags)
+	warnUnmarkableSensitiveRecursive(uni, "action", "do_thing", &diags, &found)
 	if len(diags) != 1 {
 		t.Errorf("union schema: expected 1 warning, got %d", len(diags))
 	}

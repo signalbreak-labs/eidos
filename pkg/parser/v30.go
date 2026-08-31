@@ -1299,32 +1299,60 @@ func (c *v30Converter) convertSchemaType(n Node) any {
 		if !ok {
 			return v.Value
 		}
-		return str
+		// Recognized noncanonical spellings ("String", "Boolean", the informal
+		// 64-bit alias "long") are stored as their canonical primitive so the
+		// transformer maps them to a real Terraform type instead of degrading
+		// to Dynamic; the validator surfaces the rewrite as an Info
+		// diagnostic (§3.13).
+		return canonicalSchemaTypeName(str)
 	case *SequenceNode:
-		out := make([]any, 0, len(v.Items))
-		for _, item := range v.Items {
-			if c.version == Version3_0 {
-				switch s := item.(type) {
-				case *ScalarNode:
-					if str, ok := s.Value.(string); ok {
-						out = append(out, str)
-						continue
-					}
-					c.warn(nodeLoc(item), "schema type array contains non-string item",
-						fmt.Sprintf("expected string, got %T; skipping", s.Value))
-				default:
-					c.warn(nodeLoc(item), "schema type array contains non-scalar item",
-						fmt.Sprintf("expected string scalar, got %T; skipping", item))
-				}
-				continue
-			}
-			out = append(out, nodeToNative(item))
-		}
-		return out
+		return c.convertSchemaTypeSlice(v)
 	default:
 		c.warnTypeMismatch(nodeLoc(n), "schema type", n)
 		return nil
 	}
+}
+
+// convertSchemaTypeSlice converts a schema "type" array (a 3.1 construct; in
+// 3.0 it is invalid but preserved with warnings). String entries are
+// canonicalized with canonicalSchemaType; anything else warns (3.0) or is
+// preserved natively (3.1).
+func (c *v30Converter) convertSchemaTypeSlice(v *SequenceNode) any {
+	out := make([]any, 0, len(v.Items))
+	for _, item := range v.Items {
+		if c.version == Version3_0 {
+			switch s := item.(type) {
+			case *ScalarNode:
+				if str, ok := s.Value.(string); ok {
+					out = append(out, canonicalSchemaTypeName(str))
+					continue
+				}
+				c.warn(nodeLoc(item), "schema type array contains non-string item",
+					fmt.Sprintf("expected string, got %T; skipping", s.Value))
+			default:
+				c.warn(nodeLoc(item), "schema type array contains non-scalar item",
+					fmt.Sprintf("expected string scalar, got %T; skipping", item))
+			}
+			continue
+		}
+		if s, ok := item.(*ScalarNode); ok {
+			if str, ok := s.Value.(string); ok {
+				out = append(out, canonicalSchemaTypeName(str))
+				continue
+			}
+		}
+		out = append(out, nodeToNative(item))
+	}
+	return out
+}
+
+// canonicalSchemaTypeName returns the canonical primitive for a recognized
+// noncanonical type spelling and the raw value otherwise.
+func canonicalSchemaTypeName(str string) string {
+	if canonical, ok := canonicalSchemaType(str); ok {
+		return canonical
+	}
+	return str
 }
 
 func (c *v30Converter) convertSchemaSlice(n Node) []*Schema {

@@ -31,4 +31,11 @@ type ListResourceIR struct {
 	// managed resource must stay unregistered; docs and examples are suppressed
 	// for such lists so they are not advertised as usable.
 	Registerable bool `json:"registerable,omitempty"`
+	// UnmarkableSensitiveAttrs records the wire names of string-typed
+	// attributes whose names indicate a secret but that the list schema
+	// cannot mark Sensitive (the experimental list/schema package has no
+	// Sensitive support). The generator renders a doc-page admonition from
+	// this list so practitioners see that the values surface in `terraform
+	// query` output (§3.6).
+	UnmarkableSensitiveAttrs []string `json:"unmarkable_sensitive_attrs,omitempty"`
 }
