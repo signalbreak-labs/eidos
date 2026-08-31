@@ -3954,18 +3954,27 @@ func listResourceFromOperation(op *parser.Operation, providerName, path, method 
 		for _, p := range identityParams {
 			name := transformer.ToSnakeCase(p)
 			wire := matchItemProperty(p, item.Properties)
+			// The matching item property's description documents what the
+			// identity attribute identifies; dropping it left every identity
+			// attribute blank even when the spec described it.
+			desc := ""
+			if wire != "" {
+				desc = item.Properties[wire].Description
+			}
 			lr.IdentitySchema.Attributes = append(lr.IdentitySchema.Attributes, ir.AttributeIR{
-				Name:     name,
-				WireName: wire,
-				Computed: true,
-				Schema:   ir.SchemaIR{Type: propType(wire)},
+				Name:        name,
+				WireName:    wire,
+				Description: desc,
+				Computed:    true,
+				Schema:      ir.SchemaIR{Type: propType(wire)},
 			})
 		}
 	} else if _, ok := item.Properties["id"]; ok {
 		lr.IdentitySchema.Attributes = append(lr.IdentitySchema.Attributes, ir.AttributeIR{
-			Name:     "id",
-			Computed: true,
-			Schema:   ir.SchemaIR{Type: propType("id")},
+			Name:        "id",
+			Description: item.Properties["id"].Description,
+			Computed:    true,
+			Schema:      ir.SchemaIR{Type: propType("id")},
 		})
 	}
 	return lr

@@ -524,6 +524,14 @@ func (c *v30Converter) convertParameter(n Node) *Parameter {
 			p.Examples = c.convertExamples(value)
 		}
 	})
+	// A parameter may declare its description either on the parameter object or
+	// on its schema; fall back to the schema's when the object's is absent so
+	// the prose is not silently dropped. Specs that describe every parameter on
+	// the schema (e.g. Gigamon's FM bundle) otherwise lose all parameter
+	// descriptions before they reach attribute construction.
+	if p.Description == "" && p.Schema != nil {
+		p.Description = p.Schema.Description
+	}
 	p.Extensions = nodeExtensions(n)
 	return p
 }

@@ -122,6 +122,35 @@ func TestResourceFile_IdentitySchema(t *testing.T) {
 	}
 }
 
+// TestResourceFile_IdentitySchema_Description verifies that an identity
+// attribute described in the spec carries that description onto the emitted
+// identityschema attribute (identityschema exposes a single Description field
+// with no MarkdownDescription variant), while undescribed identity attributes
+// stay minimal.
+func TestResourceFile_IdentitySchema_Description(t *testing.T) {
+	r := sampleResourceIR()
+	identity := ir.ObjectSchemaIR{
+		Attributes: []ir.AttributeIR{
+			{Name: "ship_symbol", WireName: "symbol", Computed: true, Description: "Waypoint symbol of the ship.", Schema: ir.SchemaIR{Type: ir.TypeString}},
+			{Name: "count", Computed: true, Schema: ir.SchemaIR{Type: ir.TypeInt}},
+		},
+	}
+	r.IdentitySchema = &identity
+
+	file := ResourceFile(r, testClientImport)
+	var buf bytes.Buffer
+	if err := file.Render(&buf); err != nil {
+		t.Fatalf("Render() error = %v", err)
+	}
+	got := buf.String()
+
+	want := `"ship_symbol": identityschema.StringAttribute{RequiredForImport: true, Description: "Waypoint symbol of the ship."}, ` +
+		`"count": identityschema.Int64Attribute{RequiredForImport: true}`
+	if !strings.Contains(got, want) {
+		t.Errorf("generated resource file missing %q\ncontent:\n%s", want, got)
+	}
+}
+
 // TestResourceFile_IdentitySchema_Compiles generates a full provider module
 // whose managed resource carries an identity schema and compiles it, proving
 // the IdentitySchema method, the ResourceWithIdentity assertion, and the
