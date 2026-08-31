@@ -2234,6 +2234,29 @@ func buildGroupedResources(spec *parser.Spec, providerName string, pathOps map[s
 		}
 		if g.PartialUpdate != nil {
 			markConsumed(consumed, g.InstancePath, "PATCH")
+			// When an instance path has both PUT and PATCH, the PUT wins as
+			// the Update mapping (chooseUpdateOps) and the PATCH is consumed
+			// here — the only silent operation drop left in the pipeline. The
+			// PATCH's partial-body contract (a different request schema, often
+			// different required fields) is real API surface, so surface the
+			// loss instead of discarding it without a trace (AGENTS.md "fail
+			// loud, never silently").
+			if g.FullUpdate != nil {
+				patchID := g.PartialUpdate.OperationID
+				if strings.TrimSpace(patchID) == "" {
+					patchID = "PATCH " + g.InstancePath
+				}
+				*diags = append(*diags, diagnostics.Diagnostic{
+					Severity: diagnostics.Warning,
+					Summary:  fmt.Sprintf("PATCH %q is shadowed by the sibling PUT and not generated", patchID),
+					Detail: fmt.Sprintf(
+						"The instance path %s declares both PUT and PATCH; the resource %q uses the PUT as its "+
+							"Update mapping and the PATCH %s is consumed without generating any construct, so its "+
+							"partial-body semantics are lost. To expose the PATCH, add a generator.yaml "+
+							"action_override that matches \"PATCH %s\".",
+						g.InstancePath, res.Name, patchID, g.InstancePath),
+				})
+			}
 		}
 		markConsumed(consumed, g.InstancePath, "DELETE")
 	}
