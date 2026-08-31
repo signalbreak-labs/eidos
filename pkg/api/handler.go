@@ -908,6 +908,12 @@ func buildIRPreview(spec *parser.Spec, version parser.Version, cfg *config.Confi
 	// identity schema onto the managed resource so the generator emits the
 	// IdentitySchema method the framework requires; without it terraform query
 	// fails with "Identity schema not found for resource type".
+	//
+	// Registration pairing runs first: it renames promoted list resources to
+	// their CRUD group's managed resource so the two share a type name (the
+	// framework only registers lists that pair) and warns for lists that
+	// cannot pair, which stay unregistered.
+	pairListResourceRegistrations(preview, &previewDiags)
 	pairListResourceIdentities(preview)
 
 	// Two operations that normalize to the same construct name (e.g. duplicate
@@ -2144,6 +2150,11 @@ func buildGroupedResources(spec *parser.Spec, providerName string, pathOps map[s
 			// A CRUD group whose source operation is deprecated surfaces as a
 			// deprecated resource so the flag reaches the generated schema (M-10).
 			DeprecationMessage: groupDeprecationMessage(spec, g),
+			// Metadata for list-resource pairing: promoted list resources whose
+			// collection endpoint is this group's collection path are renamed to
+			// this resource so the framework can register them (pairListResource-
+			// Registrations).
+			CollectionPath: g.CollectionPath,
 		}
 		// The Create mapping is built from the resolved Create op's method and
 		// path so it is honest for both POST-create (method POST, collection path)
@@ -3909,6 +3920,10 @@ func listResourceFromOperation(op *parser.Operation, providerName, path, method 
 		Description:     operationDescription(op, fmt.Sprintf("Lists %s resources.", humanizeConstructName(name))),
 		SourceOperation: op.OperationID,
 		ListMapping:     operationMapping(method, path, op, envelopeOfTransformerOp(pathOps, path, method)),
+		// The collection endpoint this list was inferred from; pairs the list
+		// with the managed resource from the same CRUD group so it can be
+		// registered (pairListResourceRegistrations).
+		CollectionPath: path,
 	}
 
 	top := lookupTransformerOp(pathOps, path, method)
@@ -3978,6 +3993,115 @@ func listResourceFromOperation(op *parser.Operation, providerName, path, method 
 		})
 	}
 	return lr
+}
+
+// pairListResourceRegistrations pairs each list resource with the managed
+// resource it can be registered against, renaming it when necessary. The
+// framework requires every registered ListResource type name to equal a
+// managed resource type name, but list names are derived from the collection
+// operation while managed resources are named from their CRUD group, so the
+// two only coincide by accident. A list whose collection endpoint belongs to a
+// surviving managed-resource CRUD group is renamed to that resource's type
+// name, which makes it registerable and lets pairListResourceIdentities share
+// the identity schema. A list that cannot pair — no managed resource for its
+// collection path, the resource already claimed by another list, or an empty
+// identity schema — stays unregistered and gets a fail-loud Warning: without
+// it the dry-run would count constructs `terraform query` can never expose
+// (AGENTS.md "fail loud, never silently"). The generator suppresses docs and
+// examples for unregistered lists.
+//
+// Lists whose type name already matches a managed resource (e.g. a
+// generator.yaml list_resource_override with resource: user) keep that
+// pairing; the rename is only for inferred names.
+func pairListResourceRegistrations(provider *ir.ProviderIR, diags *diagnostics.Diagnostics) {
+	if len(provider.ListResources) == 0 {
+		return
+	}
+	resourcesByCollection := make(map[string]int, len(provider.Resources))
+	managedTypes := make(map[string]bool, len(provider.Resources))
+	for i := range provider.Resources {
+		res := &provider.Resources[i]
+		managedTypes[res.TypeName] = true
+		if res.CollectionPath != "" {
+			if _, ok := resourcesByCollection[res.CollectionPath]; !ok {
+				resourcesByCollection[res.CollectionPath] = i
+			}
+		}
+	}
+	// listNames guards renames against colliding with an existing list name —
+	// two lists at one type name would fail checkDuplicateConstructNames.
+	listNames := make(map[string]bool, len(provider.ListResources))
+	for i := range provider.ListResources {
+		listNames[provider.ListResources[i].Name] = true
+	}
+	// claimed tracks managed type names already spoken for, so a resource is
+	// never registered against two lists.
+	claimed := make(map[string]bool, len(provider.ListResources))
+
+	// First pass: lists that already match a managed resource by type name keep
+	// the pairing (preserves generator.yaml list overrides and specs whose
+	// names happen to align, e.g. the collection operationId and the resource
+	// name both reduce to "user").
+	for i := range provider.ListResources {
+		lr := &provider.ListResources[i]
+		if managedTypes[lr.TypeName] && !claimed[lr.TypeName] {
+			lr.Registerable = true
+			claimed[lr.TypeName] = true
+		}
+	}
+
+	// Second pass: rename unpaired lists to the managed resource inferred from
+	// the same CRUD group. Lists are visited in their slice order, which the
+	// per-operation pass builds in sorted path order, so the claim is
+	// deterministic for byte-identical generation.
+	for i := range provider.ListResources {
+		lr := &provider.ListResources[i]
+		if lr.Registerable {
+			continue
+		}
+		idx, ok := resourcesByCollection[lr.CollectionPath]
+		if ok && !claimed[provider.Resources[idx].TypeName] &&
+			!listNames[provider.Resources[idx].Name] &&
+			len(lr.IdentitySchema.Attributes) > 0 {
+			res := &provider.Resources[idx]
+			*diags = append(*diags, diagnostics.Diagnostic{
+				Severity: diagnostics.Info,
+				Summary:  fmt.Sprintf("list resource %q is paired with managed resource %q", lr.Name, res.Name),
+				Detail: fmt.Sprintf(
+					"The Terraform Plugin Framework only registers a list resource whose type name equals a "+
+						"managed resource type name, so the list resource inferred from %s %s is renamed from %q to "+
+						"%q to match the managed resource from the same CRUD group. terraform query exposes it as "+
+						"%s.", lr.ListMapping.Method, lr.ListMapping.PathTemplate, lr.Name, res.Name, res.TypeName),
+			})
+			delete(listNames, lr.Name)
+			listNames[res.Name] = true
+			claimed[res.TypeName] = true
+			lr.Name = res.Name
+			lr.FullName = res.TypeName
+			lr.TypeName = res.TypeName
+			lr.Registerable = true
+			continue
+		}
+		var reason string
+		switch {
+		case !ok:
+			reason = "no managed resource was inferred from its collection path's CRUD group"
+		case len(lr.IdentitySchema.Attributes) == 0:
+			reason = "it has no identity attributes to pair with a managed resource"
+		default:
+			reason = "the paired managed resource is already claimed by another list resource"
+		}
+		*diags = append(*diags, diagnostics.Diagnostic{
+			Severity: diagnostics.Warning,
+			Summary:  fmt.Sprintf("list resource %q cannot be registered; terraform query will not expose it", lr.Name),
+			Detail: fmt.Sprintf(
+				"The Terraform Plugin Framework only registers a list resource whose type name equals a managed "+
+					"resource type name, and %s. The list resource %s is still generated, but the provider does not "+
+					"register it and its documentation is suppressed. Add the missing CRUD operations to the spec, "+
+					"or declare the list via a generator.yaml list_resource_overrides entry whose resource names a "+
+					"managed resource.", reason, lr.Name),
+		})
+	}
 }
 
 // pairListResourceIdentities copies each list resource's identity schema onto

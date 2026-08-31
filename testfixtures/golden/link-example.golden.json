@@ -33,12 +33,7 @@
     {
       "path": "docs/index.md",
       "reason": "provider overview and authentication guide",
-      "body_hash": "e98b26967d61fa3d"
-    },
-    {
-      "path": "docs/list-resources/list_users.md",
-      "reason": "documentation for list resource list_users",
-      "body_hash": "f98db4d1bf9f6212"
+      "body_hash": "71d669a999346885"
     },
     {
       "path": "examples/data-sources/get_user/data-source.tf",
@@ -152,6 +147,7 @@
     }
   ],
   "warnings": [
-    "response links are not mapped to a Terraform construct"
+    "response links are not mapped to a Terraform construct",
+    "list resource \"list_users\" cannot be registered; terraform query will not expose it"
   ]
 }

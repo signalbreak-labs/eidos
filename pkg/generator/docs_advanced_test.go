@@ -188,7 +188,9 @@ func TestProviderDocsIndex_AdvancedSections(t *testing.T) {
 			{Name: "temporary_credential", TypeName: "mycloud_temporary_credential"},
 		},
 		ListResources: []ir.ListResourceIR{
-			{Name: "pets", TypeName: "mycloud_pets"},
+			// Registerable: the provider can register this list against the
+			// mycloud_pets managed resource, so it is documented.
+			{Name: "pets", TypeName: "mycloud_pets", Registerable: true},
 		},
 		Functions: []ir.FunctionIR{
 			{Name: "concat_tags", TypeName: "concat_tags"},
@@ -234,7 +236,9 @@ func TestProviderDocsFiles_Advanced(t *testing.T) {
 			{Name: "temporary_credential", TypeName: "mycloud_temporary_credential"},
 		},
 		ListResources: []ir.ListResourceIR{
-			{Name: "pets", TypeName: "mycloud_pets"},
+			// Registerable: the provider can register this list against the
+			// mycloud_pets managed resource, so it is documented.
+			{Name: "pets", TypeName: "mycloud_pets", Registerable: true},
 		},
 		Functions: []ir.FunctionIR{
 			{Name: "concat_tags", TypeName: "concat_tags"},

@@ -128,67 +128,42 @@
     {
       "path": "docs/index.md",
       "reason": "provider overview and authentication guide",
-      "body_hash": "3571b15adbef7c62"
+      "body_hash": "c4cf4ab25e2dff62"
     },
     {
-      "path": "docs/list-resources/list_branches.md",
-      "reason": "documentation for list resource list_branches",
-      "body_hash": "46a7755bbe10d2b4"
+      "path": "docs/list-resources/config.md",
+      "reason": "documentation for list resource config",
+      "body_hash": "0ebdf81fc945acc6"
     },
     {
-      "path": "docs/list-resources/list_commits.md",
-      "reason": "documentation for list resource list_commits",
-      "body_hash": "29f6350bc209351b"
+      "path": "docs/list-resources/instance.md",
+      "reason": "documentation for list resource instance",
+      "body_hash": "a9f2d9fedcc09dcd"
     },
     {
-      "path": "docs/list-resources/list_configs.md",
-      "reason": "documentation for list resource list_configs",
-      "body_hash": "e22136da5a3581a8"
+      "path": "docs/list-resources/network.md",
+      "reason": "documentation for list resource network",
+      "body_hash": "2cf222979dafda78"
     },
     {
-      "path": "docs/list-resources/list_instances.md",
-      "reason": "documentation for list resource list_instances",
-      "body_hash": "949504a965a8fad9"
+      "path": "docs/list-resources/project.md",
+      "reason": "documentation for list resource project",
+      "body_hash": "2b5e2b9b6b25d075"
     },
     {
-      "path": "docs/list-resources/list_members.md",
-      "reason": "documentation for list resource list_members",
-      "body_hash": "c29c79113318c5e4"
+      "path": "docs/list-resources/secret.md",
+      "reason": "documentation for list resource secret",
+      "body_hash": "b68aaf39c7eeb808"
     },
     {
-      "path": "docs/list-resources/list_networks.md",
-      "reason": "documentation for list resource list_networks",
-      "body_hash": "45b0824216dd2efc"
+      "path": "docs/list-resources/stack.md",
+      "reason": "documentation for list resource stack",
+      "body_hash": "12586635a5fa813a"
     },
     {
-      "path": "docs/list-resources/list_projects_for_organization.md",
-      "reason": "documentation for list resource list_projects_for_organization",
-      "body_hash": "693511b9302bc1ed"
-    },
-    {
-      "path": "docs/list-resources/list_pull_requests.md",
-      "reason": "documentation for list resource list_pull_requests",
-      "body_hash": "f499741ff30dc3d7"
-    },
-    {
-      "path": "docs/list-resources/list_secrets.md",
-      "reason": "documentation for list resource list_secrets",
-      "body_hash": "39dbf928846a8ab6"
-    },
-    {
-      "path": "docs/list-resources/list_stacks.md",
-      "reason": "documentation for list resource list_stacks",
-      "body_hash": "4504d13bc41b8ae6"
-    },
-    {
-      "path": "docs/list-resources/list_tasks.md",
-      "reason": "documentation for list resource list_tasks",
-      "body_hash": "93bfc5b80c802ef9"
-    },
-    {
-      "path": "docs/list-resources/list_workspaces.md",
-      "reason": "documentation for list resource list_workspaces",
-      "body_hash": "5aba43f6c1fb3014"
+      "path": "docs/list-resources/workspace.md",
+      "reason": "documentation for list resource workspace",
+      "body_hash": "a892a0b2f9b687ba"
     },
     {
       "path": "docs/resources/config.md",
@@ -368,7 +343,7 @@
     {
       "path": "generator.yaml",
       "reason": "generated generator configuration",
-      "body_hash": "821c7edfe6643489"
+      "body_hash": "8df222a9ac3629fd"
     },
     {
       "path": "go.mod",
@@ -726,6 +701,26 @@
       "body_hash": "8548ea6a909e4a8f"
     },
     {
+      "path": "internal/provider/list_config.go",
+      "reason": "list resource mycloud_config",
+      "body_hash": "933b57638e3c588b"
+    },
+    {
+      "path": "internal/provider/list_config_remote_test.go",
+      "reason": "coverage tests for list resource config remote helper",
+      "body_hash": "f183a71ee9e73caf"
+    },
+    {
+      "path": "internal/provider/list_instance.go",
+      "reason": "list resource mycloud_instance",
+      "body_hash": "73ba3602508be12f"
+    },
+    {
+      "path": "internal/provider/list_instance_remote_test.go",
+      "reason": "coverage tests for list resource instance remote helper",
+      "body_hash": "5f6cc616c47aab00"
+    },
+    {
       "path": "internal/provider/list_list_branches.go",
       "reason": "list resource mycloud_list_branches",
       "body_hash": "c2197567b70808ff"
@@ -746,26 +741,6 @@
       "body_hash": "0a0e3b4b6b0b9c37"
     },
     {
-      "path": "internal/provider/list_list_configs.go",
-      "reason": "list resource mycloud_list_configs",
-      "body_hash": "f3fc0ce12333fa2b"
-    },
-    {
-      "path": "internal/provider/list_list_configs_remote_test.go",
-      "reason": "coverage tests for list resource list_configs remote helper",
-      "body_hash": "e719b0e183ad4b54"
-    },
-    {
-      "path": "internal/provider/list_list_instances.go",
-      "reason": "list resource mycloud_list_instances",
-      "body_hash": "5953e7f1a02efa19"
-    },
-    {
-      "path": "internal/provider/list_list_instances_remote_test.go",
-      "reason": "coverage tests for list resource list_instances remote helper",
-      "body_hash": "96fe20bac388ca9d"
-    },
-    {
       "path": "internal/provider/list_list_members.go",
       "reason": "list resource mycloud_list_members",
       "body_hash": "3fc2ed911fa771a8"
@@ -774,26 +749,6 @@
       "path": "internal/provider/list_list_members_remote_test.go",
       "reason": "coverage tests for list resource list_members remote helper",
       "body_hash": "c84fe3dfa94fbda8"
-    },
-    {
-      "path": "internal/provider/list_list_networks.go",
-      "reason": "list resource mycloud_list_networks",
-      "body_hash": "1eeceb384dbd56bd"
-    },
-    {
-      "path": "internal/provider/list_list_networks_remote_test.go",
-      "reason": "coverage tests for list resource list_networks remote helper",
-      "body_hash": "36fdd67399900ff8"
-    },
-    {
-      "path": "internal/provider/list_list_projects_for_organization.go",
-      "reason": "list resource mycloud_list_projects_for_organization",
-      "body_hash": "b2ab3e7155435100"
-    },
-    {
-      "path": "internal/provider/list_list_projects_for_organization_remote_test.go",
-      "reason": "coverage tests for list resource list_projects_for_organization remote helper",
-      "body_hash": "3fa33d16b4afd11b"
     },
     {
       "path": "internal/provider/list_list_pull_requests.go",
@@ -806,26 +761,6 @@
       "body_hash": "d74732f748883d0e"
     },
     {
-      "path": "internal/provider/list_list_secrets.go",
-      "reason": "list resource mycloud_list_secrets",
-      "body_hash": "805500b8a40ab327"
-    },
-    {
-      "path": "internal/provider/list_list_secrets_remote_test.go",
-      "reason": "coverage tests for list resource list_secrets remote helper",
-      "body_hash": "f62d9523b055a3d2"
-    },
-    {
-      "path": "internal/provider/list_list_stacks.go",
-      "reason": "list resource mycloud_list_stacks",
-      "body_hash": "420824c1c5e0e4a5"
-    },
-    {
-      "path": "internal/provider/list_list_stacks_remote_test.go",
-      "reason": "coverage tests for list resource list_stacks remote helper",
-      "body_hash": "27e039cf287a2fc2"
-    },
-    {
       "path": "internal/provider/list_list_tasks.go",
       "reason": "list resource mycloud_list_tasks",
       "body_hash": "0fc0608f2b12d952"
@@ -836,19 +771,59 @@
       "body_hash": "21348f4c762a10bf"
     },
     {
-      "path": "internal/provider/list_list_workspaces.go",
-      "reason": "list resource mycloud_list_workspaces",
-      "body_hash": "d448e23cecca73dc"
+      "path": "internal/provider/list_network.go",
+      "reason": "list resource mycloud_network",
+      "body_hash": "4b443bbacd512b3f"
     },
     {
-      "path": "internal/provider/list_list_workspaces_remote_test.go",
-      "reason": "coverage tests for list resource list_workspaces remote helper",
-      "body_hash": "e680db0e7eef9060"
+      "path": "internal/provider/list_network_remote_test.go",
+      "reason": "coverage tests for list resource network remote helper",
+      "body_hash": "78ca2cf3eab9643b"
+    },
+    {
+      "path": "internal/provider/list_project.go",
+      "reason": "list resource mycloud_project",
+      "body_hash": "f06b12060ab00960"
+    },
+    {
+      "path": "internal/provider/list_project_remote_test.go",
+      "reason": "coverage tests for list resource project remote helper",
+      "body_hash": "d799e18de2ae2272"
+    },
+    {
+      "path": "internal/provider/list_secret.go",
+      "reason": "list resource mycloud_secret",
+      "body_hash": "eab158bff60f9097"
+    },
+    {
+      "path": "internal/provider/list_secret_remote_test.go",
+      "reason": "coverage tests for list resource secret remote helper",
+      "body_hash": "2de13950665f10bd"
+    },
+    {
+      "path": "internal/provider/list_stack.go",
+      "reason": "list resource mycloud_stack",
+      "body_hash": "53c1ba3c638fa99b"
+    },
+    {
+      "path": "internal/provider/list_stack_remote_test.go",
+      "reason": "coverage tests for list resource stack remote helper",
+      "body_hash": "f134630adb0312d5"
+    },
+    {
+      "path": "internal/provider/list_workspace.go",
+      "reason": "list resource mycloud_workspace",
+      "body_hash": "f4ff0eebb215f9b0"
+    },
+    {
+      "path": "internal/provider/list_workspace_remote_test.go",
+      "reason": "coverage tests for list resource workspace remote helper",
+      "body_hash": "52b1b672b322a77c"
     },
     {
       "path": "internal/provider/provider.go",
       "reason": "provider schema and registration",
-      "body_hash": "10312864a4f2956c"
+      "body_hash": "905986ff15b33421"
     },
     {
       "path": "internal/provider/provider_test.go",
@@ -858,7 +833,7 @@
     {
       "path": "internal/provider/resource_config.go",
       "reason": "resource mycloud_config",
-      "body_hash": "385544ed907e09ca"
+      "body_hash": "8b63c48985497bef"
     },
     {
       "path": "internal/provider/resource_config_acceptance_test.go",
@@ -878,7 +853,7 @@
     {
       "path": "internal/provider/resource_instance.go",
       "reason": "resource mycloud_instance",
-      "body_hash": "a2f09db7fa0c8cc6"
+      "body_hash": "161e703789dc51cd"
     },
     {
       "path": "internal/provider/resource_instance_acceptance_test.go",
@@ -898,7 +873,7 @@
     {
       "path": "internal/provider/resource_network.go",
       "reason": "resource mycloud_network",
-      "body_hash": "deb1e290b06d44f5"
+      "body_hash": "9438f4d76fe635c4"
     },
     {
       "path": "internal/provider/resource_network_acceptance_test.go",
@@ -918,7 +893,7 @@
     {
       "path": "internal/provider/resource_project.go",
       "reason": "resource mycloud_project",
-      "body_hash": "a0bd7aa22b4985f2"
+      "body_hash": "a3d95b7ef8576e67"
     },
     {
       "path": "internal/provider/resource_project_acceptance_test.go",
@@ -938,7 +913,7 @@
     {
       "path": "internal/provider/resource_secret.go",
       "reason": "resource mycloud_secret",
-      "body_hash": "a0414ff7c6618b26"
+      "body_hash": "6cc936c06579c99b"
     },
     {
       "path": "internal/provider/resource_secret_acceptance_test.go",
@@ -958,7 +933,7 @@
     {
       "path": "internal/provider/resource_stack.go",
       "reason": "resource mycloud_stack",
-      "body_hash": "52a5e955d6bfa170"
+      "body_hash": "a2ca4f41fe73dcaf"
     },
     {
       "path": "internal/provider/resource_stack_acceptance_test.go",
@@ -978,7 +953,7 @@
     {
       "path": "internal/provider/resource_workspace.go",
       "reason": "resource mycloud_workspace",
-      "body_hash": "465e65e82633ba44"
+      "body_hash": "331746aa14411804"
     },
     {
       "path": "internal/provider/resource_workspace_acceptance_test.go",
@@ -1026,6 +1001,11 @@
     "request-body property collides with a path parameter name",
     "request-body property collides with a path parameter name",
     "request-body property collides with a path parameter name",
-    "request-body property collides with a path parameter name"
+    "request-body property collides with a path parameter name",
+    "list resource \"list_members\" cannot be registered; terraform query will not expose it",
+    "list resource \"list_branches\" cannot be registered; terraform query will not expose it",
+    "list resource \"list_commits\" cannot be registered; terraform query will not expose it",
+    "list resource \"list_pull_requests\" cannot be registered; terraform query will not expose it",
+    "list resource \"list_tasks\" cannot be registered; terraform query will not expose it"
   ]
 }

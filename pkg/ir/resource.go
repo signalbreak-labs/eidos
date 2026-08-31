@@ -42,6 +42,12 @@ type ResourceIR struct {
 	OverrideCreated bool             `json:"override_created,omitempty"`
 	SchemaVersion   int              `json:"schema_version,omitempty"`
 	StateUpgrades   []StateUpgradeIR `json:"state_upgrades,omitempty"`
+	// CollectionPath records the OpenAPI collection path of the CRUD group the
+	// resource was inferred from. Metadata only — never emitted into generated
+	// code; it pairs promoted list resources with the managed resource inferred
+	// from the same group so the two can share a type name. Empty for
+	// override-created resources, which have no inferred group.
+	CollectionPath string `json:"collection_path,omitempty"`
 }
 
 // StateUpgradeIR describes a single migration from a prior schema version to the

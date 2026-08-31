@@ -90,10 +90,16 @@ func ListResourceDocsFile(lr ir.ListResourceIR) File {
 }
 
 // ListResourceDocsFiles returns the generated list resource documentation files
-// for all supplied ListResourceIR values, preserving order.
+// for all supplied ListResourceIR values, preserving order. List resources the
+// provider cannot register (no paired managed resource, so terraform query never
+// exposes them) get no docs: a documented construct the provider cannot serve
+// is actively misleading.
 func ListResourceDocsFiles(lrs []ir.ListResourceIR) []File {
 	files := make([]File, 0, len(lrs))
 	for _, lr := range lrs {
+		if !lr.Registerable {
+			continue
+		}
 		files = append(files, ListResourceDocsFile(lr))
 	}
 	return files
