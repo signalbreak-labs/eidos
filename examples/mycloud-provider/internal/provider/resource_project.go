@@ -13,6 +13,7 @@ import (
 import (
 	path "github.com/hashicorp/terraform-plugin-framework/path"
 	resource "github.com/hashicorp/terraform-plugin-framework/resource"
+	identityschema "github.com/hashicorp/terraform-plugin-framework/resource/identityschema"
 	schema "github.com/hashicorp/terraform-plugin-framework/resource/schema"
 	types "github.com/hashicorp/terraform-plugin-framework/types"
 	client "github.com/mycloud/terraform-provider-mycloud/internal/client"
@@ -21,6 +22,7 @@ import (
 // Compile-time interface assertions.
 var (
 	_ resource.Resource                = (*ProjectResource)(nil)
+	_ resource.ResourceWithIdentity    = (*ProjectResource)(nil)
 	_ resource.ResourceWithImportState = (*ProjectResource)(nil)
 	_ resource.ResourceWithConfigure   = (*ProjectResource)(nil)
 )
@@ -53,6 +55,11 @@ func (r *ProjectResource) Schema(_ context.Context, _ resource.SchemaRequest, re
 	resp.Schema = schema.Schema{MarkdownDescription: "Get a project", Attributes: map[string]schema.Attribute{"default_branch": schema.StringAttribute{Optional: true, Computed: true}, "description": schema.StringAttribute{Optional: true, Computed: true}, "full_name": schema.StringAttribute{Optional: true, Computed: true}, "html_url": schema.StringAttribute{Optional: true, Computed: true}, "id": schema.Int64Attribute{Optional: true, Computed: true}, "name": schema.StringAttribute{Optional: true, Computed: true}, "organization": schema.StringAttribute{Optional: true, Computed: true}, "private": schema.BoolAttribute{Optional: true, Computed: true}, "project": schema.StringAttribute{Optional: true, Computed: true}}}
 }
 
+// IdentitySchema returns the resource identity schema shared with the paired list resource.
+func (r *ProjectResource) IdentitySchema(_ context.Context, _ resource.IdentitySchemaRequest, resp *resource.IdentitySchemaResponse) {
+	resp.IdentitySchema = identityschema.Schema{Attributes: map[string]identityschema.Attribute{"organization": identityschema.StringAttribute{RequiredForImport: true}, "project": identityschema.StringAttribute{RequiredForImport: true}}}
+}
+
 // Create provisions the remote resource and stores the resulting state.
 func (r *ProjectResource) Create(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) {
 	var plan ProjectResourceModel
@@ -64,6 +71,8 @@ func (r *ProjectResource) Create(ctx context.Context, req resource.CreateRequest
 	if resp.Diagnostics.HasError() {
 		return
 	}
+	resp.Diagnostics.Append(resp.Identity.SetAttribute(ctx, path.Root("organization"), plan.Organization)...)
+	resp.Diagnostics.Append(resp.Identity.SetAttribute(ctx, path.Root("project"), plan.Project)...)
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 }
 
@@ -138,6 +147,8 @@ func (r *ProjectResource) Read(ctx context.Context, req resource.ReadRequest, re
 	if resp.Diagnostics.HasError() {
 		return
 	}
+	resp.Diagnostics.Append(resp.Identity.SetAttribute(ctx, path.Root("organization"), state.Organization)...)
+	resp.Diagnostics.Append(resp.Identity.SetAttribute(ctx, path.Root("project"), state.Project)...)
 	resp.Diagnostics.Append(resp.State.Set(ctx, &state)...)
 }
 
@@ -208,6 +219,8 @@ func (r *ProjectResource) Update(ctx context.Context, req resource.UpdateRequest
 	if resp.Diagnostics.HasError() {
 		return
 	}
+	resp.Diagnostics.Append(resp.Identity.SetAttribute(ctx, path.Root("organization"), plan.Organization)...)
+	resp.Diagnostics.Append(resp.Identity.SetAttribute(ctx, path.Root("project"), plan.Project)...)
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 }
 

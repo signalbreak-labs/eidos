@@ -19,38 +19,38 @@ import (
 )
 
 // Compile-time interface assertion.
-var _ list.ListResource = (*ListNetworksListResource)(nil)
-var _ list.ListResourceWithConfigure = (*ListNetworksListResource)(nil)
+var _ list.ListResource = (*StackListResource)(nil)
+var _ list.ListResourceWithConfigure = (*StackListResource)(nil)
 
-// ListNetworksListResource is the generated Terraform list resource implementation.
-type ListNetworksListResource struct {
+// StackListResource is the generated Terraform list resource implementation.
+type StackListResource struct {
 	client *client.Client
 }
 
-// ListNetworksListResourceModel describes the mycloud_list_networks list filter configuration shape.
-type ListNetworksListResourceModel struct {
+// StackListResourceModel describes the mycloud_stack list filter configuration shape.
+type StackListResourceModel struct {
 	Workspace types.String `tfsdk:"workspace"`
 }
 
-// NewListNetworksListResource returns a new instance of the generated list resource.
-func NewListNetworksListResource() list.ListResource {
-	return &ListNetworksListResource{}
+// NewStackListResource returns a new instance of the generated list resource.
+func NewStackListResource() list.ListResource {
+	return &StackListResource{}
 }
 
 // Metadata returns the list resource type name.
-func (l *ListNetworksListResource) Metadata(_ context.Context, _ resource.MetadataRequest, resp *resource.MetadataResponse) {
-	resp.TypeName = "mycloud_list_networks"
+func (l *StackListResource) Metadata(_ context.Context, _ resource.MetadataRequest, resp *resource.MetadataResponse) {
+	resp.TypeName = "mycloud_stack"
 }
 
 // ListResourceConfigSchema returns the list resource config schema.
-func (l *ListNetworksListResource) ListResourceConfigSchema(_ context.Context, _ list.ListResourceSchemaRequest, resp *list.ListResourceSchemaResponse) {
-	resp.Schema = listschema.Schema{MarkdownDescription: "List Networks", Attributes: map[string]listschema.Attribute{"workspace": listschema.StringAttribute{Required: true}}}
+func (l *StackListResource) ListResourceConfigSchema(_ context.Context, _ list.ListResourceSchemaRequest, resp *list.ListResourceSchemaResponse) {
+	resp.Schema = listschema.Schema{MarkdownDescription: "List Stacks", Attributes: map[string]listschema.Attribute{"workspace": listschema.StringAttribute{Required: true}}}
 }
 
 // List streams matching resource instances for terraform query.
-func (l *ListNetworksListResource) List(ctx context.Context, req list.ListRequest, stream *list.ListResultsStream) {
+func (l *StackListResource) List(ctx context.Context, req list.ListRequest, stream *list.ListResultsStream) {
 	stream.Results = func(push func(list.ListResult) bool) {
-		var config ListNetworksListResourceModel
+		var config StackListResourceModel
 		diags := req.Config.Get(ctx, &config)
 		if diags.HasError() {
 			result := req.NewListResult(ctx)
@@ -69,7 +69,7 @@ func (l *ListNetworksListResource) List(ctx context.Context, req list.ListReques
 			result := req.NewListResult(ctx)
 			itemMap := map[string]json.RawMessage{}
 			if err := json.Unmarshal(item, &itemMap); err != nil {
-				result.Diagnostics.AddError("Error listing mycloud_list_networks", fmt.Sprintf("Could not decode list item: %s", err))
+				result.Diagnostics.AddError("Error listing mycloud_stack", fmt.Sprintf("Could not decode list item: %s", err))
 				if !push(result) {
 					return
 				}
@@ -89,7 +89,7 @@ func (l *ListNetworksListResource) List(ctx context.Context, req list.ListReques
 				workspaceValue, ok = itemMap["id"]
 			}
 			if !ok {
-				result.Diagnostics.AddError("Error listing mycloud_list_networks", "List item is missing identity attribute \"workspace\".")
+				result.Diagnostics.AddError("Error listing mycloud_stack", "List item is missing identity attribute \"workspace\".")
 				if !push(result) {
 					return
 				}
@@ -109,7 +109,7 @@ func (l *ListNetworksListResource) List(ctx context.Context, req list.ListReques
 				nameValue, ok = itemMap["id"]
 			}
 			if !ok {
-				result.Diagnostics.AddError("Error listing mycloud_list_networks", "List item is missing identity attribute \"name\".")
+				result.Diagnostics.AddError("Error listing mycloud_stack", "List item is missing identity attribute \"name\".")
 				if !push(result) {
 					return
 				}
@@ -118,7 +118,7 @@ func (l *ListNetworksListResource) List(ctx context.Context, req list.ListReques
 			identity["name"] = nameValue
 			idJSON, err := json.Marshal(identity)
 			if err != nil {
-				result.Diagnostics.AddError("Error listing mycloud_list_networks", fmt.Sprintf("Could not encode list item identity: %s", err))
+				result.Diagnostics.AddError("Error listing mycloud_stack", fmt.Sprintf("Could not encode list item identity: %s", err))
 				if !push(result) {
 					return
 				}
@@ -126,7 +126,7 @@ func (l *ListNetworksListResource) List(ctx context.Context, req list.ListReques
 			}
 			idVal, err := tftypes.ValueFromJSON(idJSON, req.ResourceIdentitySchema.Type().TerraformType(ctx))
 			if err != nil {
-				result.Diagnostics.AddError("Error listing mycloud_list_networks", fmt.Sprintf("Could not decode list item identity: %s", err))
+				result.Diagnostics.AddError("Error listing mycloud_stack", fmt.Sprintf("Could not decode list item identity: %s", err))
 				if !push(result) {
 					return
 				}
@@ -136,7 +136,7 @@ func (l *ListNetworksListResource) List(ctx context.Context, req list.ListReques
 			if req.IncludeResource {
 				resVal, err := tftypes.ValueFromJSON(item, req.ResourceSchema.Type().TerraformType(ctx))
 				if err != nil {
-					result.Diagnostics.AddWarning("Error listing mycloud_list_networks", fmt.Sprintf("Could not decode list item into the resource schema: %s", err))
+					result.Diagnostics.AddWarning("Error listing mycloud_stack", fmt.Sprintf("Could not decode list item into the resource schema: %s", err))
 				} else {
 					result.Resource.Raw = resVal
 				}
@@ -149,13 +149,13 @@ func (l *ListNetworksListResource) List(ctx context.Context, req list.ListReques
 }
 
 // listRemote fetches and decodes the collection pages, returning the items and any diagnostics for the List iterator to surface.
-func (l *ListNetworksListResource) listRemote(ctx context.Context, config *ListNetworksListResourceModel) ([]json.RawMessage, diag.Diagnostics) {
+func (l *StackListResource) listRemote(ctx context.Context, config *StackListResourceModel) ([]json.RawMessage, diag.Diagnostics) {
 	var diags diag.Diagnostics
 	if l.client == nil {
 		diags.AddError("Client Not Configured", "The API client was not set on the list resource. The provider Configure method must run before list operations; this is a bug in the generated provider.")
 		return nil, diags
 	}
-	reqPath := "/workspaces/{workspace}/networks"
+	reqPath := "/workspaces/{workspace}/stacks"
 	reqPath = strings.ReplaceAll(reqPath, "{workspace}", url.PathEscape(config.Workspace.ValueString()))
 	params := url.Values{}
 	var nextURL string
@@ -177,14 +177,14 @@ func (l *ListNetworksListResource) listRemote(ctx context.Context, config *ListN
 	}
 	pages, err := client.ListAllPages(ctx, params, fetch, nil)
 	if err != nil {
-		diags.AddError("Error listing mycloud_list_networks", fmt.Sprintf("Could not read list response: %s", err))
+		diags.AddError("Error listing mycloud_stack", fmt.Sprintf("Could not read list response: %s", err))
 		return nil, diags
 	}
 	allItems := []json.RawMessage{}
 	for _, page := range pages {
 		items := []json.RawMessage{}
 		if err := json.Unmarshal(page, &items); err != nil {
-			diags.AddError("Error listing mycloud_list_networks", fmt.Sprintf("Could not decode list page: %s", err))
+			diags.AddError("Error listing mycloud_stack", fmt.Sprintf("Could not decode list page: %s", err))
 			return nil, diags
 		}
 		allItems = append(allItems, items...)
@@ -193,7 +193,7 @@ func (l *ListNetworksListResource) listRemote(ctx context.Context, config *ListN
 }
 
 // Configure stores the API client supplied by the provider.
-func (l *ListNetworksListResource) Configure(_ context.Context, req resource.ConfigureRequest, resp *resource.ConfigureResponse) {
+func (l *StackListResource) Configure(_ context.Context, req resource.ConfigureRequest, resp *resource.ConfigureResponse) {
 	if req.ProviderData == nil {
 		return
 	}

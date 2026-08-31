@@ -13,6 +13,7 @@ import (
 import (
 	path "github.com/hashicorp/terraform-plugin-framework/path"
 	resource "github.com/hashicorp/terraform-plugin-framework/resource"
+	identityschema "github.com/hashicorp/terraform-plugin-framework/resource/identityschema"
 	schema "github.com/hashicorp/terraform-plugin-framework/resource/schema"
 	types "github.com/hashicorp/terraform-plugin-framework/types"
 	client "github.com/mycloud/terraform-provider-mycloud/internal/client"
@@ -21,6 +22,7 @@ import (
 // Compile-time interface assertions.
 var (
 	_ resource.Resource                = (*StackResource)(nil)
+	_ resource.ResourceWithIdentity    = (*StackResource)(nil)
 	_ resource.ResourceWithImportState = (*StackResource)(nil)
 	_ resource.ResourceWithConfigure   = (*StackResource)(nil)
 )
@@ -51,6 +53,11 @@ func (r *StackResource) Schema(_ context.Context, _ resource.SchemaRequest, resp
 	resp.Schema = schema.Schema{MarkdownDescription: "Read a Stack", Attributes: map[string]schema.Attribute{"api_version": schema.StringAttribute{Optional: true, Computed: true}, "id": schema.StringAttribute{Computed: true}, "kind": schema.StringAttribute{Optional: true, Computed: true}, "name": schema.StringAttribute{Required: true}, "spec": schema.SingleNestedAttribute{Optional: true, Computed: true, Attributes: map[string]schema.Attribute{"replicas": schema.Int64Attribute{Optional: true, Computed: true}, "selector": schema.MapAttribute{Optional: true, Computed: true, ElementType: types.StringType}}}, "status": schema.SingleNestedAttribute{Optional: true, Computed: true, Attributes: map[string]schema.Attribute{"ready_replicas": schema.Int64Attribute{Optional: true, Computed: true}}}, "workspace": schema.StringAttribute{Required: true}}}
 }
 
+// IdentitySchema returns the resource identity schema shared with the paired list resource.
+func (r *StackResource) IdentitySchema(_ context.Context, _ resource.IdentitySchemaRequest, resp *resource.IdentitySchemaResponse) {
+	resp.IdentitySchema = identityschema.Schema{Attributes: map[string]identityschema.Attribute{"workspace": identityschema.StringAttribute{RequiredForImport: true}, "name": identityschema.StringAttribute{RequiredForImport: true}}}
+}
+
 // Create provisions the remote resource and stores the resulting state.
 func (r *StackResource) Create(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) {
 	var plan StackResourceModel
@@ -62,6 +69,8 @@ func (r *StackResource) Create(ctx context.Context, req resource.CreateRequest, 
 	if resp.Diagnostics.HasError() {
 		return
 	}
+	resp.Diagnostics.Append(resp.Identity.SetAttribute(ctx, path.Root("workspace"), plan.Workspace)...)
+	resp.Diagnostics.Append(resp.Identity.SetAttribute(ctx, path.Root("name"), plan.Name)...)
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 }
 
@@ -146,6 +155,8 @@ func (r *StackResource) Read(ctx context.Context, req resource.ReadRequest, resp
 	if resp.Diagnostics.HasError() {
 		return
 	}
+	resp.Diagnostics.Append(resp.Identity.SetAttribute(ctx, path.Root("workspace"), state.Workspace)...)
+	resp.Diagnostics.Append(resp.Identity.SetAttribute(ctx, path.Root("name"), state.Name)...)
 	resp.Diagnostics.Append(resp.State.Set(ctx, &state)...)
 }
 
@@ -216,6 +227,8 @@ func (r *StackResource) Update(ctx context.Context, req resource.UpdateRequest, 
 	if resp.Diagnostics.HasError() {
 		return
 	}
+	resp.Diagnostics.Append(resp.Identity.SetAttribute(ctx, path.Root("workspace"), plan.Workspace)...)
+	resp.Diagnostics.Append(resp.Identity.SetAttribute(ctx, path.Root("name"), plan.Name)...)
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 }
 

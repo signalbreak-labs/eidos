@@ -13,6 +13,7 @@ import (
 import (
 	path "github.com/hashicorp/terraform-plugin-framework/path"
 	resource "github.com/hashicorp/terraform-plugin-framework/resource"
+	identityschema "github.com/hashicorp/terraform-plugin-framework/resource/identityschema"
 	schema "github.com/hashicorp/terraform-plugin-framework/resource/schema"
 	types "github.com/hashicorp/terraform-plugin-framework/types"
 	client "github.com/mycloud/terraform-provider-mycloud/internal/client"
@@ -21,6 +22,7 @@ import (
 // Compile-time interface assertions.
 var (
 	_ resource.Resource                = (*SecretResource)(nil)
+	_ resource.ResourceWithIdentity    = (*SecretResource)(nil)
 	_ resource.ResourceWithImportState = (*SecretResource)(nil)
 	_ resource.ResourceWithConfigure   = (*SecretResource)(nil)
 )
@@ -51,6 +53,11 @@ func (r *SecretResource) Schema(_ context.Context, _ resource.SchemaRequest, res
 	resp.Schema = schema.Schema{MarkdownDescription: "Read a Secret", Attributes: map[string]schema.Attribute{"api_version": schema.StringAttribute{Optional: true, Computed: true}, "data": schema.MapAttribute{Optional: true, Computed: true, ElementType: types.StringType}, "id": schema.StringAttribute{Computed: true}, "kind": schema.StringAttribute{Optional: true, Computed: true}, "name": schema.StringAttribute{Required: true}, "type": schema.StringAttribute{Optional: true, Computed: true}, "workspace": schema.StringAttribute{Required: true}}}
 }
 
+// IdentitySchema returns the resource identity schema shared with the paired list resource.
+func (r *SecretResource) IdentitySchema(_ context.Context, _ resource.IdentitySchemaRequest, resp *resource.IdentitySchemaResponse) {
+	resp.IdentitySchema = identityschema.Schema{Attributes: map[string]identityschema.Attribute{"workspace": identityschema.StringAttribute{RequiredForImport: true}, "name": identityschema.StringAttribute{RequiredForImport: true}}}
+}
+
 // Create provisions the remote resource and stores the resulting state.
 func (r *SecretResource) Create(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) {
 	var plan SecretResourceModel
@@ -62,6 +69,8 @@ func (r *SecretResource) Create(ctx context.Context, req resource.CreateRequest,
 	if resp.Diagnostics.HasError() {
 		return
 	}
+	resp.Diagnostics.Append(resp.Identity.SetAttribute(ctx, path.Root("workspace"), plan.Workspace)...)
+	resp.Diagnostics.Append(resp.Identity.SetAttribute(ctx, path.Root("name"), plan.Name)...)
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 }
 
@@ -146,6 +155,8 @@ func (r *SecretResource) Read(ctx context.Context, req resource.ReadRequest, res
 	if resp.Diagnostics.HasError() {
 		return
 	}
+	resp.Diagnostics.Append(resp.Identity.SetAttribute(ctx, path.Root("workspace"), state.Workspace)...)
+	resp.Diagnostics.Append(resp.Identity.SetAttribute(ctx, path.Root("name"), state.Name)...)
 	resp.Diagnostics.Append(resp.State.Set(ctx, &state)...)
 }
 
@@ -216,6 +227,8 @@ func (r *SecretResource) Update(ctx context.Context, req resource.UpdateRequest,
 	if resp.Diagnostics.HasError() {
 		return
 	}
+	resp.Diagnostics.Append(resp.Identity.SetAttribute(ctx, path.Root("workspace"), plan.Workspace)...)
+	resp.Diagnostics.Append(resp.Identity.SetAttribute(ctx, path.Root("name"), plan.Name)...)
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 }
 

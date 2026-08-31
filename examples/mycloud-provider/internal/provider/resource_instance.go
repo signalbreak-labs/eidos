@@ -13,6 +13,7 @@ import (
 import (
 	path "github.com/hashicorp/terraform-plugin-framework/path"
 	resource "github.com/hashicorp/terraform-plugin-framework/resource"
+	identityschema "github.com/hashicorp/terraform-plugin-framework/resource/identityschema"
 	schema "github.com/hashicorp/terraform-plugin-framework/resource/schema"
 	types "github.com/hashicorp/terraform-plugin-framework/types"
 	client "github.com/mycloud/terraform-provider-mycloud/internal/client"
@@ -21,6 +22,7 @@ import (
 // Compile-time interface assertions.
 var (
 	_ resource.Resource                = (*InstanceResource)(nil)
+	_ resource.ResourceWithIdentity    = (*InstanceResource)(nil)
 	_ resource.ResourceWithImportState = (*InstanceResource)(nil)
 	_ resource.ResourceWithConfigure   = (*InstanceResource)(nil)
 )
@@ -52,6 +54,11 @@ func (r *InstanceResource) Schema(_ context.Context, _ resource.SchemaRequest, r
 	resp.Schema = schema.Schema{MarkdownDescription: "Read an Instance", Attributes: map[string]schema.Attribute{"api_version": schema.StringAttribute{Optional: true, Computed: true}, "id": schema.StringAttribute{Computed: true}, "kind": schema.StringAttribute{Optional: true, Computed: true}, "labels": schema.MapAttribute{Optional: true, Computed: true, ElementType: types.StringType}, "name": schema.StringAttribute{Required: true}, "spec": schema.SingleNestedAttribute{Optional: true, Computed: true, Attributes: map[string]schema.Attribute{"containers": schema.ListNestedAttribute{Optional: true, Computed: true, NestedObject: schema.NestedAttributeObject{Attributes: map[string]schema.Attribute{"image": schema.StringAttribute{Optional: true, Computed: true}, "image_pull_policy": schema.StringAttribute{Optional: true, Computed: true}, "name": schema.StringAttribute{Required: true}}}}}}, "status": schema.SingleNestedAttribute{Optional: true, Computed: true, Attributes: map[string]schema.Attribute{"phase": schema.StringAttribute{Optional: true, Computed: true}}}, "workspace": schema.StringAttribute{Required: true}}}
 }
 
+// IdentitySchema returns the resource identity schema shared with the paired list resource.
+func (r *InstanceResource) IdentitySchema(_ context.Context, _ resource.IdentitySchemaRequest, resp *resource.IdentitySchemaResponse) {
+	resp.IdentitySchema = identityschema.Schema{Attributes: map[string]identityschema.Attribute{"workspace": identityschema.StringAttribute{RequiredForImport: true}, "name": identityschema.StringAttribute{RequiredForImport: true}}}
+}
+
 // Create provisions the remote resource and stores the resulting state.
 func (r *InstanceResource) Create(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) {
 	var plan InstanceResourceModel
@@ -63,6 +70,8 @@ func (r *InstanceResource) Create(ctx context.Context, req resource.CreateReques
 	if resp.Diagnostics.HasError() {
 		return
 	}
+	resp.Diagnostics.Append(resp.Identity.SetAttribute(ctx, path.Root("workspace"), plan.Workspace)...)
+	resp.Diagnostics.Append(resp.Identity.SetAttribute(ctx, path.Root("name"), plan.Name)...)
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 }
 
@@ -147,6 +156,8 @@ func (r *InstanceResource) Read(ctx context.Context, req resource.ReadRequest, r
 	if resp.Diagnostics.HasError() {
 		return
 	}
+	resp.Diagnostics.Append(resp.Identity.SetAttribute(ctx, path.Root("workspace"), state.Workspace)...)
+	resp.Diagnostics.Append(resp.Identity.SetAttribute(ctx, path.Root("name"), state.Name)...)
 	resp.Diagnostics.Append(resp.State.Set(ctx, &state)...)
 }
 
@@ -217,6 +228,8 @@ func (r *InstanceResource) Update(ctx context.Context, req resource.UpdateReques
 	if resp.Diagnostics.HasError() {
 		return
 	}
+	resp.Diagnostics.Append(resp.Identity.SetAttribute(ctx, path.Root("workspace"), plan.Workspace)...)
+	resp.Diagnostics.Append(resp.Identity.SetAttribute(ctx, path.Root("name"), plan.Name)...)
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 }
 

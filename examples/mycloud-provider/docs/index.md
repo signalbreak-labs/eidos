@@ -2,7 +2,7 @@
 page_title: "mycloud Provider"
 subcategory: ""
 description: |-
-  Trimmed MyCloud API reference spec for golden file regression tests. The compute schemas keep path parameters (name, workspace) at the top level as a stable baseline; focused transformer and generated-lifecycle tests cover one-level nested identity promotion. The compute family (workspaces, instances, networks, stacks, configs, secrets) exercises workspace-scoped CRUD and list resources; the projects family (organizations, projects, tasks, pull requests, members, branches, commits) exercises organization-scoped data sources and list resources.
+  Trimmed MyCloud API reference spec for golden file regression tests. The compute schemas keep path parameters (name, workspace) at the top level as a stable baseline; focused transformer and...
 ---
 
 # mycloud Provider
@@ -48,16 +48,11 @@ Trimmed MyCloud API reference spec for golden file regression tests. The compute
 
 ## List Resources
 
-- [mycloud_list_members](list-resources/list_members.md)
-- [mycloud_list_projects_for_organization](list-resources/list_projects_for_organization.md)
-- [mycloud_list_branches](list-resources/list_branches.md)
-- [mycloud_list_commits](list-resources/list_commits.md)
-- [mycloud_list_pull_requests](list-resources/list_pull_requests.md)
-- [mycloud_list_tasks](list-resources/list_tasks.md)
-- [mycloud_list_workspaces](list-resources/list_workspaces.md)
-- [mycloud_list_configs](list-resources/list_configs.md)
-- [mycloud_list_instances](list-resources/list_instances.md)
-- [mycloud_list_networks](list-resources/list_networks.md)
-- [mycloud_list_secrets](list-resources/list_secrets.md)
-- [mycloud_list_stacks](list-resources/list_stacks.md)
+- [mycloud_project](list-resources/project.md)
+- [mycloud_workspace](list-resources/workspace.md)
+- [mycloud_config](list-resources/config.md)
+- [mycloud_instance](list-resources/instance.md)
+- [mycloud_network](list-resources/network.md)
+- [mycloud_secret](list-resources/secret.md)
+- [mycloud_stack](list-resources/stack.md)
 

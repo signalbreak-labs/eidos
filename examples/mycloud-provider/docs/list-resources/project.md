@@ -1,26 +1,26 @@
 ---
-page_title: "mycloud_list_commits List Resource - mycloud"
+page_title: "mycloud_project List Resource - mycloud"
 subcategory: ""
 description: |-
-  List commits
+  List organization projects
 ---
 
-# mycloud_list_commits List Resource
+# mycloud_project List Resource
 
-List commits
+List organization projects
+
+-> **Note:** This list resource requires Terraform 1.14 or later and is used through the `terraform query` command, not in configuration files.
 
 ## Example Usage
 
 ```terraform
-list "mycloud_list_commits" "example" {
+list "mycloud_project" "example" {
   provider = mycloud
   limit    = 100
   config {
     organization = "example"
-    project      = "example"
   }
 }
-
 ```
 ## Schema
 
@@ -29,7 +29,6 @@ list "mycloud_list_commits" "example" {
 The following arguments are supported:
 
 * `organization` (String, required)
-* `project` (String, required)
 
 
 ### Identity Attributes
@@ -38,6 +37,5 @@ The following identity attributes are exported for each matching result:
 
 * `organization` (String, computed)
 * `project` (String, computed)
-* `ref` (String, computed)
 
 

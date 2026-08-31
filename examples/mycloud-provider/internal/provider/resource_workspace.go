@@ -13,6 +13,7 @@ import (
 import (
 	path "github.com/hashicorp/terraform-plugin-framework/path"
 	resource "github.com/hashicorp/terraform-plugin-framework/resource"
+	identityschema "github.com/hashicorp/terraform-plugin-framework/resource/identityschema"
 	schema "github.com/hashicorp/terraform-plugin-framework/resource/schema"
 	types "github.com/hashicorp/terraform-plugin-framework/types"
 	client "github.com/mycloud/terraform-provider-mycloud/internal/client"
@@ -21,6 +22,7 @@ import (
 // Compile-time interface assertions.
 var (
 	_ resource.Resource                = (*WorkspaceResource)(nil)
+	_ resource.ResourceWithIdentity    = (*WorkspaceResource)(nil)
 	_ resource.ResourceWithImportState = (*WorkspaceResource)(nil)
 	_ resource.ResourceWithConfigure   = (*WorkspaceResource)(nil)
 )
@@ -49,6 +51,11 @@ func (r *WorkspaceResource) Schema(_ context.Context, _ resource.SchemaRequest, 
 	resp.Schema = schema.Schema{MarkdownDescription: "Read a Workspace", Attributes: map[string]schema.Attribute{"api_version": schema.StringAttribute{Optional: true, Computed: true}, "kind": schema.StringAttribute{Optional: true, Computed: true}, "labels": schema.MapAttribute{Optional: true, Computed: true, ElementType: types.StringType}, "name": schema.StringAttribute{Required: true}, "status": schema.SingleNestedAttribute{Optional: true, Computed: true, Attributes: map[string]schema.Attribute{"phase": schema.StringAttribute{Optional: true, Computed: true}}}}}
 }
 
+// IdentitySchema returns the resource identity schema shared with the paired list resource.
+func (r *WorkspaceResource) IdentitySchema(_ context.Context, _ resource.IdentitySchemaRequest, resp *resource.IdentitySchemaResponse) {
+	resp.IdentitySchema = identityschema.Schema{Attributes: map[string]identityschema.Attribute{"name": identityschema.StringAttribute{RequiredForImport: true}}}
+}
+
 // Create provisions the remote resource and stores the resulting state.
 func (r *WorkspaceResource) Create(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) {
 	var plan WorkspaceResourceModel
@@ -60,6 +67,7 @@ func (r *WorkspaceResource) Create(ctx context.Context, req resource.CreateReque
 	if resp.Diagnostics.HasError() {
 		return
 	}
+	resp.Diagnostics.Append(resp.Identity.SetAttribute(ctx, path.Root("name"), plan.Name)...)
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 }
 
@@ -143,6 +151,7 @@ func (r *WorkspaceResource) Read(ctx context.Context, req resource.ReadRequest, 
 	if resp.Diagnostics.HasError() {
 		return
 	}
+	resp.Diagnostics.Append(resp.Identity.SetAttribute(ctx, path.Root("name"), state.Name)...)
 	resp.Diagnostics.Append(resp.State.Set(ctx, &state)...)
 }
 
@@ -212,6 +221,7 @@ func (r *WorkspaceResource) Update(ctx context.Context, req resource.UpdateReque
 	if resp.Diagnostics.HasError() {
 		return
 	}
+	resp.Diagnostics.Append(resp.Identity.SetAttribute(ctx, path.Root("name"), plan.Name)...)
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 }
 
