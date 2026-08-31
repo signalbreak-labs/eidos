@@ -266,8 +266,11 @@ func TestGenerateConfig_Full(t *testing.T) {
 		t.Fatalf("resource_overrides count = %d, want 1", len(cfg.ResourceOverrides))
 	}
 	ro := cfg.ResourceOverrides[0]
-	if ro.Schema != "pet" {
-		t.Errorf("resource schema = %q, want pet", ro.Schema)
+	// §3.5: the override emits exactly one match key. The resource has a
+	// source operation, so Operation is the key and Schema stays empty —
+	// emitting both would make the emitted config self-warn on validate.
+	if ro.Schema != "" {
+		t.Errorf("resource schema = %q, want empty (operation-keyed override)", ro.Schema)
 	}
 	if ro.Operation != "createPet" {
 		t.Errorf("resource operation = %q, want createPet", ro.Operation)
@@ -1280,5 +1283,193 @@ func TestOAuth2TokenURL(t *testing.T) {
 				t.Errorf("oauth2TokenURL() = %q, want %q", got, tc.want)
 			}
 		})
+	}
+}
+
+// TestGenerateConfigWithBase_PreservesInputOnlySections locks in §3.5: the
+// input-only sections of the generator.yaml a run consumed (spec, generation
+// toggles, provider metadata, client/naming/security/limits settings, operation
+// filters, feature toggles) have no IR representation, so the emitted config
+// must copy them from base verbatim or re-generating from the output directory
+// silently drops them.
+func TestGenerateConfigWithBase_PreservesInputOnlySections(t *testing.T) {
+	usePut := false
+	sign := false
+	base := &config.Config{
+		Spec: config.SpecConfig{Path: "specs/petstore.yaml", Format: "yaml"},
+		Generation: config.GenerationConfig{
+			SkipTests: true,
+			SkipDocs:  true,
+		},
+		Provider: config.ProviderConfig{
+			Author:       "MyCloud Team",
+			ContactEmail: "team@mycloud.io",
+			License:      "MIT",
+			Repository:   "https://github.com/mycloud/provider",
+		},
+		Client: &config.ClientConfig{
+			BaseURLTemplate: "https://api.mycloud.io/v1",
+			UserAgent:       "mycloud-provider/1.0",
+			RetryMax:        3,
+		},
+		Security:          &config.SecurityConfig{Scheme: "api_key"},
+		Naming:            &config.NamingConfig{ResourcePrefix: "mc_", Transform: "snake_case"},
+		SkipOperations:    []string{"legacyList"},
+		IncludeOperations: []string{"createPet"},
+		Limits:            &config.LimitsConfig{MaxDocsFileBytes: 12345},
+		UsePutAsCreate:    &usePut,
+		SignRelease:       &sign,
+	}
+
+	cfg, err := GenerateConfigWithBase(ir.ProviderIR{Name: "mycloud"}, base)
+	if err != nil {
+		t.Fatalf("GenerateConfigWithBase failed: %v", err)
+	}
+
+	if cfg.Spec.Path != "specs/petstore.yaml" || cfg.Spec.Format != "yaml" {
+		t.Errorf("spec section lost: %+v", cfg.Spec)
+	}
+	if !cfg.Generation.SkipTests || !cfg.Generation.SkipDocs {
+		t.Errorf("generation toggles lost: %+v", cfg.Generation)
+	}
+	if cfg.Provider.Author != "MyCloud Team" || cfg.Provider.ContactEmail != "team@mycloud.io" ||
+		cfg.Provider.License != "MIT" || cfg.Provider.Repository != "https://github.com/mycloud/provider" {
+		t.Errorf("provider metadata lost: %+v", cfg.Provider)
+	}
+	if cfg.Client == nil || cfg.Client.BaseURLTemplate != "https://api.mycloud.io/v1" || cfg.Client.RetryMax != 3 {
+		t.Errorf("client section lost: %+v", cfg.Client)
+	}
+	if cfg.Security == nil || cfg.Security.Scheme != "api_key" {
+		t.Errorf("security section lost: %+v", cfg.Security)
+	}
+	if cfg.Naming == nil || cfg.Naming.ResourcePrefix != "mc_" {
+		t.Errorf("naming section lost: %+v", cfg.Naming)
+	}
+	if len(cfg.SkipOperations) != 1 || cfg.SkipOperations[0] != "legacyList" {
+		t.Errorf("skip_operations lost: %+v", cfg.SkipOperations)
+	}
+	if len(cfg.IncludeOperations) != 1 || cfg.IncludeOperations[0] != "createPet" {
+		t.Errorf("include_operations lost: %+v", cfg.IncludeOperations)
+	}
+	if cfg.Limits == nil || cfg.Limits.MaxDocsFileBytes != 12345 {
+		t.Errorf("limits section lost: %+v", cfg.Limits)
+	}
+	if cfg.UsePutAsCreate == nil || *cfg.UsePutAsCreate {
+		t.Errorf("use_put_as_create lost: %+v", cfg.UsePutAsCreate)
+	}
+	if cfg.SignRelease == nil || *cfg.SignRelease {
+		t.Errorf("sign_release lost: %+v", cfg.SignRelease)
+	}
+
+	// The IR-derived fields stay IR-derived: the base config must not
+	// overwrite the provider identity the IR carries.
+	if cfg.Provider.Name != "mycloud" {
+		t.Errorf("provider.name = %q, want mycloud (IR-derived, not base)", cfg.Provider.Name)
+	}
+}
+
+// marshalYAMLOrFatal serializes a config for byte-comparison, failing the test
+// on marshal errors instead of comparing garbage.
+func marshalYAMLOrFatal(t *testing.T, cfg *config.Config) []byte {
+	t.Helper()
+	b, err := yaml.Marshal(cfg)
+	if err != nil {
+		t.Fatalf("yaml.Marshal failed: %v", err)
+	}
+	return b
+}
+
+// TestGenerateConfigWithBase_NilBaseMatchesGenerateConfig pins that the
+// overlay is nil-safe: GenerateConfig and GenerateConfigWithBase(ir, nil)
+// produce identical output, so starter configs (no input generator.yaml) are
+// unchanged.
+func TestGenerateConfigWithBase_NilBaseMatchesGenerateConfig(t *testing.T) {
+	providerIR := ir.ProviderIR{
+		Name: "mycloud",
+		Resources: []ir.ResourceIR{
+			{Name: "pet", SourceOperation: "createPet"},
+		},
+	}
+
+	want, err := GenerateConfig(providerIR)
+	if err != nil {
+		t.Fatalf("GenerateConfig failed: %v", err)
+	}
+	got, err := GenerateConfigWithBase(providerIR, nil)
+	if err != nil {
+		t.Fatalf("GenerateConfigWithBase(nil) failed: %v", err)
+	}
+	wantBytes, gotBytes := marshalYAMLOrFatal(t, want), marshalYAMLOrFatal(t, got)
+	if string(wantBytes) != string(gotBytes) {
+		t.Errorf("GenerateConfigWithBase(nil) diverged from GenerateConfig:\nwant:\n%s\ngot:\n%s", wantBytes, gotBytes)
+	}
+}
+
+// TestGenerateConfig_EmitsSingleMatchKey locks in §3.5: emitted overrides carry
+// exactly one match key (operation when the IR has a source operation, schema/
+// resource name otherwise), so the emitted generator.yaml revalidates without
+// the self-inflicted "both are set" warnings — 206 of them on gigavuecore.
+func TestGenerateConfig_EmitsSingleMatchKey(t *testing.T) {
+	providerIR := ir.ProviderIR{
+		Name: "mycloud",
+		Resources: []ir.ResourceIR{
+			{Name: "pet", SourceOperation: "createPet"},
+			{Name: "widget"}, // no source operation: keyed by schema name
+		},
+		DataSources: []ir.DataSourceIR{
+			{Name: "pet", SourceOperation: "listPets"},
+		},
+		ListResources: []ir.ListResourceIR{
+			{Name: "things", SourceOperation: "listThings"},
+			{Name: "widgets"}, // no source operation: keyed by resource name
+		},
+	}
+
+	cfg, err := GenerateConfig(providerIR)
+	if err != nil {
+		t.Fatalf("GenerateConfig failed: %v", err)
+	}
+
+	byOp := func(op string) *config.ResourceOverride {
+		for i := range cfg.ResourceOverrides {
+			if cfg.ResourceOverrides[i].Operation == op {
+				return &cfg.ResourceOverrides[i]
+			}
+		}
+		return nil
+	}
+	if ro := byOp("createPet"); ro == nil || ro.Schema != "" {
+		t.Errorf("operation-keyed resource override must leave schema empty: %+v", ro)
+	}
+	schemaKeyed := false
+	for _, ro := range cfg.ResourceOverrides {
+		if ro.Operation == "" && ro.Schema == "widget" {
+			schemaKeyed = true
+		}
+	}
+	if !schemaKeyed {
+		t.Errorf("resource without a source operation must be keyed by schema; got %+v", cfg.ResourceOverrides)
+	}
+
+	loOp, loRes := false, false
+	for _, lo := range cfg.ListResourceOverrides {
+		switch {
+		case lo.Operation == "listThings" && lo.Resource == "":
+			loOp = true
+		case lo.Operation == "" && lo.Resource == "widgets":
+			loRes = true
+		}
+	}
+	if !loOp {
+		t.Errorf("list override with a source operation must be operation-keyed only; got %+v", cfg.ListResourceOverrides)
+	}
+	if !loRes {
+		t.Errorf("list override without a source operation must be resource-keyed only; got %+v", cfg.ListResourceOverrides)
+	}
+
+	for _, w := range cfg.Warnings {
+		if strings.Contains(w, "both") && strings.Contains(w, "are set") {
+			t.Errorf("emitted config self-warns on redundant match keys: %s", w)
+		}
 	}
 }

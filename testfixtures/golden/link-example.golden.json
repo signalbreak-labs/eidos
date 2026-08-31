@@ -48,7 +48,7 @@
     {
       "path": "generator.yaml",
       "reason": "generated generator configuration",
-      "body_hash": "e506df174c66806b"
+      "body_hash": "8c6c40e02c07ec22"
     },
     {
       "path": "go.mod",

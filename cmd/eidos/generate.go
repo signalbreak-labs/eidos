@@ -244,6 +244,12 @@ func runGenerate(cmd *cobra.Command, flags *generateFlags) error {
 	}
 
 	collectOpts := collectOptionsFor(cfg, flags)
+	// The emitted generator.yaml preserves the input config's input-only
+	// sections (spec:, generation:, provider metadata, client/naming/security/
+	// limits, operation filters, feature toggles) so regenerating from the
+	// output directory is a lossless round-trip (§3.5). cfg is nil when the
+	// run was started from a bare --spec.
+	collectOpts.BaseConfig = cfg
 
 	// The generator re-emits a canonical generator.yaml from the IR (round-trip
 	// reproducibility). When --output is the same directory as the input --config,

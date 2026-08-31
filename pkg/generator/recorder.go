@@ -281,6 +281,14 @@ type CollectOptions struct {
 	// false opts out. Applied in FilesForProviderIR before releaseFiles and the
 	// dynamic-release workflow are emitted.
 	SignRelease *bool
+	// BaseConfig is the generator.yaml the current run consumed, if any. When
+	// IncludeConfig emits a canonical generator.yaml into the output, its
+	// input-only sections (spec:, generation:, provider metadata, client/
+	// naming/security/limits, operation filters, feature toggles) are copied
+	// from this config so the emitted file is a lossless round-trip instead of
+	// silently dropping them (§3.5). Nil (no --config) generates from the IR
+	// alone, as before.
+	BaseConfig *config.Config
 }
 
 // DefaultCollectOptions returns the recommended collection options for a full
