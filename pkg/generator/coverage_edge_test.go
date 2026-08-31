@@ -127,8 +127,8 @@ func TestTerraformTestVariableValue(t *testing.T) {
 		attr ir.AttributeIR
 		want string
 	}{
-		{"list-of-string", strAttr(listStr), `[ "example" ]`},
-		{"set-of-string", strAttr(&ir.CollectionType{Kind: ir.Set, ElementType: ir.SchemaIR{Type: ir.TypeString}}), `[ "example" ]`},
+		{"list-of-string", strAttr(listStr), `["example"]`},
+		{"set-of-string", strAttr(&ir.CollectionType{Kind: ir.Set, ElementType: ir.SchemaIR{Type: ir.TypeString}}), `["example"]`},
 		{"map-of-string", strAttr(mapStr), `{ key = "example" }`},
 		// List/set with a non-primitive element falls through to the empty list.
 		{"list-of-object", strAttr(&ir.CollectionType{Kind: ir.List, ElementType: ir.SchemaIR{Attributes: []ir.AttributeIR{{Name: "x"}}}}), "[]"},
@@ -363,7 +363,7 @@ func TestWriteHCLAcceptanceCollectionAttribute(t *testing.T) {
 	// List of primitives → single-line list.
 	var h hclBuilder
 	writeHCLAcceptanceCollectionAttribute(&h, ir.AttributeIR{Name: "tags", Schema: ir.SchemaIR{Collection: &ir.CollectionType{Kind: ir.List, ElementType: schemaType(ir.TypeString)}}})
-	if got := h.b.String(); !strings.Contains(got, `tags = [ "example" ]`) {
+	if got := h.b.String(); !strings.Contains(got, `tags = ["example"]`) {
 		t.Errorf("list of primitives = %q", got)
 	}
 

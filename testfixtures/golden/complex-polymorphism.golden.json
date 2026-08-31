@@ -23,7 +23,7 @@
     {
       "path": "docs/actions/create_polymorphic_pet.md",
       "reason": "documentation for action create_polymorphic_pet",
-      "body_hash": "fe4c3de6e7cb4df0"
+      "body_hash": "a69a641fa8a4b998"
     },
     {
       "path": "docs/data-sources/get_polymorphic_pet.md",

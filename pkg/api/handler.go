@@ -1910,9 +1910,11 @@ func functionFromOverride(fo config.FunctionOverride, providerName string) ir.Fu
 		name = transformer.ToSnakeCase(fo.Operation)
 	}
 	fn := ir.FunctionIR{
-		Name:            name,
-		FullName:        providerName + "_" + name,
-		TypeName:        providerName + "_" + name,
+		Name:     name,
+		FullName: providerName + "_" + name,
+		// The registered function name is bare — see functionFromOperation for
+		// why provider-defined functions do not carry the provider prefix (§3.7).
+		TypeName:        name,
 		SourceOperation: fo.Operation,
 	}
 	for _, arg := range fo.Arguments {
@@ -4210,9 +4212,14 @@ func matchItemProperty(param string, props map[string]transformer.SchemaSpec) st
 func functionFromOperation(op *parser.Operation, providerName, path, method string, pathOps map[string]map[transformer.HTTPMethod]transformer.Operation) ir.FunctionIR {
 	name := resourceName(op, method, path)
 	fn := ir.FunctionIR{
-		Name:            name,
-		FullName:        providerName + "_" + name,
-		TypeName:        providerName + "_" + name,
+		Name:     name,
+		FullName: providerName + "_" + name,
+		// Provider-defined functions are invoked as provider::<provider>::<name>,
+		// so the framework-registered name is the bare function name. Prefixing
+		// it with the provider name (unlike managed resources, whose type names
+		// require the prefix) doubles the prefix in the invocation:
+		// provider::gigavuecore::gigavuecore_query_raw_data(...) (§3.7).
+		TypeName:        name,
 		Description:     operationDescription(op, fmt.Sprintf("Provider-defined function %s.", humanizeConstructName(name))),
 		SourceOperation: op.OperationID,
 		Arguments:       actionConfigAttributes(op),

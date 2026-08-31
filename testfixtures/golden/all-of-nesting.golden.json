@@ -23,7 +23,7 @@
     {
       "path": "docs/actions/create_shipment.md",
       "reason": "documentation for action create_shipment",
-      "body_hash": "75c6c16d9d4327a7"
+      "body_hash": "5cad4d11e20d391f"
     },
     {
       "path": "docs/data-sources/get_shipment.md",

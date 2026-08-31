@@ -23,22 +23,32 @@
     {
       "path": "docs/functions/lookup_tags.md",
       "reason": "documentation for function lookup_tags",
-      "body_hash": "34c8acc16d0f3c2f"
+      "body_hash": "a471aed13cb4a003"
     },
     {
       "path": "docs/functions/search_users.md",
       "reason": "documentation for function search_users",
-      "body_hash": "7d227652c1369cb3"
+      "body_hash": "88a79997e4bccb8f"
     },
     {
       "path": "docs/index.md",
       "reason": "provider overview and authentication guide",
-      "body_hash": "1a8511cf73f97750"
+      "body_hash": "0cc9f41efe0191e0"
+    },
+    {
+      "path": "examples/functions/lookup_tags/function.tf",
+      "reason": "example for function lookup_tags",
+      "body_hash": "fa08c45b8ce54cab"
+    },
+    {
+      "path": "examples/functions/search_users/function.tf",
+      "reason": "example for function search_users",
+      "body_hash": "85badd5dd1b32ae3"
     },
     {
       "path": "generator.yaml",
       "reason": "generated generator configuration",
-      "body_hash": "38149b07d78fdbb8"
+      "body_hash": "d17cd8614f157eea"
     },
     {
       "path": "go.mod",
@@ -88,12 +98,12 @@
     {
       "path": "internal/provider/function_lookup_tags.go",
       "reason": "provider-defined function search-api_lookup_tags",
-      "body_hash": "13d95498f8c9bad3"
+      "body_hash": "05ef530982bf570f"
     },
     {
       "path": "internal/provider/function_search_users.go",
       "reason": "provider-defined function search-api_search_users",
-      "body_hash": "be40086fa2aa5ba2"
+      "body_hash": "af4ce7ed1ef7aa90"
     },
     {
       "path": "internal/provider/provider.go",

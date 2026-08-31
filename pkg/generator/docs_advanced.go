@@ -19,7 +19,7 @@ func ActionDocsFile(a ir.ActionIR) File {
 		"ProviderName":    providerDocsTypeNameFromAction(a),
 		"Description":     escapeDescription(a.Description),
 		"DescriptionBody": bodyDescription(a.Description),
-		"ExampleHCL":      generateActionExampleHCL(a),
+		"ExampleHCL":      trimTrailingNewline(generateActionExampleHCL(a)),
 		"Arguments":       arguments,
 		"Blocks":          blocks,
 		"NestedSchemas":   nested,
@@ -51,7 +51,7 @@ func EphemeralResourceDocsFile(er ir.EphemeralResourceIR) File {
 		"ProviderName":          providerDocsTypeNameFromEphemeralResource(er),
 		"Description":           escapeDescription(er.Description),
 		"DescriptionBody":       bodyDescription(er.Description),
-		"ExampleHCL":            generateEphemeralResourceExampleHCL(er),
+		"ExampleHCL":            trimTrailingNewline(generateEphemeralResourceExampleHCL(er)),
 		"Arguments":             arguments,
 		"Attributes":            attributes,
 		"Blocks":                blocks,
@@ -82,7 +82,7 @@ func ListResourceDocsFile(lr ir.ListResourceIR) File {
 		"ProviderName":     providerDocsTypeNameFromListResource(lr),
 		"Description":      escapeDescription(lr.Description),
 		"DescriptionBody":  bodyDescription(lr.Description),
-		"ExampleHCL":       generateListResourceExampleHCL(lr),
+		"ExampleHCL":       trimTrailingNewline(generateListResourceExampleHCL(lr)),
 		"Arguments":        arguments,
 		"Attributes":       attributes,
 		"Blocks":           blocks,
@@ -119,7 +119,7 @@ func FunctionDocsFile(fn ir.FunctionIR, providerName string) File {
 		"ProviderName":    strings.TrimSpace(providerName),
 		"Description":     escapeDescription(fn.Description),
 		"DescriptionBody": bodyDescription(fn.Description),
-		"ExampleHCL":      generateFunctionExampleHCL(fn, providerName),
+		"ExampleHCL":      trimTrailingNewline(generateFunctionExampleHCL(fn, providerName)),
 		"SignatureArgs":   renderFunctionSignatureArgs(fn),
 		"ArgumentDetails": renderFunctionParameters(fn),
 		"ReturnType":      schemaTypeName(fn.ReturnType),
@@ -463,7 +463,7 @@ func collectionArgumentPlaceholder(c *ir.CollectionType, label string) string {
 	case ir.Map:
 		return `{ "key" = ` + functionArgumentPlaceholder(elem, label) + ` }`
 	default:
-		return `[ ` + functionArgumentPlaceholder(elem, label) + ` ]`
+		return `[` + functionArgumentPlaceholder(elem, label) + `]`
 	}
 }
 

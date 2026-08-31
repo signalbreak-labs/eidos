@@ -2,6 +2,7 @@ package generator
 
 import (
 	"fmt"
+	"regexp"
 	"strings"
 	"time"
 	"unicode"
@@ -65,7 +66,7 @@ func ProviderDocsIndex(pir ir.ProviderIR) File {
 
 	return Template("docs/index.md", indexTemplate, map[string]any{
 		"ProviderName":       name,
-		"Description":        escapeDescription(pir.Description),
+		"Description":        plainTextSummary(pir.Description),
 		"DescriptionBody":    bodyDescription(pir.Description),
 		"Resources":          resources,
 		"DataSources":        dataSources,
@@ -119,6 +120,20 @@ func ResourceDocsFile(r ir.ResourceIR) File {
 	return Template(path, resourceTemplate, data)
 }
 
+// article returns the indefinite article ("a" or "an") for a word, per its
+// first letter. Used for timeout descriptions so "update" renders "An update
+// timeout" rather than "A update timeout" (§3.8).
+func article(word string) string {
+	if word == "" {
+		return "A"
+	}
+	switch word[0] {
+	case 'a', 'e', 'i', 'o', 'u', 'A', 'E', 'I', 'O', 'U':
+		return "An"
+	}
+	return "A"
+}
+
 // appendTimeoutsDocs adds the `timeouts` block row to the Blocks section and
 // its "### Nested Schema for `timeouts`" section to the nested schemas for a
 // resource with configured CRUD timeouts. The block is a framework
@@ -144,7 +159,7 @@ func appendTimeoutsDocs(r ir.ResourceIR, blocks, nestedSchemas string) (string, 
 		attrs = append(attrs, ir.AttributeIR{
 			Name:        op.name,
 			Optional:    true,
-			Description: fmt.Sprintf("A %s timeout for this operation, e.g. %q. Overrides the generator default (%s).", op.name, op.duration, op.duration),
+			Description: fmt.Sprintf("%s %s timeout for this operation, e.g. %q. Overrides the generator default (%s).", article(op.name), op.name, op.duration, op.duration),
 			Schema:      ir.SchemaIR{Type: ir.TypeString},
 		})
 	}
@@ -851,6 +866,42 @@ func docsImportFormat(format string) string {
 // and backslash-escapes markdown-special characters. The resulting value is
 // safe to place inside the YAML `|-` frontmatter block used by the templates
 // because it is a single line.
+// markdownLinkRe matches inline markdown links so plainTextSummary can reduce
+// them to their link text.
+var markdownLinkRe = regexp.MustCompile(`\[([^\]]*)\]\([^)]*\)`)
+
+// plainTextSummary returns a short plain-text summary of a markdown
+// description for the docs/index.md registry front matter. The registry
+// renders the front-matter description as the provider page's subtitle, so a
+// full escaped markdown body (the previous behavior) displayed as literal
+// `\[eidos\](...) \#\# Example Usage` text. The summary takes the first
+// paragraph, strips markdown emphasis/link/heading syntax, collapses
+// whitespace, and truncates to summary length on a word boundary (§3.8).
+func plainTextSummary(s string) string {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return ""
+	}
+	if i := strings.IndexAny(s, "\n\r"); i >= 0 {
+		s = strings.TrimSpace(s[:i])
+	}
+	s = markdownLinkRe.ReplaceAllString(s, "$1")
+	s = strings.NewReplacer("**", "", "__", "", "`", "").Replace(s)
+	s = strings.TrimLeft(s, "# ") // a leading markdown heading marker
+	s = strings.Join(strings.Fields(s), " ")
+	const maxLen = 200
+	runes := []rune(s)
+	if len(runes) <= maxLen {
+		return s
+	}
+	cut := runes[:maxLen]
+	// Trim back to the last complete word so the summary does not end mid-word.
+	if i := strings.LastIndexAny(string(cut), " "); i > 0 {
+		cut = []rune(string(cut[:i]))
+	}
+	return strings.TrimSpace(string(cut)) + "..."
+}
+
 func escapeDescription(s string) string {
 	s = strings.TrimSpace(s)
 	s = strings.ReplaceAll(s, "\n", " ")

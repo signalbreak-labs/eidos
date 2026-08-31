@@ -347,6 +347,10 @@ func collectOptionsFor(cfg *config.Config, flags *generateFlags) generator.Colle
 	// BuildConfigFromIR default of signed releases.
 	if cfg != nil {
 		opts.SignRelease = cfg.SignRelease
+		// provider.namespace — or the repository owner it resolves from —
+		// overrides the provider-name default so the README advertises the
+		// real registry address (§3.9).
+		opts.RegistryNamespace = cfg.Provider.RegistryNamespace()
 	}
 	if flags.onlyBuild {
 		// OnlyBuild emits exactly the build/CI/release scaffolding and nothing
@@ -358,6 +362,7 @@ func collectOptionsFor(cfg *config.Config, flags *generateFlags) generator.Colle
 			DynamicReleaseImage:    opts.DynamicReleaseImage,
 			DynamicReleaseSpecPath: opts.DynamicReleaseSpecPath,
 			SignRelease:            opts.SignRelease,
+			RegistryNamespace:      opts.RegistryNamespace,
 		}
 	}
 	return opts

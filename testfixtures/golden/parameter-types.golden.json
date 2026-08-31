@@ -23,7 +23,7 @@
     {
       "path": "docs/actions/delete_item.md",
       "reason": "documentation for action delete_item",
-      "body_hash": "616919faa61949bd"
+      "body_hash": "dd51f600192aafa5"
     },
     {
       "path": "docs/data-sources/get_item.md",

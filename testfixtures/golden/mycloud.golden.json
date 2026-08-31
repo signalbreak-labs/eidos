@@ -23,22 +23,22 @@
     {
       "path": "docs/actions/create_pull_request.md",
       "reason": "documentation for action create_pull_request",
-      "body_hash": "0b2d1a0b9a552a28"
+      "body_hash": "15e01acaf6fa4e02"
     },
     {
       "path": "docs/actions/create_task.md",
       "reason": "documentation for action create_task",
-      "body_hash": "575c0e19b56eda0e"
+      "body_hash": "dcd49c8bc06be006"
     },
     {
       "path": "docs/actions/update_pull_request.md",
       "reason": "documentation for action update_pull_request",
-      "body_hash": "760dd2e693333dcb"
+      "body_hash": "d7696061aa361c2d"
     },
     {
       "path": "docs/actions/update_task.md",
       "reason": "documentation for action update_task",
-      "body_hash": "27a1ae0ecd06f243"
+      "body_hash": "49d2b7a98dba5d73"
     },
     {
       "path": "docs/data-sources/get_branch.md",
@@ -128,42 +128,42 @@
     {
       "path": "docs/index.md",
       "reason": "provider overview and authentication guide",
-      "body_hash": "c4cf4ab25e2dff62"
+      "body_hash": "183b32a32dc16d05"
     },
     {
       "path": "docs/list-resources/config.md",
       "reason": "documentation for list resource config",
-      "body_hash": "9029889c503855fc"
+      "body_hash": "fb962da3cb74e912"
     },
     {
       "path": "docs/list-resources/instance.md",
       "reason": "documentation for list resource instance",
-      "body_hash": "82979300420e374f"
+      "body_hash": "cb60706d28000adf"
     },
     {
       "path": "docs/list-resources/network.md",
       "reason": "documentation for list resource network",
-      "body_hash": "9630ee14e47e9ef6"
+      "body_hash": "4102dcdd37715a2c"
     },
     {
       "path": "docs/list-resources/project.md",
       "reason": "documentation for list resource project",
-      "body_hash": "95b669d0d912d717"
+      "body_hash": "29968b4f7734d2c7"
     },
     {
       "path": "docs/list-resources/secret.md",
       "reason": "documentation for list resource secret",
-      "body_hash": "4002c88610768c9e"
+      "body_hash": "cb3457d7a050cc34"
     },
     {
       "path": "docs/list-resources/stack.md",
       "reason": "documentation for list resource stack",
-      "body_hash": "33e1ce7eee6e4aa8"
+      "body_hash": "5488f98c45467986"
     },
     {
       "path": "docs/list-resources/workspace.md",
       "reason": "documentation for list resource workspace",
-      "body_hash": "ebcb1ea2ff755ae8"
+      "body_hash": "c137991a7e950b58"
     },
     {
       "path": "docs/resources/config.md",
@@ -304,6 +304,41 @@
       "path": "examples/data-sources/list_workspaces/data-source.tf",
       "reason": "example for data source list_workspaces",
       "body_hash": "32ec7e4f14549d6c"
+    },
+    {
+      "path": "examples/list-resources/config/list.tfquery.hcl",
+      "reason": "example for list resource config",
+      "body_hash": "11360f3f81808dff"
+    },
+    {
+      "path": "examples/list-resources/instance/list.tfquery.hcl",
+      "reason": "example for list resource instance",
+      "body_hash": "3451fb250245a748"
+    },
+    {
+      "path": "examples/list-resources/network/list.tfquery.hcl",
+      "reason": "example for list resource network",
+      "body_hash": "49f5825cccbeb2d1"
+    },
+    {
+      "path": "examples/list-resources/project/list.tfquery.hcl",
+      "reason": "example for list resource project",
+      "body_hash": "3423bd1439b519fa"
+    },
+    {
+      "path": "examples/list-resources/secret/list.tfquery.hcl",
+      "reason": "example for list resource secret",
+      "body_hash": "c33544c1dd0d5951"
+    },
+    {
+      "path": "examples/list-resources/stack/list.tfquery.hcl",
+      "reason": "example for list resource stack",
+      "body_hash": "95f239623047a01b"
+    },
+    {
+      "path": "examples/list-resources/workspace/list.tfquery.hcl",
+      "reason": "example for list resource workspace",
+      "body_hash": "fb915f9067b4cb58"
     },
     {
       "path": "examples/resources/config/resource.tf",

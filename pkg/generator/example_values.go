@@ -50,6 +50,17 @@ func schemaExampleLiteral(s ir.SchemaIR) string {
 	return primitiveExampleValue(s.Type)
 }
 
+// stringPlaceholderDictionary lists realistic placeholder values in increasing
+// length. When a schema's minLength exceeds the generic "example" placeholder,
+// the shortest entry satisfying the length window is used instead of growing
+// "example" by cycling it, which produced typo-like values such as
+// password = "examplee" for minLength: 8 (§3.8).
+var stringPlaceholderDictionary = []string{
+	"example-value",
+	"example-placeholder",
+	"example-placeholder-value",
+}
+
 // stringConstraintExample returns a raw string value satisfying the schema's
 // string constraints. Const wins (it is the most specific statement the spec
 // can make); otherwise the first string enum member — stringvalidator.OneOf
@@ -66,7 +77,16 @@ func stringConstraintExample(s ir.SchemaIR, def string) string {
 	if members := stringEnumMembers(s); len(members) > 0 {
 		return members[0]
 	}
-	v := adjustStringLength(def, s.MinLength, s.MaxLength)
+	v := def
+	if s.MinLength != nil && *s.MinLength > len([]rune(def)) {
+		for _, candidate := range stringPlaceholderDictionary {
+			if stringLengthSatisfied(candidate, s.MinLength, s.MaxLength) {
+				v = candidate
+				break
+			}
+		}
+	}
+	v = adjustStringLength(v, s.MinLength, s.MaxLength)
 	if s.Pattern != "" && !patternMatches(s.Pattern, v) {
 		if alt := patternExampleCandidate(s, ""); alt != "" {
 			return alt

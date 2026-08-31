@@ -96,6 +96,13 @@ func Run(provider *ir.ProviderIR, opts Options) ([]FileEntry, error) {
 			return nil, fmt.Errorf("write mode requires a non-empty OutputDir")
 		}
 		cfg := BuildConfigFromIR(provider)
+		// The provider.namespace generator.yaml key (or the repository owner
+		// it resolves from) overrides the IR-derived default so the README and
+		// build scaffolding advertise the registry address the provider
+		// actually lives at (§3.9).
+		if ns := strings.TrimSpace(opts.RegistryNamespace); ns != "" {
+			cfg.Namespace = ns
+		}
 		files, err := FilesForProviderIR(provider, cfg, opts.CollectOptions)
 		if err != nil {
 			return nil, fmt.Errorf("prepare files for write mode: %w", err)
@@ -289,6 +296,13 @@ type CollectOptions struct {
 	// silently dropping them (§3.5). Nil (no --config) generates from the IR
 	// alone, as before.
 	BaseConfig *config.Config
+	// RegistryNamespace overrides the Terraform Registry namespace in the
+	// generated README and build scaffolding (BuildConfig.Namespace defaults
+	// to the provider name). It carries the resolved provider.namespace — or
+	// the repository owner when that key is unset (§3.9) — so the advertised
+	// registry address points where the provider actually lives. Empty keeps
+	// the IR-derived default.
+	RegistryNamespace string
 }
 
 // DefaultCollectOptions returns the recommended collection options for a full
@@ -486,6 +500,15 @@ func collectListResourceFiles(rec *Recorder, lr ir.ListResourceIR, opts CollectO
 			rec.Record(fmt.Sprintf("docs/list-resources/%s.md", name), fmt.Sprintf("documentation for list resource %s", lr.Name))
 		}
 	}
+	if opts.IncludeExamples {
+		// Examples are gated on the same Registerable check as docs, for the
+		// same reason (§3.13); the example is a `list` block consumed by
+		// `terraform query`, hence the .tfquery.hcl extension. Mirrors
+		// ListResourceExampleFiles so record and write modes stay in lockstep.
+		if lr.Registerable {
+			rec.Record(fmt.Sprintf("examples/list-resources/%s/list.tfquery.hcl", name), fmt.Sprintf("example for list resource %s", lr.Name))
+		}
+	}
 }
 
 func collectFunctionFiles(rec *Recorder, fn ir.FunctionIR, opts CollectOptions) {
@@ -493,6 +516,9 @@ func collectFunctionFiles(rec *Recorder, fn ir.FunctionIR, opts CollectOptions) 
 	rec.Record(fmt.Sprintf("internal/provider/function_%s.go", name), fmt.Sprintf("provider-defined function %s", displayName(fn.Name, fn.FullName)))
 	if opts.IncludeDocs {
 		rec.Record(fmt.Sprintf("docs/functions/%s.md", name), fmt.Sprintf("documentation for function %s", fn.Name))
+	}
+	if opts.IncludeExamples {
+		rec.Record(fmt.Sprintf("examples/functions/%s/function.tf", name), fmt.Sprintf("example for function %s", fn.Name))
 	}
 }
 
