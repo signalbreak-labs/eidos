@@ -164,9 +164,9 @@ func InferResourceCRUD(pathOps map[string]map[HTTPMethod]Operation, usePutAsCrea
 
 // InferResourceCRUDWithDiagnostics is InferResourceCRUD with a diagnostics
 // channel. When diags is non-nil, a same-named group that dedupCRUDByName
-// drops (or replaces) surfaces a Warning naming both collection paths, so a
-// construct that loses a name collision is never silently discarded
-// (AGENTS.md "fail loud, never silently").
+// renames to resolve the collision surfaces an Info naming both collection
+// paths and the new name, so a resource whose type name changed is never a
+// silent surprise (AGENTS.md "fail loud, never silently").
 func InferResourceCRUDWithDiagnostics(pathOps map[string]map[HTTPMethod]Operation, usePutAsCreate bool, diags *diagnostics.Diagnostics) []ResourceCRUD {
 	parsed := make(map[string][]pathSegment, len(pathOps))
 	prefixKeys := make(map[string]pathKey, len(pathOps))
@@ -198,15 +198,22 @@ func InferResourceCRUDWithDiagnostics(pathOps map[string]map[HTTPMethod]Operatio
 	}
 
 	// Stable sort over already-deterministic input yields fully deterministic
-	// output, and dedupCRUDByName collapses same-named resources (e.g. /v1/pets
+	// output, and dedupCRUDByName resolves same-named resources (e.g. /v1/pets
 	// and /v2/pets) so they cannot collide downstream (M-39). When two groups
-	// share a name, the one with the more complete CRUD wins — otherwise a
+	// share a name, the one with the more complete CRUD keeps it — otherwise a
 	// degenerate same-named sub-path group (e.g. RBAC /access-control/.../teams)
-	// could shadow a full-CRUD group (e.g. /teams) and silently drop it (G7).
+	// could shadow a full-CRUD group (e.g. /teams) and push it into a rename
+	// (G7). The loser is renamed with parent-segment qualification, not
+	// dropped.
 	sort.SliceStable(resources, func(i, j int) bool {
 		return resources[i].Name < resources[j].Name
 	})
 	resources = dedupCRUDByName(resources, diags)
+	// Renames reorder names, so re-sort to keep the "sorted by resource name"
+	// contract for callers.
+	sort.SliceStable(resources, func(i, j int) bool {
+		return resources[i].Name < resources[j].Name
+	})
 	return resources
 }
 
@@ -256,65 +263,111 @@ func crudCompleteness(r ResourceCRUD) int {
 	return n
 }
 
-// dedupCRUDByName keeps the first group for each name, but when a name collides
-// the group with the higher CRUD-completeness score wins (stable for ties).
-// A group that loses a collision is never dropped silently: when diags is
-// non-nil, a Warning naming both collection paths is appended (AGENTS.md "fail
-// loud, never silently").
+// dedupCRUDByName resolves name collisions between CRUD groups. The group with
+// the higher CRUD-completeness score keeps the colliding name (stable for
+// ties, so the lexicographically first collection path wins — a degenerate
+// same-named sub-path group cannot shadow a full-CRUD group, G7). Every other
+// same-named group is renamed with parent-segment qualification derived from
+// its collection path (e.g. /apps/icap/profiles → "icap_profile") instead of
+// being dropped: a drop removes an entire API area's managed-resource
+// lifecycle from the generated provider (114 dropped CRUD groups in the
+// gigavuecore audit, §3.3), which no diagnostic can repair. Renames escalate
+// to more path segments, then to the full snake-cased path, until the name is
+// unique; each rename surfaces an Info diagnostic so the chosen type name is
+// never a surprise.
 func dedupCRUDByName(items []ResourceCRUD, diags *diagnostics.Diagnostics) []ResourceCRUD {
 	if len(items) == 0 {
 		return items
 	}
-	best := make(map[string]int, len(items))
-	byPath := make(map[string]string, len(items))
-	out := items[:0]
+	taken := make(map[string]bool, len(items))
+	for _, it := range items {
+		taken[it.Name] = true
+	}
+	out := make([]ResourceCRUD, 0, len(items))
+	seen := make(map[string]int, len(items))
 	for _, it := range items {
 		score := crudCompleteness(it)
-		prev, ok := best[it.Name]
-		if ok {
-			if prev >= score {
-				// The earlier, equally-or-more-complete group wins; the later
-				// same-named group is dropped. Surface it so the loss is visible.
-				appendCRUDDedupWarning(diags, it.Name, it.CollectionPath, byPath[it.Name])
+		if prev, ok := seen[it.Name]; ok {
+			if crudCompleteness(out[prev]) >= score {
+				// The earlier, equally-or-more-complete group keeps the name;
+				// the later same-named group is renamed.
+				renamed := it
+				renameCRUDGroup(&renamed, taken, diags, out[prev].CollectionPath)
+				seen[renamed.Name] = len(out)
+				out = append(out, renamed)
 				continue
 			}
-			// The later group is more complete; replace the earlier entry.
-			best[it.Name] = score
-			for i := range out {
-				if out[i].Name == it.Name {
-					appendCRUDDedupWarning(diags, it.Name, out[i].CollectionPath, it.CollectionPath)
-					out[i] = it
-					break
-				}
-			}
-			byPath[it.Name] = it.CollectionPath
+			// The later group is more complete; it keeps the name and the
+			// earlier entry is renamed (mirrors the old replacement rule).
+			earlier := out[prev]
+			renameCRUDGroup(&earlier, taken, diags, it.CollectionPath)
+			out[prev] = it
+			seen[earlier.Name] = len(out)
+			out = append(out, earlier)
 			continue
 		}
-		best[it.Name] = score
-		byPath[it.Name] = it.CollectionPath
+		seen[it.Name] = len(out)
 		out = append(out, it)
 	}
 	return out
 }
 
-// appendCRUDDedupWarning records a Warning when a name collision drops a CRUD
-// group, naming both the surviving and the dropped collection paths. A nil
-// diags channel makes it a no-op so the deprecated no-diagnostics inference
-// entry points keep their signatures.
-func appendCRUDDedupWarning(diags *diagnostics.Diagnostics, name, surviving, dropped string) {
+// renameCRUDGroup renames a CRUD group that lost a name collision to the first
+// collision-free qualified name for its collection path and records an Info
+// diagnostic. keptCollectionPath names the collection path of the group that
+// kept the collided name, for the diagnostic text.
+func renameCRUDGroup(g *ResourceCRUD, taken map[string]bool, diags *diagnostics.Diagnostics, keptCollectionPath string) {
+	old := g.Name
+	g.Name = qualifiedCRUDName(g.CollectionPath, g.Name, taken)
+	taken[g.Name] = true
 	if diags == nil {
 		return
 	}
 	*diags = append(*diags, diagnostics.Diagnostic{
-		Severity: diagnostics.Warning,
-		Summary:  fmt.Sprintf("resource name collision %q dropped a CRUD group", name),
+		Severity: diagnostics.Info,
+		Summary:  fmt.Sprintf("resource name collision %q: CRUD group at %s renamed to %q", old, g.CollectionPath, g.Name),
 		Detail: fmt.Sprintf(
-			"Two OpenAPI path groups both infer the resource name %q; the group at %q survives "+
-				"(the more complete CRUD, or the first on ties) and the group at %q is dropped so the two "+
-				"cannot emit colliding Terraform type names. If both paths are needed, disambiguate them "+
-				"with a generator.yaml resource_override.",
-			name, surviving, dropped),
+			"Two OpenAPI path groups both infer the resource name %q; the group at %q keeps it (the more "+
+				"complete CRUD, or the first on ties) and the group at %q is renamed with parent-segment "+
+				"qualification so both generate managed resources instead of one being dropped. Use a "+
+				"generator.yaml resource_override name to rename %q explicitly.",
+			old, keptCollectionPath, g.CollectionPath, g.Name),
 	})
+}
+
+// qualifiedCRUDName builds a collision-free name for a CRUD group whose base
+// name (the singularized last static path segment) collides with another
+// group's. Qualification escalates deterministically: first the parent static
+// segment is prefixed, then earlier segments one at a time, and finally the
+// full path (parameters included) is snake-cased into the name — unique because
+// collection paths are. taken is mutated to include the returned name.
+func qualifiedCRUDName(path, base string, taken map[string]bool) string {
+	segs := parsePath(path)
+	var static []string
+	for _, s := range segs {
+		if !s.IsParam {
+			static = append(static, s.Value)
+		}
+	}
+	for k := 2; k <= len(static); k++ {
+		parts := append([]string{}, static[len(static)-k:len(static)-1]...)
+		candidate := strings.Join(append(parts, base), "_")
+		if !taken[candidate] {
+			return candidate
+		}
+	}
+	// Identical static segments with different parameters (e.g.
+	// /tenants/{a}/files vs /tenants/{b}/files): the full path is the only
+	// remaining discriminator.
+	all := make([]string, 0, len(segs))
+	for _, s := range segs {
+		all = append(all, s.Value)
+	}
+	candidate := strings.Join(all, "_")
+	for n := 2; taken[candidate]; n++ {
+		candidate = fmt.Sprintf("%s_%d", strings.Join(all, "_"), n)
+	}
+	return candidate
 }
 
 func buildResourceCRUD(prefixKey pathKey, paths []string, pathOps map[string]map[HTTPMethod]Operation, parsed map[string][]pathSegment, pathKeys map[string]pathKey, usePutAsCreate bool) ResourceCRUD {

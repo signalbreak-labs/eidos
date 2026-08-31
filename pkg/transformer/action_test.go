@@ -512,6 +512,16 @@ func hasWarning(diags diagnostics.Diagnostics, s string) bool {
 	return false
 }
 
+// hasInfoText reports whether diags contains an Info whose String contains s.
+func hasInfoText(diags diagnostics.Diagnostics, s string) bool {
+	for _, d := range diags {
+		if d.Severity == diagnostics.Info && strings.Contains(d.String(), s) {
+			return true
+		}
+	}
+	return false
+}
+
 // TestRequestBodyAttributes_BodyFallbackDescription covers the scalar request
 // body path, where the whole body collapses to a single `body` attribute and
 // the schema's own description is the only prose available to document it.

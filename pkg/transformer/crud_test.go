@@ -322,11 +322,14 @@ func TestSingularize(t *testing.T) {
 	}
 }
 
-// TestInferResourceCRUDDedupsNameCollisions locks in the M-39 fix: two collection
-// paths that map to the same resource name (here /v1/pets and /v2/pets both ->
-// "pet") produce a single resource, not two same-named entries that would
-// collide downstream as duplicate Terraform type names. The surviving entry is
-// the lexicographically-first collection (/v1/pets), deterministically.
+// TestInferResourceCRUDDedupsNameCollisions locks in the M-39 fix and the
+// gigavuecore-audit §3.3 rework: two collection paths that map to the same
+// resource name (here /v1/pets and /v2/pets both -> "pet") produce two
+// uniquely-named resources instead of two same-named entries colliding
+// downstream, or — as before §3.3 — the later group being dropped and losing
+// its managed-resource lifecycle. The equally-complete lexicographically-first
+// collection (/v1/pets) keeps the name; the loser is qualified with its parent
+// segment, deterministically.
 func TestInferResourceCRUDDedupsNameCollisions(t *testing.T) {
 	pathOps := map[string]map[HTTPMethod]Operation{
 		"/v1/pets": {
@@ -347,11 +350,12 @@ func TestInferResourceCRUDDedupsNameCollisions(t *testing.T) {
 		},
 	}
 
-	// Run several times; output must be stable and contain exactly one "pet".
+	// Run several times; output must be stable: exactly one "pet" and one
+	// parent-qualified "v2_pet", both surviving.
 	for i := 0; i < 5; i++ {
 		resources := InferResourceCRUD(pathOps, false)
-		if len(resources) != 1 {
-			t.Fatalf("iteration %d: expected 1 deduped resource, got %d: %+v", i, len(resources), resources)
+		if len(resources) != 2 {
+			t.Fatalf("iteration %d: expected 2 resources, got %d: %+v", i, len(resources), resources)
 		}
 		if resources[0].Name != "pet" {
 			t.Fatalf("expected name %q, got %q", "pet", resources[0].Name)
@@ -359,13 +363,20 @@ func TestInferResourceCRUDDedupsNameCollisions(t *testing.T) {
 		if resources[0].CollectionPath != "/v1/pets" {
 			t.Fatalf("expected surviving collection /v1/pets, got %q", resources[0].CollectionPath)
 		}
+		if resources[1].Name != "v2_pet" {
+			t.Fatalf("expected renamed %q, got %q", "v2_pet", resources[1].Name)
+		}
+		if resources[1].CollectionPath != "/v2/pets" {
+			t.Fatalf("expected renamed collection /v2/pets, got %q", resources[1].CollectionPath)
+		}
 	}
 }
 
 // TestInferResourceCRUDWithDiagnosticsWarnsOnNameCollision locks in the N-19
-// fix: when dedupCRUDByName drops a same-named group, the diagnostics channel
-// carries a Warning naming both the surviving and the dropped collection paths,
-// so the loss is never silent (AGENTS.md "fail loud, never silently").
+// fix as reworked by the gigavuecore audit §3.3: when dedupCRUDByName renames
+// a same-named group, the diagnostics channel carries an Info naming both
+// collection paths and the new name, so a resource whose type name changed is
+// never a silent surprise (AGENTS.md "fail loud, never silently").
 func TestInferResourceCRUDWithDiagnosticsWarnsOnNameCollision(t *testing.T) {
 	pathOps := map[string]map[HTTPMethod]Operation{
 		"/v1/pets": {
@@ -388,24 +399,32 @@ func TestInferResourceCRUDWithDiagnosticsWarnsOnNameCollision(t *testing.T) {
 
 	var diags diagnostics.Diagnostics
 	resources := InferResourceCRUDWithDiagnostics(pathOps, false, &diags)
-	if len(resources) != 1 {
-		t.Fatalf("expected 1 deduped resource, got %d: %+v", len(resources), resources)
+	if len(resources) != 2 {
+		t.Fatalf("expected 2 resources, got %d: %+v", len(resources), resources)
 	}
-	if !hasWarning(diags, "resource name collision \"pet\" dropped a CRUD group") {
-		t.Fatalf("expected a name-collision Warning naming the surviving and dropped paths, got diags: %+v", diags)
+	var sawRenameInfo bool
+	for _, d := range diags {
+		if d.Severity == diagnostics.Info &&
+			strings.Contains(d.Summary, `resource name collision "pet"`) &&
+			strings.Contains(d.Summary, "renamed to \"v2_pet\"") {
+			sawRenameInfo = true
+		}
 	}
-	if !hasWarning(diags, "/v2/pets") {
-		t.Fatalf("expected the Warning to name the dropped path /v2/pets, got diags: %+v", diags)
+	if !sawRenameInfo {
+		t.Fatalf("expected a name-collision Info naming the new name v2_pet, got diags: %+v", diags)
 	}
-	if !hasWarning(diags, "/v1/pets") {
-		t.Fatalf("expected the Warning to name the surviving path /v1/pets, got diags: %+v", diags)
+	if !hasInfoText(diags, "/v2/pets") {
+		t.Fatalf("expected the diagnostic to name the renamed path /v2/pets, got diags: %+v", diags)
+	}
+	if !hasInfoText(diags, "/v1/pets") {
+		t.Fatalf("expected the diagnostic to name the surviving path /v1/pets, got diags: %+v", diags)
 	}
 
 	// The no-diagnostics entry point must stay silent-capable: passing a nil
 	// channel never panics and emits nothing.
 	resources2 := InferResourceCRUD(pathOps, false)
-	if len(resources2) != 1 {
-		t.Fatalf("expected 1 deduped resource via InferResourceCRUD, got %d", len(resources2))
+	if len(resources2) != 2 {
+		t.Fatalf("expected 2 resources via InferResourceCRUD, got %d", len(resources2))
 	}
 }
 
