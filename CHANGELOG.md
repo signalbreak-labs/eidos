@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.0](https://github.com/signalbreak-labs/eidos/compare/v0.6.0...v0.7.0) (2026-08-31)
+
+
+### Features
+
+* **generator:** support nested identities ([#54](https://github.com/signalbreak-labs/eidos/issues/54)) ([39a8341](https://github.com/signalbreak-labs/eidos/commit/39a8341bc34713cb98a9002d9f3a09d45ef3333d)), closes [#53](https://github.com/signalbreak-labs/eidos/issues/53)
+
+
+### Bug Fixes
+
+* **descriptions:** carry parameter schema-level and list-identity descriptions through to generated schemas ([0e58afb](https://github.com/signalbreak-labs/eidos/commit/0e58afbedb725a2cadda233a98f0cdfb203c9eaf))
+* **generator:** derive config placeholders from schema constraints so generated configs satisfy generated validators ([#52](https://github.com/signalbreak-labs/eidos/issues/52)) ([a90417b](https://github.com/signalbreak-labs/eidos/commit/a90417be9f4401d48ca6549f660e3a156eb53824))
+
 ## [0.6.0](https://github.com/signalbreak-labs/eidos/compare/v0.5.5...v0.6.0) (2026-08-29)
 
 
