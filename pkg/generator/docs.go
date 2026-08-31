@@ -114,6 +114,7 @@ func ResourceDocsFile(r ir.ResourceIR) File {
 		"NestedSchemas":   nestedSchemas,
 		"Importable":      ResourceImportable(r),
 		"ImportFormat":    docsImportFormat(r.ImportIDFormat),
+		"Notes":           resourceDocsNotes(r),
 	}
 	return Template(path, resourceTemplate, data)
 }
@@ -184,6 +185,7 @@ func DataSourceDocsFile(ds ir.DataSourceIR) File {
 		"Attributes":      attributes,
 		"Blocks":          blocks,
 		"NestedSchemas":   nestedSchemas,
+		"Notes":           dataSourceDocsNotes(ds),
 	}
 	return Template(path, dataSourceTemplate, data)
 }
@@ -336,7 +338,9 @@ description: |-
 # {{.ResourceName}} Resource
 
 {{.DescriptionBody}}
-
+{{range .Notes}}
+{{.}}
+{{end}}
 ## Example Usage
 
 ` + "```terraform" + `
@@ -390,7 +394,9 @@ description: |-
 # {{.DataSourceName}} Data Source
 
 {{.DescriptionBody}}
-
+{{range .Notes}}
+{{.}}
+{{end}}
 ## Example Usage
 
 ` + "```terraform" + `

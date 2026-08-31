@@ -23,17 +23,17 @@
     {
       "path": "docs/actions/delete_item.md",
       "reason": "documentation for action delete_item",
-      "body_hash": "6350fe30eba4f526"
+      "body_hash": "616919faa61949bd"
     },
     {
       "path": "docs/data-sources/get_item.md",
       "reason": "documentation for data source get_item",
-      "body_hash": "bd3ff874790bf6a3"
+      "body_hash": "2848744846ee042e"
     },
     {
       "path": "docs/data-sources/list_items.md",
       "reason": "documentation for data source list_items",
-      "body_hash": "ebea68bd5485aa11"
+      "body_hash": "707eec10a1c64f78"
     },
     {
       "path": "docs/index.md",

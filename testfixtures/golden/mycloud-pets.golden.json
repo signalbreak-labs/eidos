@@ -33,12 +33,12 @@
     {
       "path": "docs/list-resources/pet.md",
       "reason": "documentation for list resource pet",
-      "body_hash": "c7eb5846bdbaeb23"
+      "body_hash": "db8395016762ee97"
     },
     {
       "path": "docs/resources/pet.md",
       "reason": "documentation for resource pet",
-      "body_hash": "10d1b8c3b6e08798"
+      "body_hash": "07cf20916eb0a7ae"
     },
     {
       "path": "examples/data-sources/list_pets/data-source.tf",

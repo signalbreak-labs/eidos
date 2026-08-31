@@ -23,12 +23,12 @@
     {
       "path": "docs/functions/lookup_tags.md",
       "reason": "documentation for function lookup_tags",
-      "body_hash": "11c1b169d4508bab"
+      "body_hash": "34c8acc16d0f3c2f"
     },
     {
       "path": "docs/functions/search_users.md",
       "reason": "documentation for function search_users",
-      "body_hash": "e4bdee4b21570047"
+      "body_hash": "7d227652c1369cb3"
     },
     {
       "path": "docs/index.md",

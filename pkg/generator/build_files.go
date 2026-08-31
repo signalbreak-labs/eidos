@@ -17,6 +17,13 @@ import (
 // version so generated providers use the same language floor as the generator.
 var DefaultGoVersion = defaultGoVersionFromRuntime()
 
+// DefaultTerraformVersion is the minimum Terraform CLI version stated in a
+// generated README when BuildConfig.TerraformVersion is empty. Protocol 6.0
+// providers work on Terraform 1.0; constructs with newer CLI requirements
+// (ephemeral resources, actions, list resources) raise the stated minimum via
+// BuildConfigFromIR.
+const DefaultTerraformVersion = "1.0"
+
 func defaultGoVersionFromRuntime() string {
 	ver := runtime.Version()
 	if !strings.HasPrefix(ver, "go") {
@@ -109,6 +116,14 @@ type BuildConfig struct {
 	// the generated provider. If empty, it defaults to ["6.0"].
 	ProtocolVersions []string
 
+	// TerraformVersion is the minimum Terraform CLI version stated in the
+	// generated README's Requirements section. If empty, it defaults to
+	// DefaultTerraformVersion. BuildConfigFromIR raises it to the highest
+	// CLI version the provider's constructs require (actions and list
+	// resources need 1.14+, ephemeral resources 1.10+), so the README never
+	// understates the requirement.
+	TerraformVersion string
+
 	// BuildVersions optionally overrides the pinned Terraform plugin
 	// dependency versions emitted in go.mod. Empty fields fall back to the
 	// package constants.
@@ -172,6 +187,15 @@ func (cfg BuildConfig) goVersion() string {
 		return strings.TrimSpace(cfg.GoVersion)
 	}
 	return DefaultGoVersion
+}
+
+// terraformVersion returns the minimum Terraform CLI version stated in the
+// generated README's Requirements section.
+func (cfg BuildConfig) terraformVersion() string {
+	if strings.TrimSpace(cfg.TerraformVersion) != "" {
+		return strings.TrimSpace(cfg.TerraformVersion)
+	}
+	return DefaultTerraformVersion
 }
 
 func (cfg BuildConfig) sourceAddress() string {
@@ -689,21 +713,41 @@ jobs:
 `
 
 // BuildConfigFromIR derives a BuildConfig from a ProviderIR. It uses the
-// provider name as both the provider type and the registry namespace and leaves
-// the module path at the default derived value.
+// provider name as both the provider type and the registry namespace, leaves
+// the module path at the default derived value, and raises the minimum
+// Terraform CLI version to the highest version the provider's constructs
+// require: actions and list resources need Terraform 1.14+ (`action` blocks
+// and `terraform query`), ephemeral resources 1.10+.
 func BuildConfigFromIR(provider *ir.ProviderIR) BuildConfig {
 	name := "generated"
 	if provider != nil && strings.TrimSpace(provider.Name) != "" {
 		name = provider.Name
 	}
 	return BuildConfig{
-		ProviderName: name,
-		Namespace:    name,
+		ProviderName:     name,
+		Namespace:        name,
+		TerraformVersion: minTerraformVersionForIR(provider),
 		// Signed releases are default-on. The sign_release generator.yaml field
 		// (a *bool, threaded through CollectOptions.SignRelease) overrides this
 		// to false to opt out.
 		SignRelease: true,
 	}
+}
+
+// minTerraformVersionForIR returns the minimum Terraform CLI version the
+// provider's construct mix requires: 1.14 for actions or list resources,
+// 1.10 for ephemeral resources, otherwise the DefaultTerraformVersion floor.
+func minTerraformVersionForIR(provider *ir.ProviderIR) string {
+	if provider == nil {
+		return DefaultTerraformVersion
+	}
+	if len(provider.Actions) > 0 || len(provider.ListResources) > 0 {
+		return "1.14"
+	}
+	if len(provider.EphemeralResources) > 0 {
+		return "1.10"
+	}
+	return DefaultTerraformVersion
 }
 
 // FilesForProviderIR assembles the complete set of generated files for a
