@@ -1491,17 +1491,25 @@ func inferSensitiveAttributesToProvider(provider *ir.ProviderIR, diags *diagnost
 		transformer.InferSensitiveAttributes(&provider.EphemeralResources[i].ResultSchema)
 	}
 	// Actions and list resources cannot render Sensitive (action.go/list.go);
-	// surface the secret-named attributes we cannot mark so they are not silent.
+	// surface the secret-named attributes we cannot mark so they are not
+	// silent, and record them in the IR so the generated docs carry a
+	// practitioner-facing admonition (§3.6).
 	for i := range provider.Actions {
-		transformer.WarnUnmarkableSensitive(&provider.Actions[i].ConfigSchema, "action", provider.Actions[i].TypeName, diags)
+		provider.Actions[i].UnmarkableSensitiveAttrs = transformer.WarnUnmarkableSensitive(
+			&provider.Actions[i].ConfigSchema, "action", provider.Actions[i].TypeName, diags)
 	}
 	for i := range provider.ListResources {
 		name := provider.ListResources[i].TypeName
-		transformer.WarnUnmarkableSensitive(&provider.ListResources[i].ConfigSchema, "list resource", name, diags)
-		transformer.WarnUnmarkableSensitive(&provider.ListResources[i].IdentitySchema, "list resource", name, diags)
+		var unmarkable []string
+		unmarkable = append(unmarkable, transformer.WarnUnmarkableSensitive(
+			&provider.ListResources[i].ConfigSchema, "list resource", name, diags)...)
+		unmarkable = append(unmarkable, transformer.WarnUnmarkableSensitive(
+			&provider.ListResources[i].IdentitySchema, "list resource", name, diags)...)
 		if provider.ListResources[i].ResourceSchema != nil {
-			transformer.WarnUnmarkableSensitive(provider.ListResources[i].ResourceSchema, "list resource", name, diags)
+			unmarkable = append(unmarkable, transformer.WarnUnmarkableSensitive(
+				provider.ListResources[i].ResourceSchema, "list resource", name, diags)...)
 		}
+		provider.ListResources[i].UnmarkableSensitiveAttrs = unmarkable
 	}
 }
 
@@ -2670,11 +2678,27 @@ func groupedImportFormatWithDiagnostics(g transformer.ResourceCRUD, schema ir.Ob
 		}
 		parts = p
 	default: // IDSimple
-		p, ok := simpleImportBase(g, findAttr, userSettable, idAttr, diags)
-		if !ok {
-			return "", false
+		if len(g.ID.ParameterNames) == 0 && len(requiredReadParams(g.Read)) == 0 {
+			// Singleton resource: the read substitutes nothing into the path
+			// and carries no required query/header parameters, so any import
+			// ID refreshes cleanly. The import populates the resolved ID
+			// attribute with the raw req.ID even when it is Computed-only —
+			// the refresh that follows ignores it and repopulates state from
+			// the response (§3.13: GigaVUE-FM's copilot_config, a static
+			// /copilot/config endpoint, previously stayed non-importable
+			// because its only identity candidate is a computed id echo).
+			p, ok := singletonImportBase(g, findAttr, idAttr, diags)
+			if !ok {
+				return "", false
+			}
+			parts = []string{"{" + p + "}"}
+		} else {
+			p, ok := simpleImportBase(g, findAttr, userSettable, idAttr, diags)
+			if !ok {
+				return "", false
+			}
+			parts = []string{"{" + p + "}"}
 		}
-		parts = []string{"{" + p + "}"}
 	}
 	parts, ok := appendRequiredReadParams(g, parts, findAttr, userSettable, diags)
 	if !ok {
@@ -2732,6 +2756,36 @@ func simpleImportBase(g transformer.ResourceCRUD, findAttr func(string) (ir.Attr
 	if !userSettable(base) {
 		warnNotImportable(diags, g.Name, base, "identifier")
 		return "", false
+	}
+	return base, true
+}
+
+// singletonImportBase resolves the attribute a singleton resource's import
+// populates. A singleton's read substitutes nothing into the path, so any
+// import ID refreshes cleanly; the import stores the raw req.ID in the
+// resolved ID attribute even when that attribute is Computed-only (the
+// refresh that follows repopulates it from the response). ok=false when the
+// resource carries no such attribute at all, so the import would target an
+// attribute that does not exist — the resource stays non-importable, honest
+// rather than silent. An Info diagnostic notes the placeholder semantics so
+// provider authors see why import succeeded without a real identity.
+func singletonImportBase(g transformer.ResourceCRUD, findAttr func(string) (ir.AttributeIR, bool), idAttr string, diags *diagnostics.Diagnostics) (string, bool) {
+	base := idAttr
+	if base == "" {
+		base = "id"
+	}
+	if _, ok := findAttr(base); !ok {
+		return "", false
+	}
+	if diags != nil {
+		*diags = append(*diags, diagnostics.Diagnostic{
+			Severity: diagnostics.Info,
+			Summary:  "singleton resource import uses a placeholder ID",
+			Detail: fmt.Sprintf(
+				"Resource %q reads without any path or required query parameters, so its import accepts any identifier and stores it in attribute %q; the refresh that follows the import repopulates state from the response.",
+				g.Name, base,
+			),
+		})
 	}
 	return base, true
 }

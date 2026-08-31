@@ -174,7 +174,18 @@ func inferSensitiveRecursive(schema *ir.SchemaIR) {
 // list.go). It appends one Warning per such attribute so the limitation is
 // surfaced to the practitioner rather than the secret leaking in state with no
 // signal. It does not modify the schema. Recurse matches InferSensitiveAttributes.
-func WarnUnmarkableSensitive(obj *ir.ObjectSchemaIR, kind, name string, diags *diagnostics.Diagnostics) {
+//
+// It returns the wire names of every such attribute so the caller can record
+// them in the IR; the generator renders a doc-page admonition from that record
+// (§3.6: the generation warning reaches the provider author, the docs note
+// reaches the practitioner).
+func WarnUnmarkableSensitive(obj *ir.ObjectSchemaIR, kind, name string, diags *diagnostics.Diagnostics) []string {
+	var found []string
+	warnUnmarkableSensitive(obj, kind, name, diags, &found)
+	return found
+}
+
+func warnUnmarkableSensitive(obj *ir.ObjectSchemaIR, kind, name string, diags *diagnostics.Diagnostics, found *[]string) {
 	if obj == nil || diags == nil {
 		return
 	}
@@ -190,30 +201,31 @@ func WarnUnmarkableSensitive(obj *ir.ObjectSchemaIR, kind, name string, diags *d
 					" (see pkg/generator action.go/list.go). The value will appear in state;" +
 					" avoid storing real secrets in this attribute or override the type via generator.yaml.",
 			})
+			*found = append(*found, attrWireName(*attr))
 		}
-		warnUnmarkableSensitiveRecursive(&attr.Schema, kind, name, diags)
+		warnUnmarkableSensitiveRecursive(&attr.Schema, kind, name, diags, found)
 	}
 	for i := range obj.Blocks {
-		WarnUnmarkableSensitive(&obj.Blocks[i].Schema, kind, name, diags)
+		warnUnmarkableSensitive(&obj.Blocks[i].Schema, kind, name, diags, found)
 	}
 }
 
-func warnUnmarkableSensitiveRecursive(schema *ir.SchemaIR, kind, name string, diags *diagnostics.Diagnostics) {
+func warnUnmarkableSensitiveRecursive(schema *ir.SchemaIR, kind, name string, diags *diagnostics.Diagnostics, found *[]string) {
 	if schema == nil {
 		return
 	}
 	if len(schema.Attributes) > 0 || len(schema.Blocks) > 0 {
 		obj := ir.ObjectSchemaIR{Attributes: schema.Attributes, Blocks: schema.Blocks}
-		WarnUnmarkableSensitive(&obj, kind, name, diags)
+		warnUnmarkableSensitive(&obj, kind, name, diags, found)
 		schema.Attributes = obj.Attributes
 		schema.Blocks = obj.Blocks
 	}
 	if schema.Collection != nil {
-		warnUnmarkableSensitiveRecursive(&schema.Collection.ElementType, kind, name, diags)
+		warnUnmarkableSensitiveRecursive(&schema.Collection.ElementType, kind, name, diags, found)
 	}
 	if schema.Union != nil {
 		for i := range schema.Union.Variants {
-			warnUnmarkableSensitiveRecursive(&schema.Union.Variants[i], kind, name, diags)
+			warnUnmarkableSensitiveRecursive(&schema.Union.Variants[i], kind, name, diags, found)
 		}
 	}
 }

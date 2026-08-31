@@ -293,3 +293,36 @@ func TestGroupedImportFormat_ComputedOnlyIdentifierSuppressesImport(t *testing.T
 		t.Errorf("no warning surfaced for the computed-only identifier: %+v", diags)
 	}
 }
+
+// TestGroupedImportFormat_SingletonResource locks in §3.13 (copilot_config):
+// a resource whose read substitutes nothing into the path and carries no
+// required query/header parameters is importable even though its only
+// identity candidate is a Computed-only id echo — the refresh after import
+// ignores the stored ID and repopulates state from the response, so any
+// identifier works.
+func TestGroupedImportFormat_SingletonResource(t *testing.T) {
+	g := transformer.ResourceCRUD{
+		ID:   transformer.IDInfo{Kind: transformer.IDSimple},
+		Read: &transformer.Operation{Method: transformer.MethodGet, Path: "/copilot/config"},
+	}
+	// The id attribute is Computed-only: Computed with neither Required nor
+	// Optional, mirroring a server-assigned response echo.
+	schema := ir.ObjectSchemaIR{Attributes: []ir.AttributeIR{
+		{Name: "id", Computed: true, Schema: ir.SchemaIR{Type: ir.TypeString}},
+		{Name: "setting", Optional: true, Schema: ir.SchemaIR{Type: ir.TypeString}},
+	}}
+	got, ok := groupedImportFormat(g, schema, "id")
+	if !ok || got != "{id}" {
+		t.Errorf("groupedImportFormat(singleton) = %q, %v; want {id}, true", got, ok)
+	}
+
+	// The same Computed-only id on a resource WITH a path parameter still
+	// refuses import (the practitioner cannot know the value out of band).
+	gPath := transformer.ResourceCRUD{
+		ID:   transformer.IDInfo{Kind: transformer.IDSimple, ParameterNames: []string{"alias"}},
+		Read: &transformer.Operation{Method: transformer.MethodGet, Path: "/portConfig/{alias}"},
+	}
+	if _, ok := groupedImportFormat(gPath, schema, "id"); ok {
+		t.Errorf("groupedImportFormat(computed id with path param) = importable; want refused")
+	}
+}

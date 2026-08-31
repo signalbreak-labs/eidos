@@ -21,6 +21,24 @@ func schemaTypeString(n Node) (string, bool) {
 	return asString(n)
 }
 
+// canonicalSchemaType returns the canonical JSON Schema primitive for a raw
+// schema `type` value. Recognized-but-noncanonical spellings are normalized
+// rather than warned on (§3.13): capitalization variants ("String",
+// "BOOLEAN") map to their lowercase primitives, and "long" — a widespread
+// informal alias for a 64-bit integer in vendor specs — maps to "integer".
+// ok=false when raw is not a recognized primitive spelling at all.
+func canonicalSchemaType(raw string) (string, bool) {
+	s := strings.ToLower(strings.TrimSpace(raw))
+	switch s {
+	case "array", "boolean", "integer", "number", "object", "string", "null", "file", "long":
+		if s == "long" {
+			return "integer", true
+		}
+		return s, true
+	}
+	return "", false
+}
+
 // Validate performs structural validation and semantic checks against an
 // already-converted Spec and its original raw AST. It returns diagnostics for
 // missing required fields, invalid local $ref values, unsupported keywords
@@ -873,14 +891,28 @@ func (stv *schemaTypeValidator) checkTypeValue(val Node) {
 
 func (stv *schemaTypeValidator) checkScalarType(val *ScalarNode) {
 	if s, ok := schemaTypeString(val); ok {
-		if !stv.validTypes[s] {
+		if stv.validTypes[s] {
+			return
+		}
+		if canonical, ok := canonicalSchemaType(s); ok && stv.validTypes[canonical] {
+			// Recognized noncanonical spelling (e.g. "String", "long"). The
+			// converters normalize it into the canonical primitive, so the
+			// generated attribute keeps a real type instead of degrading to
+			// Dynamic; surface the rewrite as Info, not Warning (§3.13).
 			*stv.diags = append(*stv.diags, Diagnostic{
-				Severity:       SeverityWarning,
-				Summary:        "Unsupported schema type",
-				Detail:         fmt.Sprintf("schema type %q is not a recognized JSON Schema primitive type.", s),
+				Severity:       SeverityInfo,
+				Summary:        "Normalized schema type",
+				Detail:         fmt.Sprintf("schema type %q is not a canonical JSON Schema primitive type; treating it as %q.", s, canonical),
 				SourceLocation: ptrNodeLoc(val),
 			})
+			return
 		}
+		*stv.diags = append(*stv.diags, Diagnostic{
+			Severity:       SeverityWarning,
+			Summary:        "Unsupported schema type",
+			Detail:         fmt.Sprintf("schema type %q is not a recognized JSON Schema primitive type.", s),
+			SourceLocation: ptrNodeLoc(val),
+		})
 		return
 	}
 	*stv.diags = append(*stv.diags, Diagnostic{
@@ -903,14 +935,24 @@ func (stv *schemaTypeValidator) checkSequenceType(val *SequenceNode) {
 	}
 	for i, item := range val.Items {
 		if s, ok := schemaTypeString(item); ok {
-			if !stv.validTypes[s] {
+			if stv.validTypes[s] {
+				continue
+			}
+			if canonical, ok := canonicalSchemaType(s); ok && stv.validTypes[canonical] {
 				*stv.diags = append(*stv.diags, Diagnostic{
-					Severity:       SeverityWarning,
-					Summary:        "Unsupported schema type",
-					Detail:         fmt.Sprintf("schema type array entry %d (%q) is not a recognized JSON Schema primitive type.", i, s),
+					Severity:       SeverityInfo,
+					Summary:        "Normalized schema type",
+					Detail:         fmt.Sprintf("schema type array entry %d (%q) is not a canonical JSON Schema primitive type; treating it as %q.", i, s, canonical),
 					SourceLocation: ptrNodeLoc(item),
 				})
+				continue
 			}
+			*stv.diags = append(*stv.diags, Diagnostic{
+				Severity:       SeverityWarning,
+				Summary:        "Unsupported schema type",
+				Detail:         fmt.Sprintf("schema type array entry %d (%q) is not a recognized JSON Schema primitive type.", i, s),
+				SourceLocation: ptrNodeLoc(item),
+			})
 		} else {
 			*stv.diags = append(*stv.diags, Diagnostic{
 				Severity:       SeverityError,

@@ -87,7 +87,7 @@ func ListResourceDocsFile(lr ir.ListResourceIR) File {
 		"Attributes":       attributes,
 		"Blocks":           blocks,
 		"NestedSchemas":    nested,
-		"Notes":            listResourceDocsNotes(),
+		"Notes":            listResourceDocsNotes(lr),
 	}
 	return Template(path, listResourceTemplate, data)
 }

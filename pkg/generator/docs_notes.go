@@ -2,6 +2,7 @@ package generator
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/signalbreak-labs/eidos/pkg/ir"
 )
@@ -62,11 +63,16 @@ func dataSourceDocsNotes(ds ir.DataSourceIR) []string {
 
 // actionDocsNotes returns the admonitions to render on an action's doc page:
 // the Terraform 1.14 requirement note (actions do not exist in older CLI
-// versions), plus the not-wired note when its Invoke keeps the honest scaffold.
+// versions), the not-wired note when its Invoke keeps the honest scaffold, and
+// the unmarkable-secret note when a secret-named attribute cannot be marked
+// Sensitive in the action schema.
 func actionDocsNotes(a ir.ActionIR) []string {
 	notes := []string{docsActionTFVersionNote}
 	if !planActionWiring(a).wired {
 		notes = append(notes, docsNotWired("action"))
+	}
+	if secret := docsUnmarkableSecretNote("action", a.UnmarkableSensitiveAttrs); secret != "" {
+		notes = append(notes, secret)
 	}
 	return notes
 }
@@ -83,9 +89,27 @@ func ephemeralResourceDocsNotes(er ir.EphemeralResourceIR) []string {
 
 // listResourceDocsNotes returns the admonitions to render on a list resource's
 // doc page: the Terraform 1.14 requirement note (`terraform query` does not
-// exist in older CLI versions).
-func listResourceDocsNotes() []string {
-	return []string{docsListResourceTFVersionNote}
+// exist in older CLI versions), plus the unmarkable-secret note when a
+// secret-named attribute cannot be marked Sensitive in the list schema.
+func listResourceDocsNotes(lr ir.ListResourceIR) []string {
+	notes := []string{docsListResourceTFVersionNote}
+	if secret := docsUnmarkableSecretNote("list resource", lr.UnmarkableSensitiveAttrs); secret != "" {
+		notes = append(notes, secret)
+	}
+	return notes
+}
+
+// docsUnmarkableSecretNote renders the admonition for secret-named attributes
+// that the schema kind cannot mark Sensitive: the plugin-framework
+// action/schema and experimental list/schema packages have no Sensitive
+// support, so the values surface in plan, state, and `terraform query` output.
+// attrs holds the wire names recorded at transform time; an empty list renders
+// no note.
+func docsUnmarkableSecretNote(kind string, attrs []string) string {
+	if len(attrs) == 0 {
+		return ""
+	}
+	return fmt.Sprintf("~> **Warning:** This %s accepts attributes whose names indicate secrets (%s), but %s schemas cannot mark attributes Sensitive, so their values are stored and displayed in plain text. Avoid passing real secrets through these attributes.", kind, strings.Join(attrs, ", "), kind)
 }
 
 // functionDocsNotes returns the admonitions to render on a function's doc page.

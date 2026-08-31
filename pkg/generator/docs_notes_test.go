@@ -137,7 +137,7 @@ func TestEphemeralResourceDocsNotes(t *testing.T) {
 // documented list resource states the Terraform 1.14 / `terraform query`
 // requirement.
 func TestListResourceDocsNotes_TFVersion(t *testing.T) {
-	notes := listResourceDocsNotes()
+	notes := listResourceDocsNotes(sampleListResourceIR())
 	if len(notes) != 1 || !strings.Contains(notes[0], "requires Terraform 1.14 or later") {
 		t.Fatalf("listResourceDocsNotes() = %v, want the TF-version note", notes)
 	}
@@ -216,5 +216,56 @@ func TestReadmeStatesTerraformVersion(t *testing.T) {
 	})))
 	if !strings.Contains(got, "[Terraform](https://www.terraform.io/downloads.html) >= 1.14") {
 		t.Errorf("README missing \">= 1.14\" requirement\ncontent:\n%s", got)
+	}
+}
+
+// TestDocsUnmarkableSecretNote covers the admonition for secret-named
+// attributes that the action/list schema kinds cannot mark Sensitive: names
+// are listed, an empty attribute list renders no note (§3.6).
+func TestDocsUnmarkableSecretNote(t *testing.T) {
+	if got := docsUnmarkableSecretNote("action", nil); got != "" {
+		t.Errorf("docsUnmarkableSecretNote(nil) = %q, want empty", got)
+	}
+	got := docsUnmarkableSecretNote("action", []string{"password", "api_key"})
+	for _, want := range []string{"password", "api_key", "cannot mark attributes Sensitive", "Warning"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("note missing %q:\n%s", want, got)
+		}
+	}
+}
+
+// TestActionDocsNotes_UnmarkableSecret verifies an action carrying a
+// secret-named attribute (as recorded at transform time) documents the
+// plain-text limitation on its doc page.
+func TestActionDocsNotes_UnmarkableSecret(t *testing.T) {
+	a := sampleActionIR()
+	a.UnmarkableSensitiveAttrs = []string{"api_key"}
+	notes := actionDocsNotes(a)
+	found := false
+	for _, n := range notes {
+		if strings.Contains(n, "cannot mark attributes Sensitive") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("actionDocsNotes() missing the unmarkable-secret note: %v", notes)
+	}
+}
+
+// TestListResourceDocsNotes_UnmarkableSecret verifies a list resource carrying
+// a secret-named identity attribute documents the plain-text limitation on
+// its doc page.
+func TestListResourceDocsNotes_UnmarkableSecret(t *testing.T) {
+	lr := sampleListResourceIR()
+	lr.UnmarkableSensitiveAttrs = []string{"token"}
+	notes := listResourceDocsNotes(lr)
+	found := false
+	for _, n := range notes {
+		if strings.Contains(n, "cannot mark attributes Sensitive") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("listResourceDocsNotes() missing the unmarkable-secret note: %v", notes)
 	}
 }
