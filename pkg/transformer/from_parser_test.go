@@ -419,12 +419,14 @@ func TestOperationsFromSpec_RangeWildcardResponse(t *testing.T) {
 }
 
 func TestOperationsFromSpec_BooleanSchemaWarns(t *testing.T) {
-	// JSON Schema 2020-12 boolean schemas that cause a real information loss
-	// (items: false → array must be empty; additionalProperties: true → open
-	// map Terraform cannot model) must not be dropped silently (L-97).
-	// additionalProperties: false is deliberately NOT warned (benign: Terraform
-	// objects are closed by default), so this spec uses true to exercise the
-	// warning path.
+	// JSON Schema 2020-12 boolean schemas must not be dropped silently (L-97),
+	// but the severities split by whether the loss is actionable:
+	// items: false (array must be empty) is a real semantic loss → Warning;
+	// additionalProperties: true (open map) is inert in practice — a Terraform
+	// configuration cannot express undeclared attributes — → Info (§3.12).
+	// additionalProperties: false is deliberately NOT diagnosed (benign:
+	// Terraform objects are closed by default), so this spec uses true to
+	// exercise the diagnostic path.
 	spec := &parser.Spec{
 		Paths: map[string]*parser.PathItem{
 			"/pets": {
@@ -452,23 +454,25 @@ func TestOperationsFromSpec_BooleanSchemaWarns(t *testing.T) {
 	}
 
 	_, diags := OperationsFromSpecWithDiagnostics(spec)
-	var sawItems, sawAP bool
+	var sawItems, sawItemsWarn, sawAP, sawAPInfo bool
 	for _, d := range diags {
 		if !strings.Contains(d.Detail, "boolean schema") {
 			continue
 		}
 		if strings.Contains(d.Summary, "items") {
 			sawItems = true
+			sawItemsWarn = d.Severity == diagnostics.Warning
 		}
 		if strings.Contains(d.Summary, "additionalProperties") {
 			sawAP = true
+			sawAPInfo = d.Severity == diagnostics.Info
 		}
 	}
-	if !sawItems {
-		t.Errorf("expected a warning for boolean items schema, got %v", diags)
+	if !sawItems || !sawItemsWarn {
+		t.Errorf("expected a Warning for boolean items schema, got %v", diags)
 	}
-	if !sawAP {
-		t.Errorf("expected a warning for boolean additionalProperties schema, got %v", diags)
+	if !sawAP || !sawAPInfo {
+		t.Errorf("expected an Info for boolean additionalProperties schema, got %v", diags)
 	}
 }
 
