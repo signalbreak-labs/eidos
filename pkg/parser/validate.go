@@ -23,7 +23,8 @@ func schemaTypeString(n Node) (string, bool) {
 
 // Validate performs structural validation and semantic checks against an
 // already-converted Spec and its original raw AST. It returns diagnostics for
-// missing required fields, invalid local $ref values, unsupported keywords, and
+// missing required fields, invalid local $ref values, unsupported keywords
+// (Info — the parser ignores them, so they only restate vendor extensions), and
 // type mismatches. Every diagnostic carries a source location when possible.
 func Validate(root Node, spec *Spec, version Version) []Diagnostic {
 	if spec == nil {
@@ -447,8 +448,15 @@ func (v *unsupportedKeywordValidator) checkMapEntries(m *MapNode, objType string
 		if set.allowed[key] {
 			continue
 		}
+		// Info, not Warning: the keyword is inert — the parser ignores it and
+		// generation proceeds — so the diagnostic can only restate that the
+		// spec carries a vendor extension eidos does not interpret. That
+		// restatement fires once per keyword occurrence (1,121 on
+		// gigavuecore: `readonly` ×614, `since` ×461, …) and at Warning
+		// volume it drowned out the actionable diagnostics (§3.12). Info
+		// keeps it visible for the rare genuine typo without the noise.
 		v.diags = append(v.diags, Diagnostic{
-			Severity:       SeverityWarning,
+			Severity:       SeverityInfo,
 			Summary:        "Unsupported keyword",
 			Detail:         fmt.Sprintf("%s does not support %q.", set.name, key),
 			SourceLocation: &e.Key.SourceLocation,
@@ -1086,8 +1094,8 @@ var knownKeys = map[Version]map[string]keySet{
 				// webhooks is deliberately omitted: ConvertV30 warns that the
 				// field is not defined in OpenAPI 3.0.x (see v30.go), so the
 				// keyword validator emits a matching "Unsupported keyword"
-				// warning here rather than silently accepting it. The two
-				// validators now agree that webhooks is non-standard in 3.0
+				// Info diagnostic here rather than silently accepting it. The
+				// two validators now agree that webhooks is non-standard in 3.0
 				// (L-89: previously Validate accepted it while ConvertV30
 				// warned).
 			},

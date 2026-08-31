@@ -2190,7 +2190,7 @@ The parser reports diagnostics at the source location rather than failing silent
 | Missing required field | Error with file:line |
 | Invalid `$ref` target | Error with ref path and location |
 | Type mismatch | Warning with suggested coercion |
-| Unsupported keyword | Warning describing limitation |
+| Unsupported keyword | Info: the parser ignores the keyword, so the diagnostic only notes an uninterpreted vendor extension |
 | Circular `$ref` | Warning; ref holder marked Opaque and expansion bounded to `maxCyclicDepth` levels |
 
 #### Technology stack update

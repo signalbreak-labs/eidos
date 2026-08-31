@@ -981,9 +981,14 @@ func schemaSpecFromParserDepthInner(spec *parser.Spec, s *parser.Schema, depth, 
 		if v {
 			// additionalProperties: true means arbitrary extras are allowed,
 			// which Terraform's closed object type cannot represent; the
-			// generated schema is stricter than the spec, so this is a real
-			// information loss that must be surfaced (fail-loud).
-			warnBooleanSchemaDropped(diags, "additionalProperties", s.SourceLocation)
+			// generated schema is stricter than the spec. That loss is inert
+			// in practice — a Terraform configuration cannot declare an
+			// attribute the provider schema does not model, so no practitioner
+			// input is ever rejected — so it is surfaced as Info, not Warning.
+			// Warning here fired once per schema object (1,430 on
+			// gigavuecore) and drowned out the actionable diagnostics
+			// (§3.12); dropping it silently would violate fail-loud.
+			infoBooleanSchemaDropped(diags, "additionalProperties", s.SourceLocation)
 		}
 		// additionalProperties: false (a closed property set) is benign and
 		// intentionally NOT warned: Terraform objects are closed by default, so
@@ -1268,16 +1273,34 @@ func warnRequiredReadOnlyProperties(diags *diagnostics.Diagnostics, names []stri
 }
 
 // warnBooleanSchemaDropped records a warning that a JSON Schema 2020-12 boolean
-// schema (items: false / additionalProperties: false|true) could not be
-// represented in the Terraform schema model and was dropped. A nil diags sink
-// makes the helper a no-op so callers without a diagnostics channel are not
-// affected.
+// schema (items: false) could not be represented in the Terraform schema model
+// and was dropped. A nil diags sink makes the helper a no-op so callers without
+// a diagnostics channel are not affected.
 func warnBooleanSchemaDropped(diags *diagnostics.Diagnostics, field string, loc parser.SourceLocation) {
 	if diags == nil {
 		return
 	}
 	*diags = diags.Append(diagnostics.Diagnostic{
 		Severity:       diagnostics.Warning,
+		Summary:        fmt.Sprintf("boolean %s schema dropped", field),
+		Detail:         fmt.Sprintf("%s is a JSON Schema 2020-12 boolean schema that the Terraform schema model cannot represent; the constraint is dropped", field),
+		SourceLocation: locPtrOrNil(loc),
+	})
+}
+
+// infoBooleanSchemaDropped records an Info diagnostic for a dropped JSON Schema
+// 2020-12 boolean schema whose loss is inert in practice (additionalProperties:
+// true — the generated schema is stricter, but a Terraform configuration cannot
+// express undeclared attributes anyway). It stays visible as Info instead of
+// being dropped silently, because Warning at this volume (once per schema
+// object; 1,430 on gigavuecore) drowns the actionable diagnostics (§3.12). A nil
+// diags sink makes the helper a no-op.
+func infoBooleanSchemaDropped(diags *diagnostics.Diagnostics, field string, loc parser.SourceLocation) {
+	if diags == nil {
+		return
+	}
+	*diags = diags.Append(diagnostics.Diagnostic{
+		Severity:       diagnostics.Info,
 		Summary:        fmt.Sprintf("boolean %s schema dropped", field),
 		Detail:         fmt.Sprintf("%s is a JSON Schema 2020-12 boolean schema that the Terraform schema model cannot represent; the constraint is dropped", field),
 		SourceLocation: locPtrOrNil(loc),

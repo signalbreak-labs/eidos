@@ -1,1 +1,1 @@
-testdata/unsupported_keyword.yaml:5:3: warning: Unsupported keyword: info object does not support "unknownField".
+testdata/unsupported_keyword.yaml:5:3: info: Unsupported keyword: info object does not support "unknownField".

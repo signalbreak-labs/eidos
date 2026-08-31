@@ -546,7 +546,7 @@ paths: {}
 	}
 
 	diags := Validate(root, spec, version)
-	if !hasDiag(diags, SeverityWarning, "Unsupported keyword", "unknownField") {
+	if !hasDiag(diags, SeverityInfo, "Unsupported keyword", "unknownField") {
 		t.Fatalf("expected unsupported keyword diagnostic, got %v", diags)
 	}
 }
@@ -797,7 +797,7 @@ components:
 		t.Fatalf("ConvertV31 bad: %v", err)
 	}
 	badDiags := Validate(badRoot, badSpec, badVer)
-	if !hasDiag(badDiags, SeverityWarning, "Unsupported keyword", "bogusKeywordInThen") {
+	if !hasDiag(badDiags, SeverityInfo, "Unsupported keyword", "bogusKeywordInThen") {
 		t.Fatalf("expected descent into 'then' to flag bogusKeywordInThen, got %v", badDiags)
 	}
 }
@@ -907,8 +907,8 @@ webhooks:
 		t.Fatalf("ConvertV30: %v", err)
 	}
 	diags := Validate(root, spec, version)
-	if !hasDiag(diags, SeverityWarning, "Unsupported keyword", "webhooks") {
-		t.Fatalf("expected 'Unsupported keyword' warning for webhooks in 3.0, got %v", diags)
+	if !hasDiag(diags, SeverityInfo, "Unsupported keyword", "webhooks") {
+		t.Fatalf("expected 'Unsupported keyword' info for webhooks in 3.0, got %v", diags)
 	}
 }
 
@@ -1318,7 +1318,7 @@ basePath: /v1
 			}
 
 			diags := Validate(root, spec, tt.version)
-			got := hasDiag(diags, SeverityWarning, "Unsupported keyword", tt.key)
+			got := hasDiag(diags, SeverityInfo, "Unsupported keyword", tt.key)
 			if got != tt.wantWarning {
 				t.Fatalf("%s: want warning=%v for %q, got diags=%v", tt.name, tt.wantWarning, tt.key, diags)
 			}
