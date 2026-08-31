@@ -5,6 +5,26 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.1](https://github.com/signalbreak-labs/eidos/compare/v0.7.0...v0.7.1) (2026-08-31)
+
+
+### Bug Fixes
+
+* **crud:** rename colliding CRUD groups instead of dropping the loser ([3e64b0a](https://github.com/signalbreak-labs/eidos/commit/3e64b0adf964c6c4ec653d52863517caf39f1181))
+* **crud:** warn when a sibling PUT shadows and consumes a PATCH operation ([f20c969](https://github.com/signalbreak-labs/eidos/commit/f20c969c518a4ec56c2a1182447f17d3f54cd1df))
+* **diagnostics:** demote inert spec-keyword and additionalProperties:true diagnostics to Info ([68599d7](https://github.com/signalbreak-labs/eidos/commit/68599d704c811bd36edb664c03991373745c6f62))
+* **docs:** carry the honest-scaffold invariant into docs and state TF versions ([95915b9](https://github.com/signalbreak-labs/eidos/commit/95915b9a6f96dba110868fdbd3b824aa4b61ee53))
+* **generator:** bare function names, registry namespace key, docs/example cosmetics ([889ff6d](https://github.com/signalbreak-labs/eidos/commit/889ff6debb9c74c247a910f6e32d8ba59b885b5d))
+* **generator:** emit plan modifiers and force replacement when Update is unwired ([2d478db](https://github.com/signalbreak-labs/eidos/commit/2d478dbc3418f218e7c1d5714c94fd5b0d0fd001))
+* **generator:** make generator.yaml emission a lossless round-trip ([6a2d509](https://github.com/signalbreak-labs/eidos/commit/6a2d5095bd796601754f1cca0dd1de02e4b0a101))
+* **lists:** pair list resources with managed resources so terraform query can register them ([87e53f4](https://github.com/signalbreak-labs/eidos/commit/87e53f469f3c9ac3f9d5f60417efa2605e43d7f3))
+* **parser,api:** type normalization, singleton imports, secret docs notes ([6181f0c](https://github.com/signalbreak-labs/eidos/commit/6181f0c1951a7bf2bdba4213dc95995930b38023))
+
+
+### Miscellaneous Chores
+
+* **examples:** regenerate sample mycloud provider from audit fixes ([a7513b5](https://github.com/signalbreak-labs/eidos/commit/a7513b501aee8debfc9de8bce21be0ae4e780864))
+
 ## [0.7.0](https://github.com/signalbreak-labs/eidos/compare/v0.6.0...v0.7.0) (2026-08-31)
 
 
