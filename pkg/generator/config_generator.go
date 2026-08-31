@@ -24,6 +24,18 @@ import (
 // data_sources, actions, ephemeral_resources, list_resources, polymorphism,
 // timeouts, pagination, logging, and generate_terraform_tests.
 func GenerateConfig(providerIR ir.ProviderIR) (*config.Config, error) {
+	return GenerateConfigWithBase(providerIR, nil)
+}
+
+// GenerateConfigWithBase converts a ProviderIR into a generator.yaml Config,
+// preserving the input-only sections of an existing generator.yaml (base) that
+// the IR does not model: the spec: block, generation: toggles, provider
+// author/license/repository/contact_email metadata, client/naming/security/
+// limits settings, operation filters, and the *bool feature toggles. Without
+// the overlay, the emitted config was a lossy round-trip: re-generating from
+// the output directory silently dropped those settings (§3.5). base may be nil
+// (starter configs from a bare spec).
+func GenerateConfigWithBase(providerIR ir.ProviderIR, base *config.Config) (*config.Config, error) {
 	cfg := &config.Config{
 		Provider: config.ProviderConfig{
 			Name:            providerIR.Name,
@@ -49,6 +61,11 @@ func GenerateConfig(providerIR ir.ProviderIR) (*config.Config, error) {
 	// Derive any polymorphism configuration from union schemas discovered in the IR.
 	cfg.Polymorphism = convertPolymorphism(detectUnions(providerIR))
 
+	// Preserve the input config's sections the IR does not carry before
+	// defaults and validation run, so the emitted generator.yaml round-trips
+	// losslessly (§3.5).
+	overlayBaseConfig(cfg, base)
+
 	// Detect auth schemes that sanitize to the same env-var suffix (e.g.
 	// "api-key" and "api_key" both collapse to API_KEY). The collision is
 	// otherwise silent — sanitizeEnvSuffix only log.Printfs — so surface it as
@@ -63,9 +80,42 @@ func GenerateConfig(providerIR ir.ProviderIR) (*config.Config, error) {
 	return cfg, nil
 }
 
+// overlayBaseConfig copies the input-only sections of base onto cfg verbatim.
+// These sections have no IR representation, so reconstructing them from the
+// provider IR is impossible; copying them is what makes the emitted
+// generator.yaml a faithful round-trip of the one the run consumed. Fields the
+// IR does model (provider name/description, servers, auth, resource overrides,
+// timeouts, pagination, logging, tests) are deliberately left as the IR-derived
+// values: the IR already reflects whatever the base config contributed to them.
+func overlayBaseConfig(cfg *config.Config, base *config.Config) {
+	if base == nil {
+		return
+	}
+	cfg.Spec = base.Spec
+	cfg.Generation = base.Generation
+	cfg.Provider.Author = base.Provider.Author
+	cfg.Provider.ContactEmail = base.Provider.ContactEmail
+	cfg.Provider.License = base.Provider.License
+	cfg.Provider.Repository = base.Provider.Repository
+	cfg.Client = base.Client
+	cfg.Security = base.Security
+	cfg.Naming = base.Naming
+	cfg.SkipOperations = base.SkipOperations
+	cfg.IncludeOperations = base.IncludeOperations
+	cfg.Limits = base.Limits
+	cfg.UsePutAsCreate = base.UsePutAsCreate
+	cfg.SignRelease = base.SignRelease
+}
+
 // MarshalConfig serializes a ProviderIR into generator.yaml bytes.
 func MarshalConfig(providerIR ir.ProviderIR) ([]byte, error) {
-	cfg, err := GenerateConfig(providerIR)
+	return MarshalConfigWithBase(providerIR, nil)
+}
+
+// MarshalConfigWithBase serializes a ProviderIR into generator.yaml bytes,
+// preserving the input-only sections of base (see GenerateConfigWithBase).
+func MarshalConfigWithBase(providerIR ir.ProviderIR, base *config.Config) ([]byte, error) {
+	cfg, err := GenerateConfigWithBase(providerIR, base)
 	if err != nil {
 		return nil, err
 	}
@@ -76,7 +126,14 @@ func MarshalConfig(providerIR ir.ProviderIR) ([]byte, error) {
 // If config generation fails, the returned File renders the error so that write
 // mode surfaces it instead of silently omitting the file.
 func ConfigFile(providerIR ir.ProviderIR) File {
-	data, err := MarshalConfig(providerIR)
+	return ConfigFileWithBase(providerIR, nil)
+}
+
+// ConfigFileWithBase is ConfigFile with an input generator.yaml (base) whose
+// input-only sections are preserved in the emitted file (see
+// GenerateConfigWithBase). base may be nil.
+func ConfigFileWithBase(providerIR ir.ProviderIR, base *config.Config) File {
+	data, err := MarshalConfigWithBase(providerIR, base)
 	if err != nil {
 		return ErrorFile("generator.yaml", fmt.Errorf("failed to marshal generator.yaml: %w", err))
 	}
@@ -170,7 +227,6 @@ func convertResources(provider ir.ProviderIR) []config.ResourceOverride {
 		sensitive := mergeSensitiveAttrs(r.SensitiveAttrs, extractSensitiveAttributes(r.Schema))
 
 		ro := config.ResourceOverride{
-			Schema:              schemaName,
 			Operation:           r.SourceOperation,
 			ResourceName:        r.Name,
 			IDAttribute:         r.IDAttribute,
@@ -181,6 +237,15 @@ func convertResources(provider ir.ProviderIR) []config.ResourceOverride {
 			SensitiveAttributes: sensitive,
 			WriteOnlyAttributes: writeOnly,
 			Description:         r.Description,
+		}
+		// Emit exactly one match key. Operation is the authoritative key (it
+		// takes precedence when both are set), so emitting Schema alongside it
+		// produced a "both are set" warning on every reload of the emitted
+		// config — 87 warnings on gigavuecore — while the Schema key was
+		// ignored anyway. Schema is emitted only when there is no source
+		// operation to key on (§3.5).
+		if r.SourceOperation == "" {
+			ro.Schema = schemaName
 		}
 		// Override-created resources (promoted from a resource_override with
 		// generate_resource/create_operation/...) are not reproducible from CRUD
@@ -294,22 +359,28 @@ func convertListResources(lists []ir.ListResourceIR) []config.ListResourceOverri
 		if resourceName == "" {
 			resourceName = l.TypeName
 		}
-		op := l.SourceOperation
-		if op == "" {
-			op = l.Name
-		}
 
 		var pagination *config.PaginationConfig
 		if l.PaginationStyle != "" {
 			pagination = &config.PaginationConfig{Style: l.PaginationStyle}
 		}
 
-		out = append(out, config.ListResourceOverride{
-			Resource:     resourceName,
-			Operation:    op,
+		lo := config.ListResourceOverride{
 			ConfigSchema: convertListConfigSchema(l.ConfigSchema),
 			Pagination:   pagination,
-		})
+		}
+		// Emit exactly one match key, mirroring convertResources: Operation is
+		// authoritative when set, and emitting Resource alongside it produced a
+		// "both are set" warning on every reload (119 on gigavuecore). When
+		// there is no source operation, Resource (the paired managed resource
+		// name) is the only key that can match, so the previous name fallback
+		// into Operation is dropped too (§3.5).
+		if l.SourceOperation != "" {
+			lo.Operation = l.SourceOperation
+		} else {
+			lo.Resource = resourceName
+		}
+		out = append(out, lo)
 	}
 	return out
 }

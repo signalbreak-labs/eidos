@@ -832,7 +832,7 @@ func FilesForProviderIR(provider *ir.ProviderIR, cfg BuildConfig, opts CollectOp
 		files = append(files, TerraformTestFiles(*provider, cfg)...)
 	}
 	if opts.IncludeConfig {
-		files = append(files, ConfigFile(*provider))
+		files = append(files, ConfigFileWithBase(*provider, opts.BaseConfig))
 	}
 	if opts.IncludeDynamicRelease {
 		// The dynamic workflow keeps the default branch free of generated
