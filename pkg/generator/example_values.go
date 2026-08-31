@@ -323,11 +323,21 @@ func boolParamPair(s ir.SchemaIR) (string, string, bool) {
 // pattern constraint rejects the default placeholder. They cover the common
 // shapes seen in specs — lowercase/uppercase/mixed, digit and separator
 // suffixes — without attempting general regex synthesis. The first match wins
-// so output stays byte-identical across runs.
+// so output stays byte-identical across runs. The trailing entries extend the
+// coverage to the shapes telecom and network specs use for identifier
+// attributes: "*" as an explicit wildcard value (accepted alongside digit runs
+// by patterns like ^([*]|[0-9]{6,15})|([0-9]{0,14}[*])$), fixed-length digit
+// runs, hex runs, dotted decimals, and hex-with-prefix compounds. They are
+// appended after the original candidates so patterns the original list already
+// satisfied keep byte-identical output; only patterns that previously found no
+// match (and whose generated examples therefore violated the generated
+// RegexMatches validator) change value.
 var patternCandidates = []string{
 	"example", "Example", "EXAMPLE", "example1", "Example1", "EXAMPLE1",
 	"example-1", "example_1", "abc", "Abc", "ABC", "abc1", "Abc1", "ABC1",
 	"abc-1", "ABC-1", "a1", "A1", "0", "1", "123", "1234",
+	"*", "123456", "12345678901234", "a1b2c3", "a1b2c3d4", "a1b2c3d4e",
+	"a1b2c3d4e5f6a7b8c9d0e1f2", "123.45", "123.45.0xabcd",
 }
 
 // patternExampleCandidate returns the first pattern candidate that matches the

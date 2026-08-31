@@ -1828,7 +1828,44 @@ func identityModelField(r ir.ResourceIR, idAttr ir.AttributeIR) string {
 	if field := match(idAttr.WireName); field != "" {
 		return field
 	}
-	return match(idAttr.Name)
+	if field := match(idAttr.Name); field != "" {
+		return field
+	}
+	return identityPathParamField(r, idAttr)
+}
+
+// identityPathParamField resolves the model field that fills the instance-path
+// placeholder an identity attribute names. A list resource's identity
+// attributes come from the instance path's templated segments (e.g.
+// {portId}), but the managed resource's schema attribute for that same value
+// may carry a different name (port_filter's {portId} is the resource's `port`
+// ID attribute). The request-path builders already resolve every placeholder
+// to the model field that fills it, so resolving the identity attribute
+// through the same substitution keeps the identity in lockstep with the
+// request path — the identity value is, by construction, the value the
+// provider sends in the URL. Read is consulted first (identity is re-derived
+// on every wired operation, and Read is always present for an identity-bearing
+// resource), then Update and Delete for resources whose Read is unwired.
+// Static placeholders (sub.literal, e.g. a pinned {apiVersion}) have no model
+// field and resolve to "", leaving identitySetStmts' fail-loud error in place.
+func identityPathParamField(r ir.ResourceIR, idAttr ir.AttributeIR) string {
+	ops := []ir.OperationMappingIR{r.CRUDMapping.Read}
+	if r.CRUDMapping.Update != nil {
+		ops = append(ops, *r.CRUDMapping.Update)
+	}
+	ops = append(ops, r.CRUDMapping.Delete)
+	for _, op := range ops {
+		for _, candidate := range []string{idAttr.WireName, idAttr.Name} {
+			if candidate == "" {
+				continue
+			}
+			sub, ok := resolvePathSubstitution(r, candidate, false, op.PathParams)
+			if ok && sub.field != "" {
+				return sub.field
+			}
+		}
+	}
+	return ""
 }
 
 // requestBodyStmts returns the statements that build a wired create/update

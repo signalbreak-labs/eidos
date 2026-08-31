@@ -870,9 +870,105 @@ func TestIdentityModelField(t *testing.T) {
 		t.Errorf("identityModelField(name fallback) = %q, want %q", got, "ShipSymbol")
 	}
 
-	// No match returns "" so identitySetStmts surfaces a runtime diagnostic.
-	if got := identityModelField(sampleResourceIR(), ir.AttributeIR{Name: "missing", WireName: "absent"}); got != "" {
+	// No match, no ID fallback: a resource with no id attribute has nothing to
+	// source the identity from, so identityModelField returns "" and
+	// identitySetStmts surfaces a runtime diagnostic.
+	noID := sampleResourceIR()
+	noID.Schema.Attributes = noID.Schema.Attributes[1:] // drop the "id" attribute
+	noID.IDAttribute = ""
+	if got := identityModelField(noID, ir.AttributeIR{Name: "missing", WireName: "absent"}); got != "" {
 		t.Errorf("identityModelField(no match) = %q, want %q", got, "")
+	}
+
+	// Path-placeholder fallback: an identity attribute whose wire name has no
+	// model match but names the instance path's templated segment resolves
+	// through the same substitution the request path uses. port_filter's
+	// identity port_id (wire "portId") fills the same {portId} segment the
+	// request path fills from the resource's `port` ID attribute.
+	portFilter := ir.ResourceIR{
+		Name: "port_filter",
+		Schema: ir.ObjectSchemaIR{Attributes: []ir.AttributeIR{
+			{Name: "port", Required: true, Schema: ir.SchemaIR{Type: ir.TypeString}},
+			{Name: "cluster_id", Required: true, Schema: ir.SchemaIR{Type: ir.TypeString}},
+		}},
+		CRUDMapping: ir.CRUDMappingIR{
+			Create: ir.OperationMappingIR{Method: "POST", PathTemplate: "/portFilters"},
+			Read:   ir.OperationMappingIR{Method: "GET", PathTemplate: "/portFilters/{portId}"},
+			Delete: ir.OperationMappingIR{Method: "DELETE", PathTemplate: "/portFilters/{portId}"},
+		},
+		IDAttribute: "port",
+	}
+	if got := identityModelField(portFilter, ir.AttributeIR{Name: "port_id", WireName: "portId"}); got != "Port" {
+		t.Errorf("identityModelField(path placeholder fallback) = %q, want %q", got, "Port")
+	}
+}
+
+// TestResourceSchema_NestedCollectionPlanModifierKind asserts that a wired
+// resource with no usable Update mapping types its nested-collection plan
+// modifiers by the attribute's collection kind: a ListNestedAttribute takes
+// []planmodifier.List and a MapNestedAttribute []planmodifier.Map, not the
+// objectplanmodifier slice its element type would suggest. The plugin framework
+// declares PlanModifiers per attribute type, so an Object-typed slice on a
+// ListNestedAttribute fails compilation (the gigavuecore pcap_configs
+// regression: resource_pcap_profile.go emitted
+// "cannot use []planmodifier.Object{…} as []planmodifier.List value").
+func TestResourceSchema_NestedCollectionPlanModifierKind(t *testing.T) {
+	r := sampleResourceIR()
+	// Replace the sample's attributes with a controlled set: a Required
+	// primitive, a list of objects, and a map of objects. The sample's
+	// SingleNested `owner` is dropped because its []planmodifier.Object output
+	// is correct and would mask the negative assertion.
+	r.Schema.Attributes = []ir.AttributeIR{
+		{Name: "id", Computed: true, Schema: ir.SchemaIR{Type: ir.TypeString}},
+		{Name: "name", Required: true, Schema: ir.SchemaIR{Type: ir.TypeString}},
+		{
+			Name:     "pcap_configs",
+			Optional: true,
+			Schema: ir.SchemaIR{
+				Collection: &ir.CollectionType{
+					Kind: ir.List,
+					ElementType: ir.SchemaIR{Attributes: []ir.AttributeIR{
+						{Name: "alias", Required: true, Schema: ir.SchemaIR{Type: ir.TypeString}},
+					}},
+				},
+			},
+		},
+		{
+			Name:     "rules_by_name",
+			Optional: true,
+			Schema: ir.SchemaIR{
+				Collection: &ir.CollectionType{
+					Kind: ir.Map,
+					ElementType: ir.SchemaIR{Attributes: []ir.AttributeIR{
+						{Name: "value", Required: true, Schema: ir.SchemaIR{Type: ir.TypeString}},
+					}},
+				},
+			},
+		},
+	}
+	// No Update mapping: the unwired-update injection adds RequiresReplace to
+	// every config-settable attribute, including the collection attributes.
+	r.CRUDMapping.Update = nil
+
+	file := ResourceFile(r, testClientImport)
+	var buf bytes.Buffer
+	if err := file.Render(&buf); err != nil {
+		t.Fatalf("Render() error = %v", err)
+	}
+	got := buf.String()
+
+	for _, want := range []string{
+		`PlanModifiers: []planmodifier.List{listplanmodifier.RequiresReplace()}`,
+		`PlanModifiers: []planmodifier.Map{mapplanmodifier.RequiresReplace()}`,
+		`listplanmodifier "github.com/hashicorp/terraform-plugin-framework/resource/schema/listplanmodifier"`,
+		`mapplanmodifier "github.com/hashicorp/terraform-plugin-framework/resource/schema/mapplanmodifier"`,
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("generated resource missing %q\n--- body ---\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "objectplanmodifier") {
+		t.Errorf("nested collection attributes must not emit objectplanmodifier; the framework types their PlanModifiers by the collection kind\n--- body ---\n%s", got)
 	}
 }
 
