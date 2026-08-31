@@ -1173,6 +1173,20 @@ func TestValidate_CRUDMappingByMethod(t *testing.T) {
 	if len(resp.IRPreview.Actions) != 0 {
 		t.Fatalf("expected 0 actions, got %d", len(resp.IRPreview.Actions))
 	}
+	// The consumed PATCH is the only silent operation drop left in the pipeline,
+	// so it must surface as a Warning naming the operation (AGENTS.md "fail
+	// loud, never silently") instead of vanishing without a trace.
+	var patchWarned bool
+	for _, d := range resp.Diagnostics {
+		if d.Severity == diagnostics.Warning.String() &&
+			strings.Contains(d.Summary, "shadowed by the sibling PUT") &&
+			strings.Contains(d.Summary, "patchPet") {
+			patchWarned = true
+		}
+	}
+	if !patchWarned {
+		t.Errorf("expected a Warning that patchPet is shadowed by the sibling PUT, got: %+v", resp.Diagnostics)
+	}
 }
 
 // TestValidate_DeprecatedOperationSurfacesOnResource verifies M-10: a full CRUD

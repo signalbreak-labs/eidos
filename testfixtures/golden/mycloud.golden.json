@@ -992,6 +992,7 @@
     }
   ],
   "warnings": [
+    "PATCH \"patchInstance\" is shadowed by the sibling PUT and not generated",
     "request-body property collides with a path parameter name",
     "request-body property collides with a path parameter name",
     "request-body property collides with a path parameter name",
