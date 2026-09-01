@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.4](https://github.com/signalbreak-labs/eidos/compare/v0.7.3...v0.7.4) (2026-09-01)
+
+
+### Bug Fixes
+
+* **generator:** ship list import pairing + include_create_response_attributes/path_params overrides ([#63](https://github.com/signalbreak-labs/eidos/issues/63)) ([5eef830](https://github.com/signalbreak-labs/eidos/commit/5eef830b89494b06d7e605a37521ecc2d50212ba))
+
 ## [0.7.3](https://github.com/signalbreak-labs/eidos/compare/v0.7.2...v0.7.3) (2026-09-01)
 
 
