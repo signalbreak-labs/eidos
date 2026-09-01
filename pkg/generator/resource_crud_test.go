@@ -593,7 +593,7 @@ func TestResolvePathSubstitution_UIDShapedPlaceholder(t *testing.T) {
 		},
 	}
 
-	sub, ok := resolvePathSubstitution(r, "folder_uid", false, nil)
+	sub, ok := resolvePathSubstitution(r, "folder_uid", false, nil, nil)
 	if !ok {
 		t.Fatalf("expected a substitution for {folder_uid}")
 	}
@@ -602,13 +602,13 @@ func TestResolvePathSubstitution_UIDShapedPlaceholder(t *testing.T) {
 	}
 
 	// An exact-name match still wins (uid placeholder -> uid attribute).
-	sub, ok = resolvePathSubstitution(r, "uid", false, nil)
+	sub, ok = resolvePathSubstitution(r, "uid", false, nil, nil)
 	if !ok || sub.field != "Uid" {
 		t.Fatalf("expected {uid} to map to uid attribute, got ok=%v field=%q", ok, sub.field)
 	}
 
 	// A non-UID placeholder falls back to the numeric id.
-	sub, ok = resolvePathSubstitution(r, "folderId", false, nil)
+	sub, ok = resolvePathSubstitution(r, "folderId", false, nil, nil)
 	if !ok || sub.field != "Id" {
 		t.Fatalf("expected non-UID placeholder to fall back to id, got ok=%v field=%q", ok, sub.field)
 	}
@@ -638,7 +638,7 @@ func TestResolvePathSubstitution_StaticVersionSegment(t *testing.T) {
 
 	// {apiVersion} has no matching attribute; with the ID fallback suppressed
 	// (composite path) it resolves to the first enum value as a literal.
-	sub, ok := resolvePathSubstitution(r, "apiVersion", true, pathParams)
+	sub, ok := resolvePathSubstitution(r, "apiVersion", true, pathParams, nil)
 	if !ok {
 		t.Fatalf("expected a static substitution for {apiVersion}, got ok=%v", ok)
 	}
@@ -652,7 +652,7 @@ func TestResolvePathSubstitution_StaticVersionSegment(t *testing.T) {
 	// {linodeId} has no matching attribute either but its param declares no
 	// const/default/enum, so static substitution does not apply and the
 	// composite-path guard disables wiring (returns false).
-	if _, ok := resolvePathSubstitution(r, "linodeId", true, pathParams); ok {
+	if _, ok := resolvePathSubstitution(r, "linodeId", true, pathParams, nil); ok {
 		t.Fatalf("expected {linodeId} (no static value, composite path) to be unresolvable, got ok=true")
 	}
 
@@ -662,7 +662,7 @@ func TestResolvePathSubstitution_StaticVersionSegment(t *testing.T) {
 	pathParamsDefault := []ir.ParamIR{
 		{Name: "ver", In: "path", Schema: ir.SchemaIR{Type: ir.TypeString, Default: &stableAny, EnumValues: []any{"alpha", "stable"}}},
 	}
-	sub, ok = resolvePathSubstitution(r, "ver", true, pathParamsDefault)
+	sub, ok = resolvePathSubstitution(r, "ver", true, pathParamsDefault, nil)
 	if !ok || sub.literal != "stable" {
 		t.Fatalf("expected default %q to win over enum, got ok=%v literal=%q", "stable", ok, sub.literal)
 	}
@@ -1497,5 +1497,45 @@ func TestEnumEquivalentAttribute_UniqueMatchesOnly(t *testing.T) {
 	}
 	if sameStringEnumSet([]any{"a", float64(1)}, []any{"a", float64(1)}) {
 		t.Error("non-string enum members must not be equal")
+	}
+}
+
+// TestResolvePathSubstitution_PathParamOverride asserts a path_params override
+// wins over the name-match and id-attribute fallbacks: a placeholder that does
+// not name-match any attribute and is not the resource id resolves to the
+// mapped attribute (e.g. gigavuecore's activation read GET .../{entlItemId}
+// filled from the `eli_id` create-body attribute).
+func TestResolvePathSubstitution_PathParamOverride(t *testing.T) {
+	r := ir.ResourceIR{
+		Name: "activation",
+		Schema: ir.ObjectSchemaIR{
+			Attributes: []ir.AttributeIR{
+				{Name: "id", Computed: true, Schema: ir.SchemaIR{Type: ir.TypeString}},
+				{Name: "eli_id", Optional: true, Schema: ir.SchemaIR{Type: ir.TypeString}},
+				{Name: "aid", Computed: true, Schema: ir.SchemaIR{Type: ir.TypeString}},
+			},
+		},
+	}
+
+	// The override maps {entlItemId} to eli_id, which must win over the
+	// id-attribute fallback (id).
+	sub, ok := resolvePathSubstitution(r, "entlItemId", false, nil, map[string]string{"entlItemId": "eli_id"})
+	if !ok {
+		t.Fatalf("expected a substitution for {entlItemId} via path_params override")
+	}
+	if sub.field != "EliId" {
+		t.Fatalf("expected path_params override to map {entlItemId} to eli_id, got field %q", sub.field)
+	}
+
+	// Without the override the placeholder falls back to the id attribute.
+	sub, ok = resolvePathSubstitution(r, "entlItemId", false, nil, nil)
+	if !ok || sub.field != "Id" {
+		t.Fatalf("expected {entlItemId} to fall back to id without the override, got ok=%v field=%q", ok, sub.field)
+	}
+
+	// A placeholder with no override entry keeps the normal resolution.
+	sub, ok = resolvePathSubstitution(r, "aid", false, nil, map[string]string{"entlItemId": "eli_id"})
+	if !ok || sub.field != "Aid" {
+		t.Fatalf("expected {aid} to name-match the aid attribute, got ok=%v field=%q", ok, sub.field)
 	}
 }

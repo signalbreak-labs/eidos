@@ -490,6 +490,50 @@ func ManagedResourceSchemaWithDiagnostics(c ResourceCRUD, diags *diagnostics.Dia
 	return ir.ObjectSchemaIR{Attributes: attrs}, resolvedID
 }
 
+// AddCreateResponseAttributes appends create-response-only properties to a
+// managed resource schema as Computed attributes. The schema builder derives
+// the state shape from the read response (resourceStateSpec), so a property
+// the create response returns but the read does not echo is dropped — e.g. an
+// activation id returned by POST but absent from the collection read. An
+// override can name such properties (include_create_response_attributes) so
+// the resource can track and delete the instance. A named property already
+// present (by sanitized name) is skipped; one absent from the create response
+// is surfaced fail-loud, never silently dropped.
+func AddCreateResponseAttributes(schema *ir.ObjectSchemaIR, createResponse *SchemaSpec, names []string, diags *diagnostics.Diagnostics) {
+	if schema == nil || createResponse == nil || len(names) == 0 {
+		return
+	}
+	seen := make(map[string]bool, len(schema.Attributes))
+	for _, a := range schema.Attributes {
+		seen[a.Name] = true
+	}
+	for _, name := range names {
+		prop, ok := createResponse.Properties[name]
+		if !ok {
+			if diags != nil {
+				*diags = diags.Append(diagnostics.Diagnostic{
+					Severity: diagnostics.Warning,
+					Summary:  "include_create_response_attributes names a property absent from the create response",
+					Detail:   fmt.Sprintf("The create response has no property %q, so the attribute is not added to the schema.", name),
+				})
+			}
+			continue
+		}
+		snake := SanitizeAttributeName(name)
+		if seen[snake] {
+			continue
+		}
+		seen[snake] = true
+		schema.Attributes = append(schema.Attributes, ir.AttributeIR{
+			Name:        snake,
+			WireName:    name,
+			Schema:      schemaIRFromSpecRecursive(prop),
+			Description: prop.Description,
+			Computed:    true,
+		})
+	}
+}
+
 // resourceSchemaEmpty reports whether a resource has no schema to derive: no
 // response properties and no formData inputs. A multipart/form-data create
 // (e.g. a binary file upload whose read response is a scalar octet-stream body)
@@ -534,22 +578,11 @@ func promoteNestedPathParameters(stateSpec, requestSpec *SchemaSpec, c ResourceC
 		if topLevel[attrName] {
 			continue
 		}
-
-		var candidates []nestedPathPromotion
-		for _, parent := range parents {
-			wrapper := stateSpec.Properties[parent]
-			children := make([]string, 0, len(wrapper.Properties))
-			for child := range wrapper.Properties {
-				children = append(children, child)
-			}
-			sort.Strings(children)
-			for _, child := range children {
-				if SanitizeAttributeName(child) != attrName || !primitiveSchemaSpec(wrapper.Properties[child]) {
-					continue
-				}
-				candidates = append(candidates, nestedPathPromotion{parent: parent, child: child})
-			}
+		if skipNestedPathPromotion(c, param, stateSpec) {
+			continue
 		}
+
+		candidates := nestedPathCandidates(stateSpec, parents, attrName)
 
 		switch len(candidates) {
 		case 1:
@@ -584,6 +617,59 @@ func promoteNestedPathParameters(stateSpec, requestSpec *SchemaSpec, c ResourceC
 		wirePaths[promotion.child] = promotion.parent
 	}
 	return promoteNestedProperties(stateSpec, promotions), promoteNestedProperties(requestSpec, promotions), wirePaths, ambiguous
+}
+
+// skipNestedPathPromotion reports whether a path parameter should not be
+// promoted from a nested response object. A simple-id resource's identity path
+// parameter is already resolved by the generator's id-attribute fallback (the
+// resource id is substituted into the URL), so promoting a same-named nested
+// property would only add a spurious top-level attribute — e.g. spacetraders'
+// Ship: the {shipSymbol} path parameter is the ship's symbol, echoed top-level
+// as "symbol", while the nested "cooldown.shipSymbol" is a transient cooldown
+// field. When a top-level primitive property plausibly represents the path
+// parameter (exact, suffix, or prefix name match), the promotion is skipped and
+// the id fallback resolves the segment. Composite identities keep promoting:
+// their id fallback is suppressed, so nested identity parameters must be lifted.
+func skipNestedPathPromotion(c ResourceCRUD, param string, stateSpec *SchemaSpec) bool {
+	if c.ID.Kind != IDSimple || len(c.ID.ParameterNames) != 1 {
+		return false
+	}
+	if SanitizeAttributeName(c.ID.ParameterNames[0]) != SanitizeAttributeName(param) {
+		return false // not the identity path parameter
+	}
+	lower := strings.ToLower(param)
+	for name, prop := range stateSpec.Properties {
+		if !primitiveSchemaSpec(prop) {
+			continue
+		}
+		n := strings.ToLower(name)
+		if n == lower || strings.HasSuffix(lower, n) || strings.HasPrefix(lower, n) {
+			return true
+		}
+	}
+	return false
+}
+
+// nestedPathCandidates returns the one-level response properties whose
+// sanitized name matches attrName, as parent.child promotions. Extracted from
+// promoteNestedPathParameters so the candidate scan stays a single concern.
+func nestedPathCandidates(stateSpec *SchemaSpec, parents []string, attrName string) []nestedPathPromotion {
+	var candidates []nestedPathPromotion
+	for _, parent := range parents {
+		wrapper := stateSpec.Properties[parent]
+		children := make([]string, 0, len(wrapper.Properties))
+		for child := range wrapper.Properties {
+			children = append(children, child)
+		}
+		sort.Strings(children)
+		for _, child := range children {
+			if SanitizeAttributeName(child) != attrName || !primitiveSchemaSpec(wrapper.Properties[child]) {
+				continue
+			}
+			candidates = append(candidates, nestedPathPromotion{parent: parent, child: child})
+		}
+	}
+	return candidates
 }
 
 func resourcePathParameterNames(c ResourceCRUD) []string {
@@ -727,6 +813,16 @@ func resolveIdentifierAttribute(attrs []ir.AttributeIR, c ResourceCRUD, stateSpe
 	if !skipUserSettableID {
 		idAttr = userSettableIdentifier(attrs, stateSpec, requestSpec, idAttribute)
 	}
+	if idAttr == "" && !skipUserSettableID {
+		// No practitioner-suppliable identifier: when the response echoes a
+		// Computed-only property whose name relates to the path parameter, that
+		// property is the real identifier even though the practitioner cannot
+		// supply it (e.g. spacetraders' Ship: {shipSymbol} ↔ the Computed
+		// "symbol" property). The synthetic placeholder is never populated by the
+		// create response, so preferring the echoed property keeps the resource
+		// honest and avoids a dead Computed attribute.
+		idAttr = computedEchoedIdentifier(attrs, idAttribute)
+	}
 	if idAttr != "" {
 		return idAttr, attrs
 	}
@@ -801,6 +897,49 @@ func userSettableIdentifier(attrs []ir.AttributeIR, stateSpec, requestSpec *Sche
 		}
 		if kind > bestKind || (kind == bestKind && len(n) > bestLen) {
 			best = snake
+			bestKind = kind
+			bestLen = len(n)
+		}
+	}
+	return best
+}
+
+// computedEchoedIdentifier returns the name of a Computed-only response property
+// whose name relates to the path parameter (case-insensitive exact, suffix, or
+// prefix match). The synthetic placeholder is never populated by the create
+// response, so when the response echoes a same-named property that property is
+// the real identifier even though the practitioner cannot supply it (e.g.
+// spacetraders' Ship: {shipSymbol} ↔ the Computed "symbol" property). It runs
+// after userSettableIdentifier so a practitioner-suppliable identifier still
+// wins; exact matches beat suffix matches, which beat prefix matches, and within
+// a category the longest name wins.
+func computedEchoedIdentifier(attrs []ir.AttributeIR, idAttribute string) string {
+	lower := strings.ToLower(idAttribute)
+	best := ""
+	bestKind := 0 // 3 = exact, 2 = suffix, 1 = prefix
+	bestLen := 0
+	for _, a := range attrs {
+		if !a.Computed || a.Optional || a.Required {
+			continue
+		}
+		n := strings.ToLower(a.WireName)
+		if n == "" {
+			n = strings.ToLower(a.Name)
+		}
+		kind := 0
+		switch {
+		case n == lower:
+			kind = 3
+		case strings.HasSuffix(lower, n):
+			kind = 2
+		case strings.HasPrefix(lower, n):
+			kind = 1
+		}
+		if kind == 0 {
+			continue
+		}
+		if kind > bestKind || (kind == bestKind && len(n) > bestLen) {
+			best = a.Name
 			bestKind = kind
 			bestLen = len(n)
 		}

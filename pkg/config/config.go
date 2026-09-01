@@ -236,13 +236,29 @@ type ResourceOverride struct {
 	// GET|DELETE /dashboards/uid/{uid}). When set, the override builds a
 	// managed resource from these operations instead of relying on inference
 	// (G8). Operation is the seed/match operation.
-	CreateOperation string               `yaml:"create_operation,omitempty" json:"create_operation,omitempty"`
-	ReadOperation   string               `yaml:"read_operation,omitempty" json:"read_operation,omitempty"`
-	UpdateOperation string               `yaml:"update_operation,omitempty" json:"update_operation,omitempty"`
-	DeleteOperation string               `yaml:"delete_operation,omitempty" json:"delete_operation,omitempty"`
-	SchemaVersion   int                  `yaml:"schema_version,omitempty" json:"schema_version,omitempty"`
-	StateUpgrades   []StateUpgradeConfig `yaml:"state_upgrades,omitempty" json:"state_upgrades,omitempty"`
-	Description     string               `yaml:"description,omitempty" json:"description,omitempty"`
+	CreateOperation string `yaml:"create_operation,omitempty" json:"create_operation,omitempty"`
+	ReadOperation   string `yaml:"read_operation,omitempty" json:"read_operation,omitempty"`
+	UpdateOperation string `yaml:"update_operation,omitempty" json:"update_operation,omitempty"`
+	DeleteOperation string `yaml:"delete_operation,omitempty" json:"delete_operation,omitempty"`
+	// IncludeCreateResponseAttributes lists create-response-only properties to
+	// include as Computed attributes in the resource schema. The create response
+	// may carry identifiers or state the read response does not echo (e.g. an
+	// activation id returned by POST but absent from the collection read); the
+	// schema builder drops such properties by default, leaving the resource
+	// unable to track or delete the instance. Each name must be a property of
+	// the create response schema; a missing property is surfaced fail-loud.
+	IncludeCreateResponseAttributes []string `yaml:"include_create_response_attributes,omitempty" json:"include_create_response_attributes,omitempty"`
+	// PathParams maps a CRUD operation's path placeholders to the schema
+	// attributes that supply their values, overriding the generator's
+	// name-match and id-attribute fallbacks. Keys are operation names
+	// (create/read/update/delete); values map the placeholder (e.g.
+	// "entlItemId") to a schema attribute name (e.g. "eli_id"). This wires
+	// paths whose placeholder does not name-match any attribute and whose
+	// value is not the resource id (e.g. a read keyed by a create-body field).
+	PathParams    map[string]map[string]string `yaml:"path_params,omitempty" json:"path_params,omitempty"`
+	SchemaVersion int                          `yaml:"schema_version,omitempty" json:"schema_version,omitempty"`
+	StateUpgrades []StateUpgradeConfig         `yaml:"state_upgrades,omitempty" json:"state_upgrades,omitempty"`
+	Description   string                       `yaml:"description,omitempty" json:"description,omitempty"`
 }
 
 // StateUpgradeConfig describes a single state migration from a prior schema
@@ -852,6 +868,21 @@ func Validate(cfg *Config) error {
 		for j, woa := range ro.WriteOnlyAttributes {
 			if strings.TrimSpace(woa.Name) == "" {
 				errs = append(errs, fmt.Errorf("resource_overrides[%d].write_only_attributes[%d].name is required", i, j))
+			}
+		}
+		for op, m := range ro.PathParams {
+			switch op {
+			case "create", "read", "update", "delete":
+			default:
+				errs = append(errs, fmt.Errorf("resource_overrides[%d].path_params: unknown operation %q (want create, read, update, or delete)", i, op))
+			}
+			for placeholder, attr := range m {
+				if strings.TrimSpace(placeholder) == "" {
+					errs = append(errs, fmt.Errorf("resource_overrides[%d].path_params.%s: placeholder name is required", i, op))
+				}
+				if strings.TrimSpace(attr) == "" {
+					errs = append(errs, fmt.Errorf("resource_overrides[%d].path_params.%s.%s: attribute name is required", i, op, placeholder))
+				}
 			}
 		}
 		if err := validateStateUpgrades(ro.SchemaVersion, ro.StateUpgrades, i); err != nil {

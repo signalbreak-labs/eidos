@@ -135,6 +135,7 @@ func applyResourceOverrides(provider *ir.ProviderIR, overrides []config.Resource
 			applyResourceTimeoutOverride(r, override)
 			applyResourceStateUpgradeOverride(r, override)
 			applyResourceDescriptionOverride(r, override)
+			applyResourcePathParamOverride(r, override, diags)
 			if err := applyResourceAttributeOverrides(r, override, diags); err != nil {
 				return err
 			}
@@ -269,21 +270,52 @@ func applyResourceIDOverride(r *ir.ResourceIR, override config.ResourceOverride,
 		r.IDAttribute = override.IDAttribute
 		warnComputedOnlyImportTarget(r, "{"+r.IDAttribute+"}", diags)
 		dropSupersededIDAttribute(r, old, override.IDAttribute, diags)
+		// An explicit id_attribute override wires the import to the named
+		// attribute, mirroring applyResourceImportFormatOverride's "explicit
+		// configuration wins" policy: the practitioner chose the identifier, so
+		// the resource is importable by it even when the attribute is
+		// Computed-only (the value is learned out of band, e.g. spacetraders'
+		// ship symbol). Without this, an id_attribute override on a resource
+		// whose inferred identifier was Computed-only leaves the resource
+		// non-importable despite the explicit choice. Only when the resource is
+		// not already importable — an existing inferred format is preserved —
+		// and the named attribute exists in the schema (a missing attribute
+		// would emit an ImportState that references a nonexistent model field).
+		if !r.Importable && (r.CRUDMapping.Read.Method != "" || r.CRUDMapping.Read.PathTemplate != "") && schemaHasAttribute(r, r.IDAttribute) {
+			r.ImportIDFormat = "{" + r.IDAttribute + "}"
+			extendImportFormatWithRequiredReadParams(r, diags)
+			r.Importable = true
+		}
 	}
 }
 
+// schemaHasAttribute reports whether the resource schema carries an attribute
+// with the given (sanitized) name.
+func schemaHasAttribute(r *ir.ResourceIR, name string) bool {
+	for _, a := range r.Schema.Attributes {
+		if a.Name == name {
+			return true
+		}
+	}
+	return false
+}
+
 // dropSupersededIDAttribute removes the previous identifier attribute when an
-// explicit id_attribute override supersedes it with a different, user-settable
-// attribute and the old one is the inferred synthetic placeholder: the
-// Computed-only attribute resolveIdentifierAttribute appends, named for the
-// path parameter (e.g. {serverAlias} → server_alias) with no WireName because
-// the response does not echo it. Left in place it renders as a dead,
-// always-null Computed attribute in the schema and docs (gigavuecore's
-// archive_server with id_attribute: alias). The removal is surfaced with a
-// Warning, never silent, and skipped when the old attribute is real
-// (response-derived attributes always carry a WireName), is itself
-// user-settable, is still referenced by a path template, or the new
-// identifier is not present and user-settable.
+// explicit id_attribute override supersedes it with a different attribute and
+// the old one is the inferred synthetic placeholder: the Computed-only
+// attribute resolveIdentifierAttribute appends, named for the path parameter
+// (e.g. {serverAlias} → server_alias) with no WireName because the response
+// does not echo it. Left in place it renders as a dead, always-null Computed
+// attribute in the schema and docs (gigavuecore's archive_server with
+// id_attribute: alias; spacetraders' ship with id_attribute: symbol). The
+// removal is surfaced with a Warning, never silent, and skipped when the old
+// attribute is real (response-derived attributes always carry a WireName), is
+// itself user-settable, is still referenced by a path template, or the new
+// identifier is not present in the schema. The new identifier need not be
+// user-settable: when it is Computed-only (a server-assigned id echoed by the
+// response, e.g. spacetraders' ship symbol), the generator's id-attribute
+// fallback still fills the path placeholder with it, so the old synthetic is
+// dead weight either way.
 func dropSupersededIDAttribute(r *ir.ResourceIR, old, newID string, diags *diagnostics.Diagnostics) {
 	if r == nil || old == "" || old == newID {
 		return
@@ -299,9 +331,6 @@ func dropSupersededIDAttribute(r *ir.ResourceIR, old, newID string, diags *diagn
 	}
 	if oldAttr == nil || newAttr == nil {
 		return
-	}
-	if !newAttr.Required && !newAttr.Optional {
-		return // the new identifier is not user-settable; keep the old attribute
 	}
 	if oldAttr.WireName != "" || !oldAttr.ComputedOnly() {
 		return // real (echoed or input) attribute, not the synthetic placeholder
@@ -342,6 +371,72 @@ func applyResourceDescriptionOverride(r *ir.ResourceIR, override config.Resource
 	if strings.TrimSpace(override.Description) != "" {
 		r.Description = override.Description
 	}
+}
+
+// applyResourcePathParamOverride records the override's path_params mapping on
+// the resource and validates it fail-loud. Each operation must be part of the
+// resource's CRUD mapping, each placeholder must appear in that operation's
+// path template, and each mapped attribute must exist in the schema. A mapping
+// entry that fails validation is dropped (never applied) so the generator does
+// not wire a path with a nonexistent model field; the drop is surfaced with a
+// Warning, never silent. Placeholder keys tolerate surrounding braces
+// ("{entlItemId}" and "entlItemId" are equivalent).
+func applyResourcePathParamOverride(r *ir.ResourceIR, override config.ResourceOverride, diags *diagnostics.Diagnostics) {
+	if len(override.PathParams) == 0 {
+		return
+	}
+	ops := map[string]ir.OperationMappingIR{
+		"create": r.CRUDMapping.Create,
+		"read":   r.CRUDMapping.Read,
+		"delete": r.CRUDMapping.Delete,
+	}
+	if r.CRUDMapping.Update != nil {
+		ops["update"] = *r.CRUDMapping.Update
+	}
+	attrs := make(map[string]bool, len(r.Schema.Attributes))
+	for _, a := range r.Schema.Attributes {
+		attrs[a.Name] = true
+	}
+	out := make(map[string]map[string]string, len(override.PathParams))
+	for op, m := range override.PathParams {
+		mapping, ok := ops[op]
+		if !ok {
+			warnPathParamOverride(r, op, "", "", "operation is not part of the resource's CRUD mapping", diags)
+			continue
+		}
+		resolved := make(map[string]string, len(m))
+		for placeholder, attr := range m {
+			ph := strings.Trim(strings.TrimSpace(placeholder), "{}")
+			if !strings.Contains(mapping.PathTemplate, "{"+ph+"}") {
+				warnPathParamOverride(r, op, placeholder, attr, fmt.Sprintf("placeholder %q does not appear in the %s path %q", ph, op, mapping.PathTemplate), diags)
+				continue
+			}
+			if !attrs[attr] {
+				warnPathParamOverride(r, op, placeholder, attr, fmt.Sprintf("attribute %q is not in the resource schema", attr), diags)
+				continue
+			}
+			resolved[ph] = attr
+		}
+		if len(resolved) > 0 {
+			out[op] = resolved
+		}
+	}
+	if len(out) > 0 {
+		r.PathParamOverrides = out
+	}
+}
+
+// warnPathParamOverride emits a fail-loud Warning for a path_params mapping
+// entry that cannot be applied.
+func warnPathParamOverride(r *ir.ResourceIR, op, placeholder, attr, detail string, diags *diagnostics.Diagnostics) {
+	if diags == nil {
+		return
+	}
+	*diags = diags.Append(diagnostics.Diagnostic{
+		Severity: diagnostics.Warning,
+		Summary:  "path_params override cannot be applied",
+		Detail:   fmt.Sprintf("Resource %q: path_params.%s %q → %q: %s", r.Name, op, placeholder, attr, detail),
+	})
 }
 
 // applyResourceImportFormatOverride stores the configured import format on the

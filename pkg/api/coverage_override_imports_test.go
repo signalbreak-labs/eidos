@@ -166,6 +166,15 @@ func TestApplyResourceCreationOverride_SkipUserSettableID(t *testing.T) {
 	if !found {
 		t.Errorf("synthetic port_id attribute expected with skipUserSettableID, got %+v", res.Schema.Attributes)
 	}
+	// The inference-time import gate is superseded by the explicit id_attribute
+	// override, so no stale "import suppressed" warning may surface for the
+	// Computed-only inferred id (the override re-derives the format and emits
+	// the accurate warning if its own target is Computed-only).
+	for _, d := range diags {
+		if d.Severity == diagnostics.Warning && strings.Contains(d.Summary, "import suppressed") {
+			t.Errorf("stale import-suppressed warning surfaced despite id_attribute override: %+v", d)
+		}
+	}
 }
 
 // TestGroupedImportFormat_PathParamNameFallback drives the IDSimple fallback in

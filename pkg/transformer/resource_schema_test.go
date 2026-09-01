@@ -1528,6 +1528,49 @@ func TestManagedResourceSchema_TopLevelPathParameterWins(t *testing.T) {
 	}
 }
 
+func TestManagedResourceSchema_SimpleIDPathParameterNotPromoted(t *testing.T) {
+	// spacetraders' Ship: the {shipSymbol} path parameter is the ship's symbol,
+	// echoed top-level as "symbol", while "cooldown.shipSymbol" is a transient
+	// cooldown field. A simple-id resource's identity path parameter is resolved
+	// by the generator's id-attribute fallback, so the nested property must not
+	// be promoted into a spurious top-level attribute.
+	state := &SchemaSpec{Type: "object", Properties: map[string]SchemaSpec{
+		"cooldown": {Type: "object", Properties: map[string]SchemaSpec{
+			"expiration":   {Type: "string"},
+			"shipSymbol":   {Type: "string"},
+			"totalSeconds": {Type: "integer"},
+		}},
+		"symbol": {Type: "string"},
+	}}
+	c := ResourceCRUD{
+		Name:   "ship",
+		Create: &Operation{Method: MethodPost, Path: "/my/ships", ResponseSchema: state},
+		Read: &Operation{
+			Method: MethodGet, Path: "/my/ships/{shipSymbol}", ResponseSchema: state,
+			Parameters: []Parameter{{Name: "shipSymbol", In: "path", Required: true, Type: "string"}},
+		},
+		Delete: &Operation{Method: MethodPost, Path: "/my/ships/{shipSymbol}/scrap", ResponseSchema: state},
+		ID:     IDInfo{Kind: IDSimple, ParameterNames: []string{"shipSymbol"}, AttributeName: "ship_symbol", ImportFormat: "%s"},
+	}
+
+	schema, _ := ManagedResourceSchema(c)
+	if attr, ok := findAttr(schema.Attributes, "ship_symbol"); ok {
+		// The synthetic id placeholder (no WireName/WirePath) may remain until an
+		// id_attribute override supersedes it, but the nested property must never
+		// be promoted into a top-level attribute.
+		if attr.WirePath != "" || attr.WireName != "" {
+			t.Fatalf("identity path parameter must not be promoted from a nested object: %+v", attr)
+		}
+	}
+	cooldown, ok := findAttr(schema.Attributes, "cooldown")
+	if !ok {
+		t.Fatalf("cooldown missing: %+v", schema.Attributes)
+	}
+	if _, ok := findAttr(cooldown.Schema.Attributes, "ship_symbol"); !ok {
+		t.Error("cooldown.ship_symbol must remain nested")
+	}
+}
+
 func TestNestedPathPromotion_EdgeCases(t *testing.T) {
 	empty := &SchemaSpec{}
 	state, request, wirePaths, ambiguous := promoteNestedPathParameters(empty, nil, ResourceCRUD{}, nil)
@@ -1594,5 +1637,67 @@ func TestNestedPathPromotion_EdgeCases(t *testing.T) {
 	}
 	if _, ok := original.Properties["metadata"].Properties["uid"]; !ok {
 		t.Fatal("promotion mutated the source schema")
+	}
+}
+
+func TestAddCreateResponseAttributes(t *testing.T) {
+	schema := &ir.ObjectSchemaIR{Attributes: []ir.AttributeIR{
+		{Name: "eli_id", Optional: true, Schema: ir.SchemaIR{Type: ir.TypeString}},
+	}}
+	createResp := &SchemaSpec{Properties: map[string]SchemaSpec{
+		"aid":        {Type: "string", Description: "Activation ID"},
+		"macAddress": {Type: "string"},
+	}}
+	diags := &diagnostics.Diagnostics{}
+	AddCreateResponseAttributes(schema, createResp, []string{"aid", "macAddress", "missing"}, diags)
+
+	attrs := map[string]ir.AttributeIR{}
+	for _, a := range schema.Attributes {
+		attrs[a.Name] = a
+	}
+	aid, ok := attrs["aid"]
+	if !ok {
+		t.Fatalf("schema missing create-response attribute %q", "aid")
+	}
+	if !aid.Computed {
+		t.Errorf("aid.Computed = false, want true (create-response-only attributes are Computed)")
+	}
+	if aid.WireName != "aid" {
+		t.Errorf("aid.WireName = %q, want %q", aid.WireName, "aid")
+	}
+	if aid.Description != "Activation ID" {
+		t.Errorf("aid.Description = %q, want %q", aid.Description, "Activation ID")
+	}
+	if _, ok := attrs["mac_address"]; !ok {
+		t.Errorf("schema missing sanitized create-response attribute %q", "mac_address")
+	}
+	if _, ok := attrs["missing"]; ok {
+		t.Errorf("schema must not add a property absent from the create response")
+	}
+	warnings := 0
+	for _, d := range *diags {
+		if d.Severity == diagnostics.Warning {
+			warnings++
+		}
+	}
+	if warnings != 1 {
+		t.Errorf("expected 1 warning for the absent property, got %d: %v", warnings, *diags)
+	}
+}
+
+func TestAddCreateResponseAttributes_SkipsExisting(t *testing.T) {
+	schema := &ir.ObjectSchemaIR{Attributes: []ir.AttributeIR{
+		{Name: "aid", Computed: true, Schema: ir.SchemaIR{Type: ir.TypeString}},
+	}}
+	createResp := &SchemaSpec{Properties: map[string]SchemaSpec{
+		"aid": {Type: "string"},
+	}}
+	diags := &diagnostics.Diagnostics{}
+	AddCreateResponseAttributes(schema, createResp, []string{"aid"}, diags)
+	if len(schema.Attributes) != 1 {
+		t.Errorf("len(schema.Attributes) = %d, want 1 (existing attribute must not duplicate)", len(schema.Attributes))
+	}
+	if diags.HasErrors() {
+		t.Errorf("expected no errors, got %v", *diags)
 	}
 }
