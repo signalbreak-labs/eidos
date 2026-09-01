@@ -13,7 +13,7 @@ resource_overrides:
       import_format: '{workspace}:{name}'
       computed_attributes:
         - id
-      description: Read a Config
+      description: Create a Config
     - operation: createInstance
       resource_name: instance
       id_attribute: id
@@ -24,7 +24,7 @@ resource_overrides:
         - image
         - image_pull_policy
         - phase
-      description: Read an Instance
+      description: Create an Instance
     - operation: createNetwork
       resource_name: network
       id_attribute: id
@@ -37,18 +37,18 @@ resource_overrides:
         - protocol
         - selector
         - load_balancer
-      description: Read a Network
+      description: Create a Network
     - operation: createProjectForOrganization
       resource_name: project
       import_format: '{organization}:{project}'
-      description: Get a project
+      description: Create an organization project
     - operation: createSecret
       resource_name: secret
       id_attribute: id
       import_format: '{workspace}:{name}'
       computed_attributes:
         - id
-      description: Read a Secret
+      description: Create a Secret
     - operation: createStack
       resource_name: stack
       id_attribute: id
@@ -58,14 +58,14 @@ resource_overrides:
         - replicas
         - selector
         - ready_replicas
-      description: Read a Stack
+      description: Create a Stack
     - operation: createWorkspace
       resource_name: workspace
       id_attribute: name
       import_format: '{name}'
       computed_attributes:
         - phase
-      description: Read a Workspace
+      description: Create a Workspace
 datasource_overrides:
     - operation: listMembers
       datasource_name: list_members

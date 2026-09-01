@@ -50,7 +50,7 @@ func (r *SecretResource) Metadata(_ context.Context, _ resource.MetadataRequest,
 
 // Schema returns the Terraform schema for this resource.
 func (r *SecretResource) Schema(_ context.Context, _ resource.SchemaRequest, resp *resource.SchemaResponse) {
-	resp.Schema = schema.Schema{MarkdownDescription: "Read a Secret", Attributes: map[string]schema.Attribute{"api_version": schema.StringAttribute{Optional: true, Computed: true}, "data": schema.MapAttribute{Optional: true, Computed: true, ElementType: types.StringType}, "id": schema.StringAttribute{Computed: true}, "kind": schema.StringAttribute{Optional: true, Computed: true}, "name": schema.StringAttribute{Required: true}, "type": schema.StringAttribute{Optional: true, Computed: true}, "workspace": schema.StringAttribute{Required: true}}}
+	resp.Schema = schema.Schema{MarkdownDescription: "Create a Secret", Attributes: map[string]schema.Attribute{"api_version": schema.StringAttribute{Optional: true, Computed: true}, "data": schema.MapAttribute{Optional: true, Computed: true, ElementType: types.StringType}, "id": schema.StringAttribute{Computed: true}, "kind": schema.StringAttribute{Optional: true, Computed: true}, "name": schema.StringAttribute{Required: true}, "type": schema.StringAttribute{Optional: true, Computed: true}, "workspace": schema.StringAttribute{Required: true}}}
 }
 
 // IdentitySchema returns the resource identity schema shared with the paired list resource.

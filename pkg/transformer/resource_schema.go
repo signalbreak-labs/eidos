@@ -347,18 +347,13 @@ func ManagedResourceSchemaWithDiagnostics(c ResourceCRUD, diags *diagnostics.Dia
 	}
 
 	formData := createFormDataParams(c.Create)
-	if (stateSpec == nil || len(stateSpec.Properties) == 0) && len(formData) == 0 {
+	if resourceSchemaEmpty(stateSpec, formData) {
 		// No response or request body to derive a schema from: the resource has
 		// no fields to populate, so an identifier attribute here would be a
 		// synthetic placeholder that path substitution would fill with an
 		// unpopulated (null) value — a dishonest wired body. Return an empty
 		// schema with no identifier so the resource stays honestly scaffolded
 		// rather than wiring with an unpopulated id (REMAINING_GAPS §3/#12).
-		//
-		// A multipart/form-data create (e.g. a binary file upload whose read
-		// response is a scalar octet-stream body) is the exception: the formData
-		// fields are the resource's writable inputs, so the schema is derived
-		// from them even though the read response has no JSON properties.
 		return ir.ObjectSchemaIR{}, ""
 	}
 	if stateSpec == nil {
@@ -493,6 +488,16 @@ func ManagedResourceSchemaWithDiagnostics(c ResourceCRUD, diags *diagnostics.Dia
 
 	sort.Slice(attrs, func(i, j int) bool { return attrs[i].Name < attrs[j].Name })
 	return ir.ObjectSchemaIR{Attributes: attrs}, resolvedID
+}
+
+// resourceSchemaEmpty reports whether a resource has no schema to derive: no
+// response properties and no formData inputs. A multipart/form-data create
+// (e.g. a binary file upload whose read response is a scalar octet-stream body)
+// is the exception — its formData fields are the resource's writable inputs, so
+// the schema is derived from them even though the read response has no JSON
+// properties.
+func resourceSchemaEmpty(stateSpec *SchemaSpec, formData []Parameter) bool {
+	return (stateSpec == nil || len(stateSpec.Properties) == 0) && len(formData) == 0
 }
 
 type nestedPathPromotion struct {

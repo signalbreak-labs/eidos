@@ -395,6 +395,56 @@ func TestManagedResourceSchema_BodylessResourceNoSyntheticID(t *testing.T) {
 	}
 }
 
+// TestManagedResourceSchema_MultipartCreateScalarRead locks in the 3a fix: a
+// resource whose create is a multipart/form-data upload and whose read response
+// is a scalar body (no JSON properties) must still derive its schema from the
+// formData fields — the resource's writable inputs — instead of returning an
+// empty schema and staying honestly scaffolded. The binary file upload case
+// (e.g. gigavuecore config_file) previously produced an empty schema.
+func TestManagedResourceSchema_MultipartCreateScalarRead(t *testing.T) {
+	c := ResourceCRUD{
+		Name:           "upload",
+		CollectionPath: "/uploads",
+		InstancePath:   "/uploads/{upload_id}",
+		Create: &Operation{
+			Method:           MethodPost,
+			Path:             "/uploads",
+			RequestMediaType: "multipart/form-data",
+			RequestSchema: &SchemaSpec{
+				Type:     "object",
+				Required: []string{"file", "title"},
+				Properties: map[string]SchemaSpec{
+					"file":  {Type: "string", Format: "binary"},
+					"title": {Type: "string"},
+				},
+			},
+		},
+		Read: &Operation{
+			Method:         MethodGet,
+			Path:           "/uploads/{upload_id}",
+			ResponseSchema: &SchemaSpec{Type: "string", Format: "binary"},
+		},
+		Delete: &Operation{Method: MethodDelete, Path: "/uploads/{upload_id}"},
+		ID:     IDInfo{Kind: IDSimple, ParameterNames: []string{"upload_id"}, AttributeName: "upload_id", ImportFormat: "%s"},
+	}
+	schema, idAttr := ManagedResourceSchema(c)
+	if len(schema.Attributes) == 0 {
+		t.Fatalf("multipart create with scalar read must derive a schema from formData, got empty")
+	}
+	names := make(map[string]bool, len(schema.Attributes))
+	for _, a := range schema.Attributes {
+		names[a.Name] = true
+	}
+	for _, want := range []string{"file", "title"} {
+		if !names[want] {
+			t.Errorf("schema missing formData attribute %q: %+v", want, schema.Attributes)
+		}
+	}
+	if idAttr == "" {
+		t.Errorf("idAttribute = %q, want a resolved identifier for a wired upload resource", idAttr)
+	}
+}
+
 // TestManagedResourceSchema_NoDuplicateSyntheticID locks in the dup fix: when
 // the path-parameter name is itself a top-level response property (e.g.
 // /users/{username} with a response exposing username), the real attribute is

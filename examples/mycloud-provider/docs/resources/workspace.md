@@ -2,12 +2,12 @@
 page_title: "mycloud_workspace Resource - mycloud"
 subcategory: ""
 description: |-
-  Read a Workspace
+  Create a Workspace
 ---
 
 # mycloud_workspace Resource
 
-Read a Workspace
+Create a Workspace
 
 ## Example Usage
 
