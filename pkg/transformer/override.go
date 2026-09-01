@@ -269,7 +269,34 @@ func applyResourceIDOverride(r *ir.ResourceIR, override config.ResourceOverride,
 		r.IDAttribute = override.IDAttribute
 		warnComputedOnlyImportTarget(r, "{"+r.IDAttribute+"}", diags)
 		dropSupersededIDAttribute(r, old, override.IDAttribute, diags)
+		// An explicit id_attribute override wires the import to the named
+		// attribute, mirroring applyResourceImportFormatOverride's "explicit
+		// configuration wins" policy: the practitioner chose the identifier, so
+		// the resource is importable by it even when the attribute is
+		// Computed-only (the value is learned out of band, e.g. spacetraders'
+		// ship symbol). Without this, an id_attribute override on a resource
+		// whose inferred identifier was Computed-only leaves the resource
+		// non-importable despite the explicit choice. Only when the resource is
+		// not already importable — an existing inferred format is preserved —
+		// and the named attribute exists in the schema (a missing attribute
+		// would emit an ImportState that references a nonexistent model field).
+		if !r.Importable && (r.CRUDMapping.Read.Method != "" || r.CRUDMapping.Read.PathTemplate != "") && schemaHasAttribute(r, r.IDAttribute) {
+			r.ImportIDFormat = "{" + r.IDAttribute + "}"
+			extendImportFormatWithRequiredReadParams(r, diags)
+			r.Importable = true
+		}
 	}
+}
+
+// schemaHasAttribute reports whether the resource schema carries an attribute
+// with the given (sanitized) name.
+func schemaHasAttribute(r *ir.ResourceIR, name string) bool {
+	for _, a := range r.Schema.Attributes {
+		if a.Name == name {
+			return true
+		}
+	}
+	return false
 }
 
 // dropSupersededIDAttribute removes the previous identifier attribute when an

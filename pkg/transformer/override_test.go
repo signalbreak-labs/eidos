@@ -400,6 +400,16 @@ func TestApplyOverrides_IDAttributeDropsSupersededPlaceholder_ComputedNewID(t *t
 	if len(r.Schema.Attributes) != 1 || r.Schema.Attributes[0].Name != "symbol" {
 		t.Errorf("Schema.Attributes = %+v, want only [symbol]", r.Schema.Attributes)
 	}
+	// The explicit id_attribute override wires the import to the Computed-only
+	// id: the practitioner chose the identifier, so the resource is importable
+	// by it (the value is learned out of band) even though the inferred
+	// placeholder was Computed-only and would have suppressed import.
+	if !r.Importable {
+		t.Errorf("Importable = false, want true: id_attribute override must wire the import to the named attribute")
+	}
+	if r.ImportIDFormat != "{symbol}" {
+		t.Errorf("ImportIDFormat = %q, want %q", r.ImportIDFormat, "{symbol}")
+	}
 }
 
 func TestApplyOverrides_ImportFormatAutoExtendedWithReadParams(t *testing.T) {
