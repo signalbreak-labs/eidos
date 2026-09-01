@@ -350,6 +350,58 @@ func TestApplyOverrides_IDAttributeKeepsRealEchoedAttribute(t *testing.T) {
 	}
 }
 
+func TestApplyOverrides_IDAttributeDropsSupersededPlaceholder_ComputedNewID(t *testing.T) {
+	strSchema := ir.SchemaIR{Type: ir.TypeString}
+	provider := &ir.ProviderIR{
+		Resources: []ir.ResourceIR{{
+			Name:        "ship",
+			TypeName:    "ship",
+			IDAttribute: "ship_symbol",
+			// symbol is the real server-assigned id echoed by the response
+			// (Computed-only, carries its WireName); ship_symbol is the synthetic
+			// Computed placeholder the transformer appends for the {shipSymbol}
+			// path parameter (no WireName — the response never echoes that name
+			// at the top level). The override supersedes the placeholder with a
+			// Computed-only id, which must still drop the dead placeholder: the
+			// generator's id-attribute fallback fills {shipSymbol} with
+			// state.Symbol, so the synthetic is never load-bearing.
+			Schema: ir.ObjectSchemaIR{Attributes: []ir.AttributeIR{
+				{Name: "symbol", Computed: true, WireName: "symbol", Schema: strSchema},
+				{Name: "ship_symbol", Computed: true, Schema: strSchema},
+			}},
+			CRUDMapping: ir.CRUDMappingIR{
+				Create: ir.OperationMappingIR{Method: "POST", PathTemplate: "/my/ships"},
+				Read:   ir.OperationMappingIR{Method: "GET", PathTemplate: "/my/ships/{shipSymbol}"},
+				Delete: ir.OperationMappingIR{Method: "POST", PathTemplate: "/my/ships/{shipSymbol}/scrap"},
+			},
+		}},
+	}
+	cfg := &config.Config{
+		Provider: config.ProviderConfig{Name: "test", Version: "0.0.1"},
+		ResourceOverrides: []config.ResourceOverride{{
+			Schema:      "ship",
+			IDAttribute: "symbol",
+		}},
+	}
+
+	if err := ApplyOverrides(provider, cfg); err != nil {
+		t.Fatalf("ApplyOverrides() = %v, want nil", err)
+	}
+
+	r := provider.Resources[0]
+	if r.IDAttribute != "symbol" {
+		t.Fatalf("IDAttribute = %q, want %q", r.IDAttribute, "symbol")
+	}
+	for _, a := range r.Schema.Attributes {
+		if a.Name == "ship_symbol" {
+			t.Errorf("ship_symbol attribute still present after id_attribute override; schema now: %+v", r.Schema.Attributes)
+		}
+	}
+	if len(r.Schema.Attributes) != 1 || r.Schema.Attributes[0].Name != "symbol" {
+		t.Errorf("Schema.Attributes = %+v, want only [symbol]", r.Schema.Attributes)
+	}
+}
+
 func TestApplyOverrides_ImportFormatAutoExtendedWithReadParams(t *testing.T) {
 	strSchema := ir.SchemaIR{Type: ir.TypeString}
 	provider := &ir.ProviderIR{

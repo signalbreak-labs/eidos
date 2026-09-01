@@ -2460,9 +2460,12 @@ func applyResourceCreationOverride(preview *ir.ProviderIR, spec *parser.Spec, pr
 	if res == nil {
 		return
 	}
-	if strings.TrimSpace(ro.IDAttribute) != "" {
-		res.IDAttribute = ro.IDAttribute
-	}
+	// The override's id_attribute is applied later by applyResourceIDOverride
+	// (via transformer.ApplyOverridesWithDiagnostics), which also drops the
+	// superseded synthetic placeholder when the override names a different
+	// attribute (e.g. spacetraders' ship: {shipSymbol} → the Computed "symbol"
+	// property). Setting it here would make applyResourceIDOverride see
+	// old == newID and skip the drop, leaving the dead placeholder in the schema.
 	preview.Resources = append(preview.Resources, *res)
 	markConsumed(consumed, createPath, createMethod)
 	if readPath != "" {

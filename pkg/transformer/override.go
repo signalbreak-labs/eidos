@@ -273,17 +273,21 @@ func applyResourceIDOverride(r *ir.ResourceIR, override config.ResourceOverride,
 }
 
 // dropSupersededIDAttribute removes the previous identifier attribute when an
-// explicit id_attribute override supersedes it with a different, user-settable
-// attribute and the old one is the inferred synthetic placeholder: the
-// Computed-only attribute resolveIdentifierAttribute appends, named for the
-// path parameter (e.g. {serverAlias} → server_alias) with no WireName because
-// the response does not echo it. Left in place it renders as a dead,
-// always-null Computed attribute in the schema and docs (gigavuecore's
-// archive_server with id_attribute: alias). The removal is surfaced with a
-// Warning, never silent, and skipped when the old attribute is real
-// (response-derived attributes always carry a WireName), is itself
-// user-settable, is still referenced by a path template, or the new
-// identifier is not present and user-settable.
+// explicit id_attribute override supersedes it with a different attribute and
+// the old one is the inferred synthetic placeholder: the Computed-only
+// attribute resolveIdentifierAttribute appends, named for the path parameter
+// (e.g. {serverAlias} → server_alias) with no WireName because the response
+// does not echo it. Left in place it renders as a dead, always-null Computed
+// attribute in the schema and docs (gigavuecore's archive_server with
+// id_attribute: alias; spacetraders' ship with id_attribute: symbol). The
+// removal is surfaced with a Warning, never silent, and skipped when the old
+// attribute is real (response-derived attributes always carry a WireName), is
+// itself user-settable, is still referenced by a path template, or the new
+// identifier is not present in the schema. The new identifier need not be
+// user-settable: when it is Computed-only (a server-assigned id echoed by the
+// response, e.g. spacetraders' ship symbol), the generator's id-attribute
+// fallback still fills the path placeholder with it, so the old synthetic is
+// dead weight either way.
 func dropSupersededIDAttribute(r *ir.ResourceIR, old, newID string, diags *diagnostics.Diagnostics) {
 	if r == nil || old == "" || old == newID {
 		return
@@ -299,9 +303,6 @@ func dropSupersededIDAttribute(r *ir.ResourceIR, old, newID string, diags *diagn
 	}
 	if oldAttr == nil || newAttr == nil {
 		return
-	}
-	if !newAttr.Required && !newAttr.Optional {
-		return // the new identifier is not user-settable; keep the old attribute
 	}
 	if oldAttr.WireName != "" || !oldAttr.ComputedOnly() {
 		return // real (echoed or input) attribute, not the synthetic placeholder

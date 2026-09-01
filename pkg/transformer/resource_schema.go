@@ -534,6 +534,9 @@ func promoteNestedPathParameters(stateSpec, requestSpec *SchemaSpec, c ResourceC
 		if topLevel[attrName] {
 			continue
 		}
+		if skipNestedPathPromotion(c, param, stateSpec) {
+			continue
+		}
 
 		var candidates []nestedPathPromotion
 		for _, parent := range parents {
@@ -584,6 +587,37 @@ func promoteNestedPathParameters(stateSpec, requestSpec *SchemaSpec, c ResourceC
 		wirePaths[promotion.child] = promotion.parent
 	}
 	return promoteNestedProperties(stateSpec, promotions), promoteNestedProperties(requestSpec, promotions), wirePaths, ambiguous
+}
+
+// skipNestedPathPromotion reports whether a path parameter should not be
+// promoted from a nested response object. A simple-id resource's identity path
+// parameter is already resolved by the generator's id-attribute fallback (the
+// resource id is substituted into the URL), so promoting a same-named nested
+// property would only add a spurious top-level attribute — e.g. spacetraders'
+// Ship: the {shipSymbol} path parameter is the ship's symbol, echoed top-level
+// as "symbol", while the nested "cooldown.shipSymbol" is a transient cooldown
+// field. When a top-level primitive property plausibly represents the path
+// parameter (exact, suffix, or prefix name match), the promotion is skipped and
+// the id fallback resolves the segment. Composite identities keep promoting:
+// their id fallback is suppressed, so nested identity parameters must be lifted.
+func skipNestedPathPromotion(c ResourceCRUD, param string, stateSpec *SchemaSpec) bool {
+	if c.ID.Kind != IDSimple || len(c.ID.ParameterNames) != 1 {
+		return false
+	}
+	if SanitizeAttributeName(c.ID.ParameterNames[0]) != SanitizeAttributeName(param) {
+		return false // not the identity path parameter
+	}
+	lower := strings.ToLower(param)
+	for name, prop := range stateSpec.Properties {
+		if !primitiveSchemaSpec(prop) {
+			continue
+		}
+		n := strings.ToLower(name)
+		if n == lower || strings.HasSuffix(lower, n) || strings.HasPrefix(lower, n) {
+			return true
+		}
+	}
+	return false
 }
 
 func resourcePathParameterNames(c ResourceCRUD) []string {
@@ -727,6 +761,16 @@ func resolveIdentifierAttribute(attrs []ir.AttributeIR, c ResourceCRUD, stateSpe
 	if !skipUserSettableID {
 		idAttr = userSettableIdentifier(attrs, stateSpec, requestSpec, idAttribute)
 	}
+	if idAttr == "" && !skipUserSettableID {
+		// No practitioner-suppliable identifier: when the response echoes a
+		// Computed-only property whose name relates to the path parameter, that
+		// property is the real identifier even though the practitioner cannot
+		// supply it (e.g. spacetraders' Ship: {shipSymbol} ↔ the Computed
+		// "symbol" property). The synthetic placeholder is never populated by the
+		// create response, so preferring the echoed property keeps the resource
+		// honest and avoids a dead Computed attribute.
+		idAttr = computedEchoedIdentifier(attrs, idAttribute)
+	}
 	if idAttr != "" {
 		return idAttr, attrs
 	}
@@ -801,6 +845,49 @@ func userSettableIdentifier(attrs []ir.AttributeIR, stateSpec, requestSpec *Sche
 		}
 		if kind > bestKind || (kind == bestKind && len(n) > bestLen) {
 			best = snake
+			bestKind = kind
+			bestLen = len(n)
+		}
+	}
+	return best
+}
+
+// computedEchoedIdentifier returns the name of a Computed-only response property
+// whose name relates to the path parameter (case-insensitive exact, suffix, or
+// prefix match). The synthetic placeholder is never populated by the create
+// response, so when the response echoes a same-named property that property is
+// the real identifier even though the practitioner cannot supply it (e.g.
+// spacetraders' Ship: {shipSymbol} ↔ the Computed "symbol" property). It runs
+// after userSettableIdentifier so a practitioner-suppliable identifier still
+// wins; exact matches beat suffix matches, which beat prefix matches, and within
+// a category the longest name wins.
+func computedEchoedIdentifier(attrs []ir.AttributeIR, idAttribute string) string {
+	lower := strings.ToLower(idAttribute)
+	best := ""
+	bestKind := 0 // 3 = exact, 2 = suffix, 1 = prefix
+	bestLen := 0
+	for _, a := range attrs {
+		if !a.Computed || a.Optional || a.Required {
+			continue
+		}
+		n := strings.ToLower(a.WireName)
+		if n == "" {
+			n = strings.ToLower(a.Name)
+		}
+		kind := 0
+		switch {
+		case n == lower:
+			kind = 3
+		case strings.HasSuffix(lower, n):
+			kind = 2
+		case strings.HasPrefix(lower, n):
+			kind = 1
+		}
+		if kind == 0 {
+			continue
+		}
+		if kind > bestKind || (kind == bestKind && len(n) > bestLen) {
+			best = a.Name
 			bestKind = kind
 			bestLen = len(n)
 		}
