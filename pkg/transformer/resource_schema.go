@@ -582,21 +582,7 @@ func promoteNestedPathParameters(stateSpec, requestSpec *SchemaSpec, c ResourceC
 			continue
 		}
 
-		var candidates []nestedPathPromotion
-		for _, parent := range parents {
-			wrapper := stateSpec.Properties[parent]
-			children := make([]string, 0, len(wrapper.Properties))
-			for child := range wrapper.Properties {
-				children = append(children, child)
-			}
-			sort.Strings(children)
-			for _, child := range children {
-				if SanitizeAttributeName(child) != attrName || !primitiveSchemaSpec(wrapper.Properties[child]) {
-					continue
-				}
-				candidates = append(candidates, nestedPathPromotion{parent: parent, child: child})
-			}
-		}
+		candidates := nestedPathCandidates(stateSpec, parents, attrName)
 
 		switch len(candidates) {
 		case 1:
@@ -662,6 +648,28 @@ func skipNestedPathPromotion(c ResourceCRUD, param string, stateSpec *SchemaSpec
 		}
 	}
 	return false
+}
+
+// nestedPathCandidates returns the one-level response properties whose
+// sanitized name matches attrName, as parent.child promotions. Extracted from
+// promoteNestedPathParameters so the candidate scan stays a single concern.
+func nestedPathCandidates(stateSpec *SchemaSpec, parents []string, attrName string) []nestedPathPromotion {
+	var candidates []nestedPathPromotion
+	for _, parent := range parents {
+		wrapper := stateSpec.Properties[parent]
+		children := make([]string, 0, len(wrapper.Properties))
+		for child := range wrapper.Properties {
+			children = append(children, child)
+		}
+		sort.Strings(children)
+		for _, child := range children {
+			if SanitizeAttributeName(child) != attrName || !primitiveSchemaSpec(wrapper.Properties[child]) {
+				continue
+			}
+			candidates = append(candidates, nestedPathPromotion{parent: parent, child: child})
+		}
+	}
+	return candidates
 }
 
 func resourcePathParameterNames(c ResourceCRUD) []string {

@@ -236,10 +236,10 @@ type ResourceOverride struct {
 	// GET|DELETE /dashboards/uid/{uid}). When set, the override builds a
 	// managed resource from these operations instead of relying on inference
 	// (G8). Operation is the seed/match operation.
-	CreateOperation string               `yaml:"create_operation,omitempty" json:"create_operation,omitempty"`
-	ReadOperation   string               `yaml:"read_operation,omitempty" json:"read_operation,omitempty"`
-	UpdateOperation string               `yaml:"update_operation,omitempty" json:"update_operation,omitempty"`
-	DeleteOperation string               `yaml:"delete_operation,omitempty" json:"delete_operation,omitempty"`
+	CreateOperation string `yaml:"create_operation,omitempty" json:"create_operation,omitempty"`
+	ReadOperation   string `yaml:"read_operation,omitempty" json:"read_operation,omitempty"`
+	UpdateOperation string `yaml:"update_operation,omitempty" json:"update_operation,omitempty"`
+	DeleteOperation string `yaml:"delete_operation,omitempty" json:"delete_operation,omitempty"`
 	// IncludeCreateResponseAttributes lists create-response-only properties to
 	// include as Computed attributes in the resource schema. The create response
 	// may carry identifiers or state the read response does not echo (e.g. an
@@ -255,10 +255,10 @@ type ResourceOverride struct {
 	// "entlItemId") to a schema attribute name (e.g. "eli_id"). This wires
 	// paths whose placeholder does not name-match any attribute and whose
 	// value is not the resource id (e.g. a read keyed by a create-body field).
-	PathParams map[string]map[string]string `yaml:"path_params,omitempty" json:"path_params,omitempty"`
-	SchemaVersion   int                  `yaml:"schema_version,omitempty" json:"schema_version,omitempty"`
-	StateUpgrades   []StateUpgradeConfig `yaml:"state_upgrades,omitempty" json:"state_upgrades,omitempty"`
-	Description     string               `yaml:"description,omitempty" json:"description,omitempty"`
+	PathParams    map[string]map[string]string `yaml:"path_params,omitempty" json:"path_params,omitempty"`
+	SchemaVersion int                          `yaml:"schema_version,omitempty" json:"schema_version,omitempty"`
+	StateUpgrades []StateUpgradeConfig         `yaml:"state_upgrades,omitempty" json:"state_upgrades,omitempty"`
+	Description   string                       `yaml:"description,omitempty" json:"description,omitempty"`
 }
 
 // StateUpgradeConfig describes a single state migration from a prior schema
