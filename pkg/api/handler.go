@@ -1899,7 +1899,7 @@ func ephemeralFromOverride(eo config.EphemeralOverride, providerName string) ir.
 }
 
 func listResourceFromOverride(lo config.ListResourceOverride, providerName string) ir.ListResourceIR {
-	name := transformer.ToSnakeCase(lo.Resource)
+	name := listResourceNameFromOverride(lo)
 	lr := ir.ListResourceIR{
 		Name:            name,
 		FullName:        providerName + "_" + name,
@@ -1910,6 +1910,26 @@ func listResourceFromOverride(lo config.ListResourceOverride, providerName strin
 		lr.PaginationStyle = lo.Pagination.Style
 	}
 	return lr
+}
+
+// listResourceNameFromOverride derives a list resource's name from an override.
+// The explicit `resource` key wins; when it is absent the name falls back to the
+// operation identifier, mirroring functionFromOverride. The operation string may
+// be either an OpenAPI operationId ("loadAllIcapProfiles") or a "METHOD /path"
+// form ("GET /apps/icap/profiles"); the latter is derived via DeriveOperationID
+// so both forms produce a stable snake_case name instead of an empty one.
+func listResourceNameFromOverride(lo config.ListResourceOverride) string {
+	if name := transformer.ToSnakeCase(lo.Resource); name != "" {
+		return name
+	}
+	op := strings.TrimSpace(lo.Operation)
+	if op == "" {
+		return ""
+	}
+	if parts := strings.Fields(op); len(parts) == 2 {
+		return transformer.DeriveOperationID(parts[0], parts[1])
+	}
+	return transformer.ToSnakeCase(op)
 }
 
 func functionFromOverride(fo config.FunctionOverride, providerName string) ir.FunctionIR {
@@ -3066,19 +3086,21 @@ func isConsumed(consumed map[string]map[string]bool, path, method string) bool {
 }
 
 // crudGroupDescriptionOp returns the parser operation whose summary/description
-// best describes a CRUD-grouped resource, preferring the Read (GET instance)
-// operation then the Create operation. It feeds operationDescription so a
-// grouped resource gets the same description fallback chain as a single-op
-// construct (spec description if a real sentence, else summary, else a
-// generated "Manages the X resource." phrase).
+// best describes a CRUD-grouped resource, preferring the Create operation then
+// the Read (GET instance) operation. A resource's doc page is primarily about
+// creating and managing the resource, and the Create operation's description
+// ("Create a new X") is usually more accurate than the Read's ("Get X"). It
+// feeds operationDescription so a grouped resource gets the same description
+// fallback chain as a single-op construct (spec description if a real sentence,
+// else summary, else a generated "Manages the X resource." phrase).
 func crudGroupDescriptionOp(spec *parser.Spec, g transformer.ResourceCRUD) *parser.Operation {
-	if g.Read != nil {
-		if op := parserOp(spec, g.Read.Path, string(g.Read.Method)); op != nil {
+	if g.Create != nil {
+		if op := parserOp(spec, g.Create.Path, string(g.Create.Method)); op != nil {
 			return op
 		}
 	}
-	if g.Create != nil {
-		if op := parserOp(spec, g.Create.Path, string(g.Create.Method)); op != nil {
+	if g.Read != nil {
+		if op := parserOp(spec, g.Read.Path, string(g.Read.Method)); op != nil {
 			return op
 		}
 	}

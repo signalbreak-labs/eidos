@@ -28,7 +28,7 @@
     {
       "path": "docs/resources/pet.md",
       "reason": "documentation for resource pet",
-      "body_hash": "78f04d2edc8d1d69"
+      "body_hash": "500cb94d433cb1ca"
     },
     {
       "path": "examples/resources/pet/resource.tf",
@@ -38,7 +38,7 @@
     {
       "path": "generator.yaml",
       "reason": "generated generator configuration",
-      "body_hash": "0c80784906a3ba55"
+      "body_hash": "c3ee160be563f6c5"
     },
     {
       "path": "go.mod",
@@ -103,7 +103,7 @@
     {
       "path": "internal/provider/resource_pet.go",
       "reason": "resource multi-file-pets_pet",
-      "body_hash": "c5adf9c253b36fdb"
+      "body_hash": "92c09baaee883653"
     },
     {
       "path": "internal/provider/resource_pet_acceptance_test.go",

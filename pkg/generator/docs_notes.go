@@ -22,9 +22,11 @@ func docsNotWired(kind string) string {
 
 // docsUpdateNotWiredNote is the admonition for a resource whose CRUD bodies are
 // wired but whose Update is not (the API exposes no usable update mapping). The
-// generated Update keeps its honest scaffold, so in-place changes fail and the
-// resource must be replaced instead.
-const docsUpdateNotWiredNote = "~> **Note:** The update operation for this resource is not wired to a remote API endpoint: the API spec exposes no usable update mapping. Changing any configuration fails at apply time with an explicit \"not wired\" diagnostic. To change this resource, replace it (for example `terraform apply -replace=...`); create, read, and delete remain functional."
+// generated Update keeps its honest scaffold, but every config-settable
+// attribute carries a RequiresReplace plan modifier, so any configuration
+// change proposes a replacement (which the wired Create/Delete pair can
+// execute) instead of an in-place update that would fail at apply.
+const docsUpdateNotWiredNote = "~> **Note:** The update operation for this resource is not wired to a remote API endpoint: the API spec exposes no usable update mapping. Changing any configuration attribute triggers a resource replacement (all config-settable attributes carry a RequiresReplace plan modifier); create, read, and delete remain functional."
 
 // docsActionTFVersionNote is the admonition for actions, which require
 // Terraform 1.14 or later and are invoked via -invoke or a lifecycle trigger,

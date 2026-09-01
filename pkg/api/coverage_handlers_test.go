@@ -222,7 +222,7 @@ func TestGroupSourceOperation(t *testing.T) {
 	}
 }
 
-// TestCrudGroupDescriptionOp covers the read-then-create priority and the nil
+// TestCrudGroupDescriptionOp covers the create-then-read priority and the nil
 // fallback.
 func TestCrudGroupDescriptionOp(t *testing.T) {
 	spec := &parser.Spec{Paths: map[string]*parser.PathItem{
@@ -237,14 +237,14 @@ func TestCrudGroupDescriptionOp(t *testing.T) {
 		Create: &transformer.Operation{Path: "/widgets", Method: transformer.MethodPost},
 		Read:   &transformer.Operation{Path: "/widgets/{id}", Method: transformer.MethodGet},
 	}
-	if op := crudGroupDescriptionOp(spec, g); op == nil || op.OperationID != "getWidget" {
-		t.Errorf("read priority = %+v, want getWidget", op)
-	}
-	g.Read = nil
 	if op := crudGroupDescriptionOp(spec, g); op == nil || op.OperationID != "createWidget" {
-		t.Errorf("create fallback = %+v, want createWidget", op)
+		t.Errorf("create priority = %+v, want createWidget", op)
 	}
 	g.Create = nil
+	if op := crudGroupDescriptionOp(spec, g); op == nil || op.OperationID != "getWidget" {
+		t.Errorf("read fallback = %+v, want getWidget", op)
+	}
+	g.Read = nil
 	if op := crudGroupDescriptionOp(spec, g); op != nil {
 		t.Errorf("empty group = %+v, want nil", op)
 	}

@@ -38,7 +38,7 @@
     {
       "path": "docs/resources/pet.md",
       "reason": "documentation for resource pet",
-      "body_hash": "07cf20916eb0a7ae"
+      "body_hash": "27cb9b7a33fa1aef"
     },
     {
       "path": "examples/data-sources/list_pets/data-source.tf",
@@ -58,7 +58,7 @@
     {
       "path": "generator.yaml",
       "reason": "generated generator configuration",
-      "body_hash": "51e15e8dbbd87761"
+      "body_hash": "d740db7deeca510e"
     },
     {
       "path": "go.mod",
@@ -158,7 +158,7 @@
     {
       "path": "internal/provider/resource_pet.go",
       "reason": "resource mycloud-pets_pet",
-      "body_hash": "c613f15a79dc91b1"
+      "body_hash": "e393fbf1147bfa66"
     },
     {
       "path": "internal/provider/resource_pet_acceptance_test.go",
