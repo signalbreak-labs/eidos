@@ -2524,6 +2524,11 @@ func resourceFromOverrideCRUD(spec *parser.Spec, providerName string, g transfor
 		// A CRUD group whose source operation is deprecated surfaces as a
 		// deprecated resource so the flag reaches the generated schema (M-10).
 		DeprecationMessage: groupDeprecationMessage(spec, g),
+		// The collection path is what pairs this resource with a list resource
+		// (pairListResourceRegistrations). Inferred groups set it in
+		// buildGroupedResources; override-created groups must carry it too or the
+		// paired list resource stays unregistered (G8).
+		CollectionPath: g.CollectionPath,
 	}
 	if g.Create != nil {
 		res.CRUDMapping.Create = resourceOperationMapping(spec, string(g.Create.Method), g.Create.Path, parserOp(spec, g.Create.Path, string(g.Create.Method)), envelopeOf(g.Create))
