@@ -262,6 +262,10 @@ func convertResources(provider ir.ProviderIR) []config.ResourceOverride {
 				ro.UpdateOperation = r.CRUDMapping.Update.OperationID
 			}
 			ro.DeleteOperation = r.CRUDMapping.Delete.OperationID
+			// The create-response-only attributes and path-param mapping are not
+			// reproducible from inference, so re-emit them for round-trip too.
+			ro.IncludeCreateResponseAttributes = r.IncludeCreateResponseAttributes
+			ro.PathParams = r.PathParamOverrides
 		}
 		// A data source emitted by the resource_overrides.generate_datasource
 		// opt-in carries the resource's SourceOperation (not the read operation's)

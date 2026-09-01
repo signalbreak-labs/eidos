@@ -1639,3 +1639,65 @@ func TestNestedPathPromotion_EdgeCases(t *testing.T) {
 		t.Fatal("promotion mutated the source schema")
 	}
 }
+
+func TestAddCreateResponseAttributes(t *testing.T) {
+	schema := &ir.ObjectSchemaIR{Attributes: []ir.AttributeIR{
+		{Name: "eli_id", Optional: true, Schema: ir.SchemaIR{Type: ir.TypeString}},
+	}}
+	createResp := &SchemaSpec{Properties: map[string]SchemaSpec{
+		"aid":        {Type: "string", Description: "Activation ID"},
+		"macAddress": {Type: "string"},
+	}}
+	diags := &diagnostics.Diagnostics{}
+	AddCreateResponseAttributes(schema, createResp, []string{"aid", "macAddress", "missing"}, diags)
+
+	attrs := map[string]ir.AttributeIR{}
+	for _, a := range schema.Attributes {
+		attrs[a.Name] = a
+	}
+	aid, ok := attrs["aid"]
+	if !ok {
+		t.Fatalf("schema missing create-response attribute %q", "aid")
+	}
+	if !aid.Computed {
+		t.Errorf("aid.Computed = false, want true (create-response-only attributes are Computed)")
+	}
+	if aid.WireName != "aid" {
+		t.Errorf("aid.WireName = %q, want %q", aid.WireName, "aid")
+	}
+	if aid.Description != "Activation ID" {
+		t.Errorf("aid.Description = %q, want %q", aid.Description, "Activation ID")
+	}
+	if _, ok := attrs["mac_address"]; !ok {
+		t.Errorf("schema missing sanitized create-response attribute %q", "mac_address")
+	}
+	if _, ok := attrs["missing"]; ok {
+		t.Errorf("schema must not add a property absent from the create response")
+	}
+	warnings := 0
+	for _, d := range *diags {
+		if d.Severity == diagnostics.Warning {
+			warnings++
+		}
+	}
+	if warnings != 1 {
+		t.Errorf("expected 1 warning for the absent property, got %d: %v", warnings, *diags)
+	}
+}
+
+func TestAddCreateResponseAttributes_SkipsExisting(t *testing.T) {
+	schema := &ir.ObjectSchemaIR{Attributes: []ir.AttributeIR{
+		{Name: "aid", Computed: true, Schema: ir.SchemaIR{Type: ir.TypeString}},
+	}}
+	createResp := &SchemaSpec{Properties: map[string]SchemaSpec{
+		"aid": {Type: "string"},
+	}}
+	diags := &diagnostics.Diagnostics{}
+	AddCreateResponseAttributes(schema, createResp, []string{"aid"}, diags)
+	if len(schema.Attributes) != 1 {
+		t.Errorf("len(schema.Attributes) = %d, want 1 (existing attribute must not duplicate)", len(schema.Attributes))
+	}
+	if diags.HasErrors() {
+		t.Errorf("expected no errors, got %v", *diags)
+	}
+}

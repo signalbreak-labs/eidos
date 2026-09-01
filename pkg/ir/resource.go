@@ -48,6 +48,19 @@ type ResourceIR struct {
 	// from the same group so the two can share a type name. Empty for
 	// override-created resources, which have no inferred group.
 	CollectionPath string `json:"collection_path,omitempty"`
+	// IncludeCreateResponseAttributes lists create-response-only properties the
+	// override asked to keep as Computed attributes (config
+	// ResourceOverride.IncludeCreateResponseAttributes). Carried so the config
+	// generator can re-emit the override on round-trip; the attributes
+	// themselves are added to Schema at build time.
+	IncludeCreateResponseAttributes []string `json:"include_create_response_attributes,omitempty"`
+	// PathParamOverrides maps a CRUD operation (create/read/update/delete) to a
+	// path-placeholder → schema-attribute-name mapping supplied by the
+	// override. The generator consults it before the name-match and
+	// id-attribute fallbacks when filling path placeholders, wiring paths whose
+	// placeholder does not name-match any attribute and whose value is not the
+	// resource id.
+	PathParamOverrides map[string]map[string]string `json:"path_param_overrides,omitempty"`
 }
 
 // StateUpgradeIR describes a single migration from a prior schema version to the

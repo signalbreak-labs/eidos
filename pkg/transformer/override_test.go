@@ -2717,3 +2717,94 @@ func TestApplyOverrides_ExactNameWinsOverFuzzyMatch(t *testing.T) {
 		t.Errorf("distinct attribute username must keep Required (not be claimed by the fuzzy match), got %+v", collateral)
 	}
 }
+
+func TestApplyOverrides_PathParams(t *testing.T) {
+	provider := &ir.ProviderIR{
+		Resources: []ir.ResourceIR{{
+			Name:            "activation",
+			TypeName:        "activation",
+			SourceOperation: "newEmsActivations",
+			Schema: ir.ObjectSchemaIR{Attributes: []ir.AttributeIR{
+				{Name: "eli_id", Optional: true, Schema: ir.SchemaIR{Type: ir.TypeString}},
+				{Name: "aid", Computed: true, Schema: ir.SchemaIR{Type: ir.TypeString}},
+			}},
+			CRUDMapping: ir.CRUDMappingIR{
+				Create: ir.OperationMappingIR{Method: "POST", PathTemplate: "/licensing/ems/activations"},
+				Read:   ir.OperationMappingIR{Method: "GET", PathTemplate: "/licensing/ems/activations/{entlItemId}"},
+				Delete: ir.OperationMappingIR{Method: "DELETE", PathTemplate: "/licensing/ems/reclaim/{aid}"},
+			},
+		}},
+	}
+	cfg := &config.Config{
+		Provider: config.ProviderConfig{Name: "test", Version: "0.0.1"},
+		ResourceOverrides: []config.ResourceOverride{{
+			Operation: "newEmsActivations",
+			PathParams: map[string]map[string]string{
+				"read": {"entlItemId": "eli_id"},
+			},
+		}},
+	}
+
+	diags := &diagnostics.Diagnostics{}
+	if err := ApplyOverridesWithDiagnostics(provider, cfg, diags); err != nil {
+		t.Fatalf("ApplyOverridesWithDiagnostics() error = %v", err)
+	}
+
+	r := provider.Resources[0]
+	got := r.PathParamOverrides["read"]["entlItemId"]
+	if got != "eli_id" {
+		t.Errorf("PathParamOverrides[read][entlItemId] = %q, want %q", got, "eli_id")
+	}
+	if diags.HasErrors() {
+		t.Errorf("expected no errors, got %v", *diags)
+	}
+}
+
+func TestApplyOverrides_PathParamsValidation(t *testing.T) {
+	provider := &ir.ProviderIR{
+		Resources: []ir.ResourceIR{{
+			Name:            "activation",
+			TypeName:        "activation",
+			SourceOperation: "newEmsActivations",
+			Schema: ir.ObjectSchemaIR{Attributes: []ir.AttributeIR{
+				{Name: "eli_id", Optional: true, Schema: ir.SchemaIR{Type: ir.TypeString}},
+			}},
+			CRUDMapping: ir.CRUDMappingIR{
+				Read: ir.OperationMappingIR{Method: "GET", PathTemplate: "/licensing/ems/activations/{entlItemId}"},
+			},
+		}},
+	}
+	cfg := &config.Config{
+		Provider: config.ProviderConfig{Name: "test", Version: "0.0.1"},
+		ResourceOverrides: []config.ResourceOverride{{
+			Operation: "newEmsActivations",
+			PathParams: map[string]map[string]string{
+				// Unknown operation name.
+				"fetch": {"entlItemId": "eli_id"},
+				// Placeholder not in the read path.
+				"read": {"bogus": "eli_id"},
+				// Attribute not in the schema.
+				"delete": {"aid": "aid"},
+			},
+		}},
+	}
+
+	diags := &diagnostics.Diagnostics{}
+	if err := ApplyOverridesWithDiagnostics(provider, cfg, diags); err != nil {
+		t.Fatalf("ApplyOverridesWithDiagnostics() error = %v", err)
+	}
+
+	r := provider.Resources[0]
+	if len(r.PathParamOverrides) != 0 {
+		t.Errorf("PathParamOverrides = %v, want empty (every entry failed validation)", r.PathParamOverrides)
+	}
+	warnings := 0
+	for _, d := range *diags {
+		if d.Severity == diagnostics.Warning {
+			warnings++
+		}
+	}
+	if warnings != 3 {
+		t.Errorf("expected 3 warnings, got %d: %v", warnings, *diags)
+	}
+}

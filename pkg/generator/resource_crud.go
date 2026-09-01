@@ -239,15 +239,15 @@ func AnyResourceXMLBody(resources []ir.ResourceIR) bool {
 func planResourceWiring(r ir.ResourceIR) resourceWiringPlan {
 	var plan resourceWiringPlan
 
-	create, ok := planOperation(r, r.CRUDMapping.Create)
+	create, ok := planOperation(r, r.CRUDMapping.Create, r.PathParamOverrides["create"])
 	if !ok {
 		return plan
 	}
-	read, ok := planOperation(r, r.CRUDMapping.Read)
+	read, ok := planOperation(r, r.CRUDMapping.Read, r.PathParamOverrides["read"])
 	if !ok {
 		return plan
 	}
-	del, ok := planOperation(r, r.CRUDMapping.Delete)
+	del, ok := planOperation(r, r.CRUDMapping.Delete, r.PathParamOverrides["delete"])
 	if !ok {
 		return plan
 	}
@@ -265,7 +265,7 @@ func planResourceWiring(r ir.ResourceIR) resourceWiringPlan {
 	}
 
 	if r.CRUDMapping.Update != nil {
-		if upd, ok := planOperation(r, *r.CRUDMapping.Update); ok {
+		if upd, ok := planOperation(r, *r.CRUDMapping.Update, r.PathParamOverrides["update"]); ok {
 			plan.update = true
 			plan.updateOp = upd
 		}
@@ -376,7 +376,7 @@ func (plan *resourceWiringPlan) noteOpImportNeeds(op crudOperationPlan) {
 }
 
 // planOperation resolves one CRUD operation mapping into a generation plan.
-func planOperation(r ir.ResourceIR, op ir.OperationMappingIR) (crudOperationPlan, bool) {
+func planOperation(r ir.ResourceIR, op ir.OperationMappingIR, pathOverrides map[string]string) (crudOperationPlan, bool) {
 	var planned crudOperationPlan
 	planned.method = strings.ToUpper(strings.TrimSpace(op.Method))
 	planned.template = strings.TrimSpace(op.PathTemplate)
@@ -417,7 +417,7 @@ func planOperation(r ir.ResourceIR, op ir.OperationMappingIR) (crudOperationPlan
 	}
 	multiPlaceholder := dynamicPlaceholders > 1
 	for _, placeholder := range placeholders {
-		sub, ok := resolvePathSubstitution(r, placeholder, multiPlaceholder, op.PathParams)
+		sub, ok := resolvePathSubstitution(r, placeholder, multiPlaceholder, op.PathParams, pathOverrides)
 		if !ok {
 			return crudOperationPlan{}, false
 		}
@@ -711,7 +711,26 @@ func pathPlaceholders(template string) []string {
 // — chiefly path-versioning parameters such as Linode's {apiVersion} (enum
 // ["v4","v4beta"], no default) — instead of leaving the whole resource an
 // honest scaffold. The value is spec-derived and deterministic.
-func resolvePathSubstitution(r ir.ResourceIR, placeholder string, noIDFallback bool, pathParams []ir.ParamIR) (pathSubstitution, bool) {
+//
+// pathOverrides is the resource's path_params override for the operation being
+// planned (nil when none): a placeholder → attribute-name mapping that wins
+// over every fallback. It wires paths whose placeholder does not name-match any
+// attribute and whose value is not the resource id — e.g. a read keyed by a
+// create-body field (gigavuecore's activation: GET .../{entlItemId} filled from
+// the `eli_id` attribute). The override is validated at transform time, so a
+// mapped attribute is guaranteed present in the schema.
+func resolvePathSubstitution(r ir.ResourceIR, placeholder string, noIDFallback bool, pathParams []ir.ParamIR, pathOverrides map[string]string) (pathSubstitution, bool) {
+	if attrName, ok := pathOverrides[placeholder]; ok {
+		for _, attr := range r.Schema.Attributes {
+			if attr.Name != attrName {
+				continue
+			}
+			if !schema.IsPrimitiveSchema(attr.Schema) {
+				return pathSubstitution{}, false
+			}
+			return pathSubstitution{placeholder: placeholder, field: naming.GoFieldName(attr.Name), primitive: attr.Schema.Type}, true
+		}
+	}
 	for _, attr := range r.Schema.Attributes {
 		// A schema attribute whose Terraform name matches the placeholder wins.
 		// For a composite path (noIDFallback, multiple dynamic placeholders) the
@@ -1859,7 +1878,7 @@ func identityPathParamField(r ir.ResourceIR, idAttr ir.AttributeIR) string {
 			if candidate == "" {
 				continue
 			}
-			sub, ok := resolvePathSubstitution(r, candidate, false, op.PathParams)
+			sub, ok := resolvePathSubstitution(r, candidate, false, op.PathParams, nil)
 			if ok && sub.field != "" {
 				return sub.field
 			}

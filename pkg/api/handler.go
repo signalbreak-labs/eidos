@@ -2251,7 +2251,18 @@ func buildGroupedResources(spec *parser.Spec, providerName string, pathOps map[s
 		// parameter and is only emitted when all of them are present as top-level
 		// schema attributes (otherwise the import would target attributes that do
 		// not exist, so the resource stays non-importable — honest, not silent).
-		if importFmt, ok := groupedImportFormatWithDiagnostics(g, schema, idAttr, diags); ok {
+		// When the override explicitly configures the identifier (id_attribute or
+		// import_format), the inference-time import gate is superseded: the
+		// override's applyResourceIDOverride / applyResourceImportFormatOverride
+		// re-derives the format and emits the accurate warning if the chosen
+		// attribute is Computed-only. Warning here would be stale — the inferred
+		// Computed-only id is exactly what the override replaces (e.g.
+		// gigavuecore's activation: inferred entl_item_id → id_attribute eli_id).
+		importDiags := diags
+		if skipUserSettableID {
+			importDiags = nil
+		}
+		if importFmt, ok := groupedImportFormatWithDiagnostics(g, schema, idAttr, importDiags); ok {
 			res.ImportIDFormat = importFmt
 			res.Importable = true
 		}
@@ -2456,7 +2467,7 @@ func applyResourceCreationOverride(preview *ir.ProviderIR, spec *parser.Spec, pr
 	// attribute the schema no longer carries (e.g. archive_server's
 	// id_attribute: server_alias).
 	skipUserSettableID := strings.TrimSpace(ro.IDAttribute) != "" || strings.TrimSpace(ro.ImportFormat) != ""
-	res := resourceFromOverrideCRUD(spec, providerName, g, diags, skipUserSettableID)
+	res := resourceFromOverrideCRUD(spec, providerName, g, diags, skipUserSettableID, ro.IncludeCreateResponseAttributes)
 	if res == nil {
 		return
 	}
@@ -2508,7 +2519,10 @@ func resourceNameFromOverride(ro config.ResourceOverride, createPath string) str
 // synthetic Computed placeholder named for the path parameter instead of
 // preferring a practitioner-supplied create-body attribute, so the override's
 // chosen attribute stays present in the schema.
-func resourceFromOverrideCRUD(spec *parser.Spec, providerName string, g transformer.ResourceCRUD, diags *diagnostics.Diagnostics, skipUserSettableID bool) *ir.ResourceIR {
+//
+// includeCreateResponse lists create-response-only properties to keep as
+// Computed attributes (config ResourceOverride.IncludeCreateResponseAttributes).
+func resourceFromOverrideCRUD(spec *parser.Spec, providerName string, g transformer.ResourceCRUD, diags *diagnostics.Diagnostics, skipUserSettableID bool, includeCreateResponse []string) *ir.ResourceIR {
 	// Normalize the CRUD group name to snake_case for the Terraform type name
 	// (camelCase is a convention violation; hyphens make the resource handle
 	// unreferenceable in HCL expressions). See the inferred-group counterpart
@@ -2561,13 +2575,30 @@ func resourceFromOverrideCRUD(spec *parser.Spec, providerName string, g transfor
 	schema, idAttr := transformer.ManagedResourceSchemaWithDiagnostics(g, diags, skipUserSettableID)
 	res.Schema = schema
 	res.IDAttribute = idAttr
+	// Create-response-only properties the override asked to keep (e.g. an
+	// activation id returned by POST but absent from the collection read) are
+	// appended as Computed attributes so the resource can track and delete the
+	// instance. Carried on the IR so the config generator re-emits the override.
+	res.IncludeCreateResponseAttributes = includeCreateResponse
+	var createResp *transformer.SchemaSpec
+	if g.Create != nil {
+		createResp = g.Create.ResponseSchema
+	}
+	transformer.AddCreateResponseAttributes(&res.Schema, createResp, includeCreateResponse, diags)
 	// Import wiring for override-created resources, mirroring the grouped path
 	// (buildGroupedResources). An override-created resource is importable when
 	// its identifier attribute(s) are real schema attributes the import can
 	// populate; groupedImportFormat returns ok=false otherwise and the resource
 	// stays honestly non-importable. An explicit import_format override applied
 	// later (applyResourceImportFormatOverride) supersedes this inferred format.
-	if importFmt, ok := groupedImportFormatWithDiagnostics(g, schema, idAttr, diags); ok {
+	// Same stale-warning suppression as the inferred-group path: an override
+	// that configures the identifier supersedes the inference-time import gate,
+	// and the override's own application emits the accurate warning.
+	importDiags := diags
+	if skipUserSettableID {
+		importDiags = nil
+	}
+	if importFmt, ok := groupedImportFormatWithDiagnostics(g, schema, idAttr, importDiags); ok {
 		res.ImportIDFormat = importFmt
 		res.Importable = true
 	}

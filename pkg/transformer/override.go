@@ -135,6 +135,7 @@ func applyResourceOverrides(provider *ir.ProviderIR, overrides []config.Resource
 			applyResourceTimeoutOverride(r, override)
 			applyResourceStateUpgradeOverride(r, override)
 			applyResourceDescriptionOverride(r, override)
+			applyResourcePathParamOverride(r, override, diags)
 			if err := applyResourceAttributeOverrides(r, override, diags); err != nil {
 				return err
 			}
@@ -370,6 +371,72 @@ func applyResourceDescriptionOverride(r *ir.ResourceIR, override config.Resource
 	if strings.TrimSpace(override.Description) != "" {
 		r.Description = override.Description
 	}
+}
+
+// applyResourcePathParamOverride records the override's path_params mapping on
+// the resource and validates it fail-loud. Each operation must be part of the
+// resource's CRUD mapping, each placeholder must appear in that operation's
+// path template, and each mapped attribute must exist in the schema. A mapping
+// entry that fails validation is dropped (never applied) so the generator does
+// not wire a path with a nonexistent model field; the drop is surfaced with a
+// Warning, never silent. Placeholder keys tolerate surrounding braces
+// ("{entlItemId}" and "entlItemId" are equivalent).
+func applyResourcePathParamOverride(r *ir.ResourceIR, override config.ResourceOverride, diags *diagnostics.Diagnostics) {
+	if len(override.PathParams) == 0 {
+		return
+	}
+	ops := map[string]ir.OperationMappingIR{
+		"create": r.CRUDMapping.Create,
+		"read":   r.CRUDMapping.Read,
+		"delete": r.CRUDMapping.Delete,
+	}
+	if r.CRUDMapping.Update != nil {
+		ops["update"] = *r.CRUDMapping.Update
+	}
+	attrs := make(map[string]bool, len(r.Schema.Attributes))
+	for _, a := range r.Schema.Attributes {
+		attrs[a.Name] = true
+	}
+	out := make(map[string]map[string]string, len(override.PathParams))
+	for op, m := range override.PathParams {
+		mapping, ok := ops[op]
+		if !ok {
+			warnPathParamOverride(r, op, "", "", "operation is not part of the resource's CRUD mapping", diags)
+			continue
+		}
+		resolved := make(map[string]string, len(m))
+		for placeholder, attr := range m {
+			ph := strings.Trim(strings.TrimSpace(placeholder), "{}")
+			if !strings.Contains(mapping.PathTemplate, "{"+ph+"}") {
+				warnPathParamOverride(r, op, placeholder, attr, fmt.Sprintf("placeholder %q does not appear in the %s path %q", ph, op, mapping.PathTemplate), diags)
+				continue
+			}
+			if !attrs[attr] {
+				warnPathParamOverride(r, op, placeholder, attr, fmt.Sprintf("attribute %q is not in the resource schema", attr), diags)
+				continue
+			}
+			resolved[ph] = attr
+		}
+		if len(resolved) > 0 {
+			out[op] = resolved
+		}
+	}
+	if len(out) > 0 {
+		r.PathParamOverrides = out
+	}
+}
+
+// warnPathParamOverride emits a fail-loud Warning for a path_params mapping
+// entry that cannot be applied.
+func warnPathParamOverride(r *ir.ResourceIR, op, placeholder, attr, detail string, diags *diagnostics.Diagnostics) {
+	if diags == nil {
+		return
+	}
+	*diags = diags.Append(diagnostics.Diagnostic{
+		Severity: diagnostics.Warning,
+		Summary:  "path_params override cannot be applied",
+		Detail:   fmt.Sprintf("Resource %q: path_params.%s %q → %q: %s", r.Name, op, placeholder, attr, detail),
+	})
 }
 
 // applyResourceImportFormatOverride stores the configured import format on the

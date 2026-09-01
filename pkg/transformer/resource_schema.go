@@ -490,6 +490,50 @@ func ManagedResourceSchemaWithDiagnostics(c ResourceCRUD, diags *diagnostics.Dia
 	return ir.ObjectSchemaIR{Attributes: attrs}, resolvedID
 }
 
+// AddCreateResponseAttributes appends create-response-only properties to a
+// managed resource schema as Computed attributes. The schema builder derives
+// the state shape from the read response (resourceStateSpec), so a property
+// the create response returns but the read does not echo is dropped — e.g. an
+// activation id returned by POST but absent from the collection read. An
+// override can name such properties (include_create_response_attributes) so
+// the resource can track and delete the instance. A named property already
+// present (by sanitized name) is skipped; one absent from the create response
+// is surfaced fail-loud, never silently dropped.
+func AddCreateResponseAttributes(schema *ir.ObjectSchemaIR, createResponse *SchemaSpec, names []string, diags *diagnostics.Diagnostics) {
+	if schema == nil || createResponse == nil || len(names) == 0 {
+		return
+	}
+	seen := make(map[string]bool, len(schema.Attributes))
+	for _, a := range schema.Attributes {
+		seen[a.Name] = true
+	}
+	for _, name := range names {
+		prop, ok := createResponse.Properties[name]
+		if !ok {
+			if diags != nil {
+				*diags = diags.Append(diagnostics.Diagnostic{
+					Severity: diagnostics.Warning,
+					Summary:  "include_create_response_attributes names a property absent from the create response",
+					Detail:   fmt.Sprintf("The create response has no property %q, so the attribute is not added to the schema.", name),
+				})
+			}
+			continue
+		}
+		snake := SanitizeAttributeName(name)
+		if seen[snake] {
+			continue
+		}
+		seen[snake] = true
+		schema.Attributes = append(schema.Attributes, ir.AttributeIR{
+			Name:        snake,
+			WireName:    name,
+			Schema:      schemaIRFromSpecRecursive(prop),
+			Description: prop.Description,
+			Computed:    true,
+		})
+	}
+}
+
 // resourceSchemaEmpty reports whether a resource has no schema to derive: no
 // response properties and no formData inputs. A multipart/form-data create
 // (e.g. a binary file upload whose read response is a scalar octet-stream body)
