@@ -28,7 +28,7 @@
     {
       "path": "docs/resources/widget.md",
       "reason": "documentation for resource widget",
-      "body_hash": "05a44869de11c008"
+      "body_hash": "d0aaedfb26d7523b"
     },
     {
       "path": "examples/resources/widget/resource.tf",

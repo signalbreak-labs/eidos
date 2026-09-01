@@ -604,6 +604,31 @@ func TestFunctionFromOverride_DerivedName(t *testing.T) {
 	}
 }
 
+// TestListResourceNameFromOverride drives the name derivation of
+// listResourceFromOverride: the explicit `resource` key wins, and an absent key
+// falls back to the operation identifier in either form (operationId or
+// "METHOD /path"), so a list_resource_override without a `resource` key never
+// produces an empty construct name.
+func TestListResourceNameFromOverride(t *testing.T) {
+	cases := []struct {
+		name string
+		lo   config.ListResourceOverride
+		want string
+	}{
+		{name: "explicit resource wins", lo: config.ListResourceOverride{Resource: "widgets", Operation: "listWidgets"}, want: "widgets"},
+		{name: "operationId fallback", lo: config.ListResourceOverride{Operation: "loadAllIcapProfiles"}, want: "load_all_icap_profiles"},
+		{name: "method path fallback", lo: config.ListResourceOverride{Operation: "GET /apps/icap/profiles"}, want: "get_apps_icap_profiles"},
+		{name: "empty operation", lo: config.ListResourceOverride{}, want: ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := listResourceNameFromOverride(tc.lo); got != tc.want {
+				t.Errorf("listResourceNameFromOverride(%+v) = %q, want %q", tc.lo, got, tc.want)
+			}
+		})
+	}
+}
+
 // TestProviderName_Fallback drives the "generated" fallback of providerName.
 func TestProviderName_Fallback(t *testing.T) {
 	if got := providerName(&parser.Spec{}, nil); got != "generated" {

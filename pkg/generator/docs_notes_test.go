@@ -29,8 +29,8 @@ func TestResourceDocsNotes_WiredResourceHasNoNotes(t *testing.T) {
 
 // TestResourceDocsNotes_UpdateNotWired locks in the distinct Update-scaffold
 // note: a resource wired for create/read/delete but without a usable update
-// mapping documents that in-place changes fail and the resource must be
-// replaced.
+// mapping documents that configuration changes trigger a replacement (via the
+// RequiresReplace plan modifier) rather than an in-place update.
 func TestResourceDocsNotes_UpdateNotWired(t *testing.T) {
 	r := sampleResourceIR()
 	r.CRUDMapping.Update = nil

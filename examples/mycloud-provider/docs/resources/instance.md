@@ -2,12 +2,12 @@
 page_title: "mycloud_instance Resource - mycloud"
 subcategory: ""
 description: |-
-  Read an Instance
+  Create an Instance
 ---
 
 # mycloud_instance Resource
 
-Read an Instance
+Create an Instance
 
 ## Example Usage
 

@@ -168,37 +168,37 @@
     {
       "path": "docs/resources/config.md",
       "reason": "documentation for resource config",
-      "body_hash": "ed20ed2c5538146e"
+      "body_hash": "931f0ddf10535042"
     },
     {
       "path": "docs/resources/instance.md",
       "reason": "documentation for resource instance",
-      "body_hash": "dfdb5d529af5adfc"
+      "body_hash": "525997ca76bffc20"
     },
     {
       "path": "docs/resources/network.md",
       "reason": "documentation for resource network",
-      "body_hash": "fbc579207e260c58"
+      "body_hash": "57e3f050a20e31ac"
     },
     {
       "path": "docs/resources/project.md",
       "reason": "documentation for resource project",
-      "body_hash": "f571e7329170233e"
+      "body_hash": "3f977531e6cb8ed8"
     },
     {
       "path": "docs/resources/secret.md",
       "reason": "documentation for resource secret",
-      "body_hash": "4a56534319842c6f"
+      "body_hash": "a9f47c536e78db03"
     },
     {
       "path": "docs/resources/stack.md",
       "reason": "documentation for resource stack",
-      "body_hash": "ccde23d4874cfc26"
+      "body_hash": "89d3d9a63e680152"
     },
     {
       "path": "docs/resources/workspace.md",
       "reason": "documentation for resource workspace",
-      "body_hash": "964c80a5cabc19aa"
+      "body_hash": "cf46eeb79810596a"
     },
     {
       "path": "examples/actions/create_pull_request/action.tf",
@@ -378,7 +378,7 @@
     {
       "path": "generator.yaml",
       "reason": "generated generator configuration",
-      "body_hash": "be3ff2c98a99073e"
+      "body_hash": "24fc1cd1a8b32e35"
     },
     {
       "path": "go.mod",
@@ -868,7 +868,7 @@
     {
       "path": "internal/provider/resource_config.go",
       "reason": "resource mycloud_config",
-      "body_hash": "8b63c48985497bef"
+      "body_hash": "38ef1b285262860b"
     },
     {
       "path": "internal/provider/resource_config_acceptance_test.go",
@@ -888,7 +888,7 @@
     {
       "path": "internal/provider/resource_instance.go",
       "reason": "resource mycloud_instance",
-      "body_hash": "161e703789dc51cd"
+      "body_hash": "e313ae1852f36161"
     },
     {
       "path": "internal/provider/resource_instance_acceptance_test.go",
@@ -908,7 +908,7 @@
     {
       "path": "internal/provider/resource_network.go",
       "reason": "resource mycloud_network",
-      "body_hash": "9438f4d76fe635c4"
+      "body_hash": "fc68acbbe7a98ca0"
     },
     {
       "path": "internal/provider/resource_network_acceptance_test.go",
@@ -928,7 +928,7 @@
     {
       "path": "internal/provider/resource_project.go",
       "reason": "resource mycloud_project",
-      "body_hash": "a3d95b7ef8576e67"
+      "body_hash": "e360d17014548534"
     },
     {
       "path": "internal/provider/resource_project_acceptance_test.go",
@@ -948,7 +948,7 @@
     {
       "path": "internal/provider/resource_secret.go",
       "reason": "resource mycloud_secret",
-      "body_hash": "6cc936c06579c99b"
+      "body_hash": "66c71e062ce19723"
     },
     {
       "path": "internal/provider/resource_secret_acceptance_test.go",
@@ -968,7 +968,7 @@
     {
       "path": "internal/provider/resource_stack.go",
       "reason": "resource mycloud_stack",
-      "body_hash": "a2ca4f41fe73dcaf"
+      "body_hash": "26e130defad4fd7b"
     },
     {
       "path": "internal/provider/resource_stack_acceptance_test.go",
@@ -988,7 +988,7 @@
     {
       "path": "internal/provider/resource_workspace.go",
       "reason": "resource mycloud_workspace",
-      "body_hash": "331746aa14411804"
+      "body_hash": "42d0d693773f33cc"
     },
     {
       "path": "internal/provider/resource_workspace_acceptance_test.go",

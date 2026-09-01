@@ -2,12 +2,12 @@
 page_title: "mycloud_network Resource - mycloud"
 subcategory: ""
 description: |-
-  Read a Network
+  Create a Network
 ---
 
 # mycloud_network Resource
 
-Read a Network
+Create a Network
 
 ## Example Usage
 

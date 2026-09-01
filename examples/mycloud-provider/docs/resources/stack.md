@@ -2,12 +2,12 @@
 page_title: "mycloud_stack Resource - mycloud"
 subcategory: ""
 description: |-
-  Read a Stack
+  Create a Stack
 ---
 
 # mycloud_stack Resource
 
-Read a Stack
+Create a Stack
 
 ## Example Usage
 

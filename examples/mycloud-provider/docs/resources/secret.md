@@ -2,12 +2,12 @@
 page_title: "mycloud_secret Resource - mycloud"
 subcategory: ""
 description: |-
-  Read a Secret
+  Create a Secret
 ---
 
 # mycloud_secret Resource
 
-Read a Secret
+Create a Secret
 
 ## Example Usage
 

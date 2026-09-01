@@ -48,7 +48,7 @@ func (r *WorkspaceResource) Metadata(_ context.Context, _ resource.MetadataReque
 
 // Schema returns the Terraform schema for this resource.
 func (r *WorkspaceResource) Schema(_ context.Context, _ resource.SchemaRequest, resp *resource.SchemaResponse) {
-	resp.Schema = schema.Schema{MarkdownDescription: "Read a Workspace", Attributes: map[string]schema.Attribute{"api_version": schema.StringAttribute{Optional: true, Computed: true}, "kind": schema.StringAttribute{Optional: true, Computed: true}, "labels": schema.MapAttribute{Optional: true, Computed: true, ElementType: types.StringType}, "name": schema.StringAttribute{Required: true}, "status": schema.SingleNestedAttribute{Optional: true, Computed: true, Attributes: map[string]schema.Attribute{"phase": schema.StringAttribute{Optional: true, Computed: true}}}}}
+	resp.Schema = schema.Schema{MarkdownDescription: "Create a Workspace", Attributes: map[string]schema.Attribute{"api_version": schema.StringAttribute{Optional: true, Computed: true}, "kind": schema.StringAttribute{Optional: true, Computed: true}, "labels": schema.MapAttribute{Optional: true, Computed: true, ElementType: types.StringType}, "name": schema.StringAttribute{Required: true}, "status": schema.SingleNestedAttribute{Optional: true, Computed: true, Attributes: map[string]schema.Attribute{"phase": schema.StringAttribute{Optional: true, Computed: true}}}}}
 }
 
 // IdentitySchema returns the resource identity schema shared with the paired list resource.
