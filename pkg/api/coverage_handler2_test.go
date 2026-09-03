@@ -789,7 +789,7 @@ func TestResourceFromOverrideCRUD_Update(t *testing.T) {
 		Delete:         &transformer.Operation{Method: transformer.MethodDelete, Path: "/widgets/{id}", OperationID: "deleteWidget"},
 	}
 	var diags diagnostics.Diagnostics
-	res := resourceFromOverrideCRUD(spec, "acme", g, &diags, false, nil)
+	res := resourceFromOverrideCRUD(spec, "acme", g, &diags, false, nil, "")
 	if res == nil {
 		t.Fatal("resourceFromOverrideCRUD returned nil")
 	}
@@ -1265,7 +1265,7 @@ func TestResourceFromOverrideCRUD_CollectionReadFlag(t *testing.T) {
 		Delete: &transformer.Operation{Method: transformer.MethodDelete, Path: "/whitelists/{alias}", OperationID: "deleteWhitelist"},
 	}
 	var diags diagnostics.Diagnostics
-	res := resourceFromOverrideCRUD(spec, "acme", g, &diags, false, nil)
+	res := resourceFromOverrideCRUD(spec, "acme", g, &diags, false, nil, "")
 	if res == nil {
 		t.Fatal("resourceFromOverrideCRUD returned nil")
 	}
@@ -1287,7 +1287,7 @@ func TestResourceFromOverrideCRUD_CollectionReadFlag(t *testing.T) {
 		Read:           &transformer.Operation{Method: transformer.MethodGet, Path: "/widgets/{id}", OperationID: "getWidget", ResponseSchema: arrayResponse},
 		Delete:         &transformer.Operation{Method: transformer.MethodDelete, Path: "/widgets/{id}", OperationID: "deleteWidget"},
 	}
-	res2 := resourceFromOverrideCRUD(instanceSpec, "acme", g2, &diags, false, nil)
+	res2 := resourceFromOverrideCRUD(instanceSpec, "acme", g2, &diags, false, nil, "")
 	if res2 == nil {
 		t.Fatal("resourceFromOverrideCRUD returned nil for instance read")
 	}

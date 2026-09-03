@@ -61,6 +61,11 @@ type ResourceIR struct {
 	// placeholder does not name-match any attribute and whose value is not the
 	// resource id.
 	PathParamOverrides map[string]map[string]string `json:"path_param_overrides,omitempty"`
+	// ExcludedAttributes lists attributes the override asked to remove from the
+	// schema (config ResourceOverride.ExcludeAttributes). Carried so the config
+	// generator can re-emit the override on round-trip; the attributes
+	// themselves are dropped from Schema at build time.
+	ExcludedAttributes []string `json:"excluded_attributes,omitempty"`
 }
 
 // StateUpgradeIR describes a single migration from a prior schema version to the
@@ -155,7 +160,20 @@ type OperationMappingIR struct {
 	// the first element, and reports the resource removed when no element
 	// matches (G39). False for instance reads whose response wraps a single
 	// item in an array (a get-one wrapper, issue #35).
-	ResponseIsCollection bool                   `json:"response_is_collection,omitempty"`
+	ResponseIsCollection bool `json:"response_is_collection,omitempty"`
+	// NestedCollectionPath is a dot-separated path into the read response
+	// (after the envelope unwrap) that locates the collection array(s) for a
+	// child resource whose read is a parent GET (e.g. a port filter rule read
+	// via GET /portFilters/{portId}, whose response unwraps to
+	// {port, rules: {passRules, dropRules}} with the rules nested at
+	// "rules.passRules"). The last segment may be "*" to search every array
+	// value at that level, which sidesteps a collection split across sibling
+	// arrays (passRules/dropRules) since the child's identifier is unique
+	// across them. When set, the generated readRemote selects the element
+	// whose identifier matches state (G39) instead of applying the whole
+	// parent object. Empty for instance reads and direct collection reads
+	// whose envelope is the array.
+	NestedCollectionPath string                 `json:"nested_collection_path,omitempty"`
 	SuccessCodes         []int                  `json:"success_codes,omitempty"`
 	ErrorMappings        map[int]ErrorMappingIR `json:"error_mappings,omitempty"`
 	// SecurityRequirements carries the operation's declared security

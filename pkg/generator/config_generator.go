@@ -237,7 +237,12 @@ func convertResources(provider ir.ProviderIR) []config.ResourceOverride {
 			ComputedAttributes:  computed,
 			SensitiveAttributes: sensitive,
 			WriteOnlyAttributes: writeOnly,
-			Description:         r.Description,
+			// Excluded attributes are gone from the schema, so unlike the other
+			// attribute overrides they cannot be re-extracted from the IR; re-emit
+			// the recorded names for every resource that carries them (inferred or
+			// override-created) so a normalized generator.yaml round-trips.
+			ExcludeAttributes: r.ExcludedAttributes,
+			Description:       r.Description,
 		}
 		// Emit exactly one match key. Operation is the authoritative key (it
 		// takes precedence when both are set), so emitting Schema alongside it
@@ -262,10 +267,12 @@ func convertResources(provider ir.ProviderIR) []config.ResourceOverride {
 				ro.UpdateOperation = r.CRUDMapping.Update.OperationID
 			}
 			ro.DeleteOperation = r.CRUDMapping.Delete.OperationID
-			// The create-response-only attributes and path-param mapping are not
-			// reproducible from inference, so re-emit them for round-trip too.
+			// The create-response-only attributes, path-param mapping, and nested
+			// collection read path are not reproducible from inference, so re-emit
+			// them for round-trip too.
 			ro.IncludeCreateResponseAttributes = r.IncludeCreateResponseAttributes
 			ro.PathParams = r.PathParamOverrides
+			ro.ReadCollectionPath = r.CRUDMapping.Read.NestedCollectionPath
 		}
 		// A data source emitted by the resource_overrides.generate_datasource
 		// opt-in carries the resource's SourceOperation (not the read operation's)

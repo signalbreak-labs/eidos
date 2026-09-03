@@ -268,7 +268,7 @@ func TestManagedResourceSchema_SkipUserSettableID(t *testing.T) {
 	}
 
 	// Without skip: the user-settable "port" attribute is the identifier.
-	schema, idAttr := ManagedResourceSchemaWithDiagnostics(c, nil, false)
+	schema, idAttr := ManagedResourceSchemaWithDiagnostics(c, nil, false, false)
 	if idAttr != "port" {
 		t.Errorf("idAttr = %q, want port (user-settable preference)", idAttr)
 	}
@@ -277,7 +277,7 @@ func TestManagedResourceSchema_SkipUserSettableID(t *testing.T) {
 	}
 
 	// With skip: the synthetic port_id placeholder is added and is the identifier.
-	schema, idAttr = ManagedResourceSchemaWithDiagnostics(c, nil, true)
+	schema, idAttr = ManagedResourceSchemaWithDiagnostics(c, nil, true, false)
 	if idAttr != "port_id" {
 		t.Errorf("idAttr = %q, want port_id (skipUserSettableID)", idAttr)
 	}

@@ -135,6 +135,8 @@ func TestOperationMappingIRRoundTrip(t *testing.T) {
 				Description: "Internal server error",
 			},
 		},
+		ResponseIsCollection: true,
+		NestedCollectionPath: "rules.*",
 	})
 }
 

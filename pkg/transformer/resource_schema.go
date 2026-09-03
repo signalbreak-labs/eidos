@@ -299,7 +299,7 @@ func applyManagedAttributeFlags(
 // attribute of that name is added so the generator's ID-field lookup succeeds and
 // wired Read/Delete path substitution resolves.
 func ManagedResourceSchema(c ResourceCRUD) (ir.ObjectSchemaIR, string) {
-	return ManagedResourceSchemaWithDiagnostics(c, nil, false)
+	return ManagedResourceSchemaWithDiagnostics(c, nil, false, false)
 }
 
 // ManagedResourceSchemaWithDiagnostics is ManagedResourceSchema that appends
@@ -316,8 +316,13 @@ func ManagedResourceSchema(c ResourceCRUD) (ir.ObjectSchemaIR, string) {
 // import_format): the practitioner has chosen the ID attribute, so eidos must
 // not guess a different one and leave the override referencing an attribute the
 // schema no longer carries.
-func ManagedResourceSchemaWithDiagnostics(c ResourceCRUD, diags *diagnostics.Diagnostics, skipUserSettableID bool) (ir.ObjectSchemaIR, string) {
-	stateSpec := resourceStateSpec(c)
+//
+// childRead marks a child resource whose read is a parent GET (read_collection_path):
+// the state shape is derived from the create request body instead of the read
+// response, and path parameters are folded into the schema as Required
+// attributes so the generated CRUD paths can be filled from state.
+func ManagedResourceSchemaWithDiagnostics(c ResourceCRUD, diags *diagnostics.Diagnostics, skipUserSettableID, childRead bool) (ir.ObjectSchemaIR, string) {
+	stateSpec := resourceStateSpec(c, childRead)
 
 	// A "get one" read that returns a single-array response wrapper (e.g.
 	// {"Policies": [{...}]}) is flattened by UnwrapResponseEnvelope to an array
@@ -438,7 +443,7 @@ func ManagedResourceSchemaWithDiagnostics(c ResourceCRUD, diags *diagnostics.Dia
 	// generated request always sends when required. Fold them into the schema
 	// so a required query or header param is Required rather than silently
 	// Optional+Computed from a readOnly body echo of the same name.
-	attrs = reconcileOperationParameters(attrs, c)
+	attrs = reconcileOperationParameters(attrs, c, childRead)
 
 	resolvedID := idAttribute
 	if hasID {
@@ -1173,8 +1178,8 @@ func appendRequestOnlyAttributes(attrs []ir.AttributeIR, requestSpec *SchemaSpec
 // request always sends. A parameter with no matching attribute is appended
 // as Required or Optional. Path parameters are identifiers already handled
 // by the id-attribute logic and are skipped.
-func reconcileOperationParameters(attrs []ir.AttributeIR, c ResourceCRUD) []ir.AttributeIR {
-	merged := collectOperationParameters(c)
+func reconcileOperationParameters(attrs []ir.AttributeIR, c ResourceCRUD, childRead bool) []ir.AttributeIR {
+	merged := collectOperationParameters(c, childRead)
 	names := make([]string, 0, len(merged))
 	for name := range merged {
 		names = append(names, name)
@@ -1207,7 +1212,7 @@ type operationParamFlags struct {
 	wireName    string
 }
 
-func collectOperationParameters(c ResourceCRUD) map[string]*operationParamFlags {
+func collectOperationParameters(c ResourceCRUD, childRead bool) map[string]*operationParamFlags {
 	merged := map[string]*operationParamFlags{}
 	for _, op := range []*Operation{c.Create, c.Read, c.Update, c.Delete} {
 		if op == nil {
@@ -1215,7 +1220,17 @@ func collectOperationParameters(c ResourceCRUD) map[string]*operationParamFlags 
 		}
 		for _, p := range op.Parameters {
 			in := strings.ToLower(p.In)
-			if in != "query" && in != "header" {
+			// Query and header parameters are always folded into the schema so a
+			// required one is Required rather than silently Optional+Computed from
+			// a readOnly body echo of the same name. Path parameters are normally
+			// resolved by the generator's substitution logic against an attribute
+			// the body/response already carries (or the id fallback), so they are
+			// not added here. A child resource is the exception: its read is a
+			// parent GET, so the create-body-derived schema carries none of the
+			// parent path's parameters, and the CRUD paths cannot be filled from
+			// state without them. Fold path parameters in as Required attributes
+			// for child resources.
+			if in != "query" && in != "header" && (!childRead || in != "path") {
 				continue
 			}
 			snake := SanitizeAttributeName(p.Name)
@@ -1739,7 +1754,18 @@ func isScalarItemType(itemsTypeStr string) bool {
 // resourceStateSpec selects the SchemaSpec that best represents a single resource
 // instance: the Read response body, then the Create response body, then the
 // Create request body. Returns nil when none carry a schema.
-func resourceStateSpec(c ResourceCRUD) *SchemaSpec {
+// resourceStateSpec returns the schema the resource's state shape is derived
+// from. A normal resource's read response is the instance shape, so it wins.
+// A child resource (childRead) is the exception: its read is a parent GET whose
+// response is the parent object, not the child, so the state shape must come
+// from the create request body (the child's own shape) instead — otherwise the
+// schema would expose the parent's fields (e.g. a port filter rule resource
+// exposing the port filter's "port" and "rules" instead of the rule's
+// "ruleId"/"matches").
+func resourceStateSpec(c ResourceCRUD, childRead bool) *SchemaSpec {
+	if childRead && c.Create != nil && c.Create.RequestSchema != nil {
+		return c.Create.RequestSchema
+	}
 	if c.Read != nil && c.Read.ResponseSchema != nil {
 		return c.Read.ResponseSchema
 	}

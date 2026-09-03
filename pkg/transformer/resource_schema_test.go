@@ -1029,7 +1029,7 @@ func TestManagedResourceSchemaDedupsSnakeCaseCollisions(t *testing.T) {
 			},
 		},
 		ID: IDInfo{Kind: IDSimple, ParameterNames: []string{"id"}, AttributeName: "id", ImportFormat: "%s"},
-	}, &diags, false)
+	}, &diags, false, false)
 
 	// Exactly one foo_bar attribute survives.
 	count := 0
@@ -1493,7 +1493,7 @@ func TestManagedResourceSchema_AmbiguousNestedPathParameterStaysUnwired(t *testi
 	}
 	var diags diagnostics.Diagnostics
 
-	schema, _ := ManagedResourceSchemaWithDiagnostics(c, &diags, false)
+	schema, _ := ManagedResourceSchemaWithDiagnostics(c, &diags, false, false)
 	if _, ok := findAttr(schema.Attributes, "uid"); ok {
 		t.Fatalf("ambiguous nested uid must not be promoted or synthesized: %+v", schema.Attributes)
 	}

@@ -1144,6 +1144,120 @@ func TestApplyOverrides_ComputedAttributesNested(t *testing.T) {
 	}
 }
 
+// TestApplyOverrides_ExcludeAttributes locks in the exclude_attributes override:
+// the named attributes are removed from the schema at any nesting depth, the
+// exclusion is recorded on the IR for config round-trip, and an exact-name match
+// wins over the underscore-insensitive fuzzy match so an entry for "user_name"
+// does not also claim a distinct "username" attribute (G39 semantics).
+func TestApplyOverrides_ExcludeAttributes(t *testing.T) {
+	provider := &ir.ProviderIR{
+		Resources: []ir.ResourceIR{{
+			Name:     "port_filter",
+			TypeName: "port_filter",
+			Schema: ir.ObjectSchemaIR{
+				Attributes: []ir.AttributeIR{
+					{Name: "port", Required: true, Schema: ir.SchemaIR{Type: ir.TypeString}},
+					{
+						Name:     "rules",
+						Required: true,
+						Schema: ir.SchemaIR{
+							Attributes: []ir.AttributeIR{
+								{Name: "pass_rules", Optional: true, Schema: ir.SchemaIR{Type: ir.TypeString}},
+								{Name: "drop_rules", Optional: true, Schema: ir.SchemaIR{Type: ir.TypeString}},
+							},
+						},
+					},
+					{Name: "user_name", Required: true, Schema: ir.SchemaIR{Type: ir.TypeString}},
+					{Name: "username", Optional: true, Schema: ir.SchemaIR{Type: ir.TypeString}},
+				},
+			},
+		}},
+	}
+	cfg := &config.Config{
+		Provider: config.ProviderConfig{Name: "test", Version: "0.0.1"},
+		ResourceOverrides: []config.ResourceOverride{{
+			Schema:            "port_filter",
+			ExcludeAttributes: []string{"rules", "user_name"},
+		}},
+	}
+
+	if err := ApplyOverrides(provider, cfg); err != nil {
+		t.Fatalf("ApplyOverrides() = %v, want nil", err)
+	}
+
+	root := provider.Resources[0].Schema
+	if _, ok := findAttr(root.Attributes, "rules"); ok {
+		t.Errorf("rules still present after exclude_attributes: %+v", root.Attributes)
+	}
+	if _, ok := findAttr(root.Attributes, "port"); !ok {
+		t.Errorf("port should survive exclude_attributes")
+	}
+	// The exact-name match for "user_name" must not claim the distinct
+	// "username" attribute.
+	if _, ok := findAttr(root.Attributes, "username"); !ok {
+		t.Errorf("username should survive exclude_attributes (exact match for user_name wins)")
+	}
+	if _, ok := findAttr(root.Attributes, "user_name"); ok {
+		t.Errorf("user_name still present after exclude_attributes")
+	}
+
+	// The exclusion is recorded for config round-trip.
+	got := provider.Resources[0].ExcludedAttributes
+	if len(got) != 2 || got[0] != "rules" || got[1] != "user_name" {
+		t.Errorf("ExcludedAttributes = %v, want [rules user_name]", got)
+	}
+}
+
+// TestApplyOverrides_ExcludeAttributesNested locks in nested exclusion: an
+// exclude_attributes entry targeting an attribute nested under an object
+// attribute removes it, mirroring the computed/sensitive/force_new nested walk
+// (N-20).
+func TestApplyOverrides_ExcludeAttributesNested(t *testing.T) {
+	provider := &ir.ProviderIR{
+		Resources: []ir.ResourceIR{{
+			Name:     "profile",
+			TypeName: "profile",
+			Schema: ir.ObjectSchemaIR{
+				Attributes: []ir.AttributeIR{
+					{
+						Name:     "contact",
+						Optional: true,
+						Schema: ir.SchemaIR{
+							Attributes: []ir.AttributeIR{
+								{Name: "email", Required: true, Schema: ir.SchemaIR{Type: ir.TypeString}},
+								{Name: "phone", Optional: true, Schema: ir.SchemaIR{Type: ir.TypeString}},
+							},
+						},
+					},
+				},
+			},
+		}},
+	}
+	cfg := &config.Config{
+		Provider: config.ProviderConfig{Name: "test", Version: "0.0.1"},
+		ResourceOverrides: []config.ResourceOverride{{
+			Schema:            "profile",
+			ExcludeAttributes: []string{"phone"},
+		}},
+	}
+
+	if err := ApplyOverrides(provider, cfg); err != nil {
+		t.Fatalf("ApplyOverrides() = %v, want nil", err)
+	}
+
+	root := provider.Resources[0].Schema
+	contact, ok := findAttr(root.Attributes, "contact")
+	if !ok {
+		t.Fatalf("attribute %q not found", "contact")
+	}
+	if _, ok := findAttr(contact.Schema.Attributes, "phone"); ok {
+		t.Errorf("nested phone still present after exclude_attributes")
+	}
+	if _, ok := findAttr(contact.Schema.Attributes, "email"); !ok {
+		t.Errorf("nested email should survive exclude_attributes")
+	}
+}
+
 func TestApplyOverrides_DatasourceName(t *testing.T) {
 	provider := &ir.ProviderIR{
 		DataSources: []ir.DataSourceIR{{
