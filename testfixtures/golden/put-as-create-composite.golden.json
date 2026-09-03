@@ -23,7 +23,7 @@
     {
       "path": "docs/index.md",
       "reason": "provider overview and authentication guide",
-      "body_hash": "3ec7476bd10b9042"
+      "body_hash": "e2bae6653c656f9d"
     },
     {
       "path": "docs/resources/notif_meta_config.md",
@@ -43,12 +43,12 @@
     {
       "path": "go.mod",
       "reason": "Go module definition",
-      "body_hash": "2b12c6d3bf89a1d1"
+      "body_hash": "6bbd7bbd217d5a72"
     },
     {
       "path": "internal/client/client.go",
       "reason": "generated HTTP client",
-      "body_hash": "eb18017a1beb2ffd"
+      "body_hash": "859f3eb2e956d655"
     },
     {
       "path": "internal/client/client_test.go",
@@ -93,7 +93,7 @@
     {
       "path": "internal/provider/provider.go",
       "reason": "provider schema and registration",
-      "body_hash": "52e2276513b60392"
+      "body_hash": "95831a9dc3b5a978"
     },
     {
       "path": "internal/provider/provider_test.go",

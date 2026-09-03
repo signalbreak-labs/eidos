@@ -52,11 +52,6 @@ const (
 	// jumped from v0.x to v1.x). v1.16.0 is compatible with the framework and
 	// plugin-go versions pinned above.
 	TerraformPluginTestingVersion = "v1.16.0"
-	// TerraformPluginFrameworkTimeoutsVersion is pinned to v0.7.0, the version
-	// whose resource/timeouts.Block and timeouts.Value API the generated
-	// timeouts block and CRUD wiring target (M-14). It requires framework
-	// >= v1.16.1, satisfied by the pinned framework version above.
-	TerraformPluginFrameworkTimeoutsVersion = "v0.7.0"
 	// TerraformPluginFrameworkValidatorsVersion is pinned to v0.19.0, the
 	// release compatible with the framework version pinned above (it requires
 	// framework >= v1.16.1). It supplies the standard validators
@@ -74,9 +69,6 @@ type BuildVersions struct {
 	PluginGoVersion  string
 	PluginLogVersion string
 	TestingVersion   string
-	// TimeoutsVersion pins the terraform-plugin-framework-timeouts module used
-	// by generated resources with configured timeouts (M-14).
-	TimeoutsVersion string
 	// ValidatorsVersion pins the terraform-plugin-framework-validators module
 	// supplying the standard constraint validators.
 	ValidatorsVersion string
@@ -90,7 +82,6 @@ func NewBuildVersions() BuildVersions {
 		PluginGoVersion:   TerraformPluginGoVersion,
 		PluginLogVersion:  TerraformPluginLogVersion,
 		TestingVersion:    TerraformPluginTestingVersion,
-		TimeoutsVersion:   TerraformPluginFrameworkTimeoutsVersion,
 		ValidatorsVersion: TerraformPluginFrameworkValidatorsVersion,
 	}
 }
@@ -218,7 +209,6 @@ func (cfg BuildConfig) versions() BuildVersions {
 		PluginGoVersion:   TerraformPluginGoVersion,
 		PluginLogVersion:  TerraformPluginLogVersion,
 		TestingVersion:    TerraformPluginTestingVersion,
-		TimeoutsVersion:   TerraformPluginFrameworkTimeoutsVersion,
 		ValidatorsVersion: TerraformPluginFrameworkValidatorsVersion,
 	}
 	if cfg.BuildVersions == nil {
@@ -236,9 +226,6 @@ func (cfg BuildConfig) versions() BuildVersions {
 	}
 	if strings.TrimSpace(v.TestingVersion) == "" {
 		v.TestingVersion = defaults.TestingVersion
-	}
-	if strings.TrimSpace(v.TimeoutsVersion) == "" {
-		v.TimeoutsVersion = defaults.TimeoutsVersion
 	}
 	return v
 }
@@ -315,7 +302,6 @@ func GoMod(cfg BuildConfig) File {
 		"PluginGoVersion":   versions.PluginGoVersion,
 		"PluginLogVersion":  versions.PluginLogVersion,
 		"TestingVersion":    versions.TestingVersion,
-		"TimeoutsVersion":   versions.TimeoutsVersion,
 	})
 }
 
@@ -325,7 +311,6 @@ go {{.GoVersion}}
 
 require (
 	github.com/hashicorp/terraform-plugin-framework {{.FrameworkVersion}}
-	github.com/hashicorp/terraform-plugin-framework-timeouts {{.TimeoutsVersion}}
 	github.com/hashicorp/terraform-plugin-framework-validators {{.ValidatorsVersion}}
 	github.com/hashicorp/terraform-plugin-go {{.PluginGoVersion}}
 	github.com/hashicorp/terraform-plugin-log {{.PluginLogVersion}}

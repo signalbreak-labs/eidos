@@ -673,6 +673,13 @@ defaults; when a log file is configured (via `log_file` or a baked
 trace round-tripper via `client.WithLogging`. `enabled` without `file_path`
 has no effect — logging is active iff a log file path is set.
 
+Every generated provider schema also exposes `tls_skip_verify` as an `Optional`
+boolean (default `false`). Setting it to `true` disables TLS certificate and
+hostname verification on the generated client's transport
+(`client.WithTLSSkipVerify`) — enable it only against endpoints with
+self-signed or otherwise untrusted certificates. If the spec already declares a
+`tls_skip_verify` provider attribute, the generator keeps the spec's own.
+
 ### `client`
 
 ```yaml
@@ -786,6 +793,20 @@ global_timeouts:
 ```
 
 Durations are parsed by Go's `time.ParseDuration`, e.g. `30s`, `5m`, `1h`.
+
+These values are the generator-side defaults. Each resource with a configured
+timeout gets an optional `timeouts` block in its Terraform schema whose fields
+(`create`, `read`, `update`, `delete`) take a plain number of **seconds** and
+override the generator default for that operation:
+
+```hcl
+resource "mycloud_pet" "example" {
+  # ...
+  timeouts {
+    create = 600
+  }
+}
+```
 
 ### `pagination`
 

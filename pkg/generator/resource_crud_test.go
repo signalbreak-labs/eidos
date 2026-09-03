@@ -1136,9 +1136,9 @@ func timeoutsResourceIR() ir.ResourceIR {
 }
 
 // TestResourceTimeouts_Render asserts the generated resource file carries the
-// timeouts schema block, the timeouts.Value model field, the framework-timeouts
-// and time imports, and per-operation context timeout wiring in each wired CRUD
-// method (M-14).
+// timeouts schema block of Int64 seconds attributes, the generated timeouts
+// model struct, the time import, and per-operation context timeout wiring in
+// each wired CRUD method (M-14).
 func TestResourceTimeouts_Render(t *testing.T) {
 	r := timeoutsResourceIR()
 
@@ -1150,33 +1150,48 @@ func TestResourceTimeouts_Render(t *testing.T) {
 	got := buf.String()
 
 	for _, want := range []string{
-		// Schema: the timeouts block exposes exactly the configured operations.
-		`"timeouts": timeouts.Block(ctx, timeouts.Opts{`,
-		`Create: true`,
-		`Read: true`,
-		`Update: true`,
-		`Delete: true`,
-		// Model: the timeouts.Value field round-trips the block.
-		`Timeouts timeouts.Value`,
+		// Schema: the timeouts SingleNestedBlock exposes one Int64 attribute per
+		// configured operation.
+		`"timeouts": schema.SingleNestedBlock{`,
+		`"create": schema.Int64Attribute{`,
+		`"read": schema.Int64Attribute{`,
+		`"update": schema.Int64Attribute{`,
+		`"delete": schema.Int64Attribute{`,
+		// Model: the generated timeouts model struct round-trips the block.
+		`Timeouts *PetTimeoutsModel`,
+		`type PetTimeoutsModel struct {`,
+		`Create types.Int64`,
 		`tfsdk:"timeouts"`,
 		// Imports.
-		`"github.com/hashicorp/terraform-plugin-framework-timeouts/resource/timeouts"`,
 		`"time"`,
-		// Create wiring: default from generator.yaml, parse diagnostics surfaced,
+		// Create wiring: generator.yaml default, practitioner seconds override,
 		// HTTP exchange bounded.
-		`timeout, diags := plan.Timeouts.Create(ctx, 20*time.Minute)`,
-		`resp.Diagnostics.Append(diags...)`,
+		`timeout := 20 * time.Minute`,
+		`if plan.Timeouts != nil && !plan.Timeouts.Create.IsNull() && !plan.Timeouts.Create.IsUnknown() {`,
+		`timeout = time.Duration(plan.Timeouts.Create.ValueInt64()) * time.Second`,
 		`ctx, cancel := context.WithTimeout(ctx, timeout)`,
 		`defer cancel()`,
 		// Read wiring.
-		`timeout, diags := state.Timeouts.Read(ctx, 10*time.Minute)`,
+		`timeout = time.Duration(state.Timeouts.Read.ValueInt64()) * time.Second`,
 		// Update wiring.
-		`timeout, diags := plan.Timeouts.Update(ctx, 20*time.Minute)`,
+		`timeout = time.Duration(plan.Timeouts.Update.ValueInt64()) * time.Second`,
 		// Delete wiring.
-		`timeout, diags := state.Timeouts.Delete(ctx, 10*time.Minute)`,
+		`timeout = time.Duration(state.Timeouts.Delete.ValueInt64()) * time.Second`,
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("generated resource missing %q\n--- body ---\n%s", want, got)
+		}
+	}
+
+	// The framework-timeouts package and its string-duration block API are gone.
+	for _, gone := range []string{
+		`terraform-plugin-framework-timeouts`,
+		`timeouts.Block(`,
+		`timeouts.Value`,
+		`Timeouts.Create(ctx,`,
+	} {
+		if strings.Contains(got, gone) {
+			t.Errorf("generated resource unexpectedly contains %q\n--- body ---\n%s", gone, got)
 		}
 	}
 }
@@ -1196,7 +1211,7 @@ func TestResourceNoTimeouts_OmitsBlock(t *testing.T) {
 
 	for _, forbidden := range []string{
 		`"timeouts":`,
-		`timeouts.Value`,
+		`TimeoutsModel`,
 		`terraform-plugin-framework-timeouts`,
 		`context.WithTimeout`,
 	} {
@@ -1258,8 +1273,8 @@ func TestGoDurationAST(t *testing.T) {
 
 // TestResourceTimeouts_Compiles generates a full provider module with a
 // timeouts-configured resource and compiles it, proving the emitted timeouts
-// block, model field, and CRUD wiring are valid against the pinned
-// terraform-plugin-framework-timeouts API (M-14).
+// block, model struct, and CRUD wiring are valid against the pinned
+// terraform-plugin-framework API (M-14).
 func TestResourceTimeouts_Compiles(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping network-bound compile test in -short mode")

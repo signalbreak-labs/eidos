@@ -272,6 +272,11 @@ func generateProviderFile(pir ir.ProviderIR, clientImport string) (*ast.File, er
 		// generator-owned log_* attributes (over generator.yaml defaults baked
 		// from ClientIR.Logging) and attach it when a log file is configured.
 		configureBody = append(configureBody, loggingConfigureStmts(pir)...)
+		// Wire TLS verification control: when the practitioner sets the
+		// generator-owned tls_skip_verify attribute, attach
+		// client.WithTLSSkipVerify so the client disables certificate
+		// verification.
+		configureBody = append(configureBody, tlsConfigureStmts(pir)...)
 		configureBody = append(configureBody,
 			astgen.AssignSingle(astgen.Ident("c"), astgen.Call(
 				astgen.QualExpr("client", "New"),
@@ -708,20 +713,37 @@ func loggingAttributes() []ir.AttributeIR {
 	}
 }
 
+// tlsAttributes returns the generator-owned tls_skip_verify provider attribute
+// that lets practitioners disable TLS certificate verification (e.g. against
+// endpoints with self-signed certificates). It defaults to false — TLS
+// verification stays on unless explicitly enabled.
+func tlsAttributes() []ir.AttributeIR {
+	return []ir.AttributeIR{
+		{
+			Name:        "tls_skip_verify",
+			Optional:    true,
+			Description: "Disable TLS certificate verification for API requests. Defaults to false; enable only against endpoints with self-signed or otherwise untrusted certificates.",
+			Schema:      ir.SchemaIR{Type: ir.TypeBool},
+		},
+	}
+}
+
 // providerConfigAttributes returns the provider config attributes: the IR's
-// declared attributes plus the generator-owned log_* trace-logging attributes.
-// A declared attribute whose name collides with a log_* name wins — the
-// logging attribute is skipped so the spec's own schema stays authoritative —
-// and loggingConfigureStmts skips the colliding field for the same reason (its
-// declared type may not match what the logging wiring reads).
+// declared attributes plus the generator-owned log_* trace-logging and
+// tls_skip_verify attributes. A declared attribute whose name collides with a
+// generator-owned name wins — the generator-owned attribute is skipped so the
+// spec's own schema stays authoritative — and the corresponding Configure
+// wiring (loggingConfigureStmts, tlsConfigureStmts) skips the colliding field
+// for the same reason (its declared type may not match what the wiring reads).
 func providerConfigAttributes(pir ir.ProviderIR) []ir.AttributeIR {
 	declared := make(map[string]bool, len(pir.ConfigSchema.Attributes))
 	for _, a := range pir.ConfigSchema.Attributes {
 		declared[a.Name] = true
 	}
-	attrs := make([]ir.AttributeIR, 0, len(pir.ConfigSchema.Attributes)+len(loggingAttributes()))
+	owned := append(loggingAttributes(), tlsAttributes()...)
+	attrs := make([]ir.AttributeIR, 0, len(pir.ConfigSchema.Attributes)+len(owned))
 	attrs = append(attrs, pir.ConfigSchema.Attributes...)
-	for _, la := range loggingAttributes() {
+	for _, la := range owned {
 		if declared[la.Name] {
 			continue
 		}
@@ -841,6 +863,42 @@ func loggingConfigureStmts(pir ir.ProviderIR) []ast.Stmt {
 		),
 	))
 	return stmts
+}
+
+// tlsConfigureStmts builds the Configure statement that appends
+// client.WithTLSSkipVerify to opts when the practitioner sets the
+// generator-owned tls_skip_verify attribute. A declared config attribute
+// colliding with tls_skip_verify disables the wiring entirely: without a known
+// bool field there is nothing to read.
+func tlsConfigureStmts(pir ir.ProviderIR) []ast.Stmt {
+	for _, a := range pir.ConfigSchema.Attributes {
+		if a.Name == "tls_skip_verify" {
+			return nil
+		}
+	}
+	field := astgen.Selector(astgen.Ident("config"), naming.GoFieldName("tls_skip_verify"))
+	return []ast.Stmt{
+		astgen.If(
+			astgen.Binary(
+				astgen.Binary(
+					astgen.Unary(token.NOT, astgen.Call(astgen.Selector(field, "IsNull"))),
+					token.LAND,
+					astgen.Unary(token.NOT, astgen.Call(astgen.Selector(field, "IsUnknown"))),
+				),
+				token.LAND,
+				astgen.Call(astgen.Selector(field, "ValueBool")),
+			),
+			astgen.AssignStmt(
+				[]ast.Expr{astgen.Ident("opts")},
+				[]ast.Expr{astgen.Call(
+					astgen.Ident("append"),
+					astgen.Ident("opts"),
+					astgen.Call(astgen.QualExpr("client", "WithTLSSkipVerify"), astgen.BoolLit(true)),
+				)},
+				token.ASSIGN,
+			),
+		),
+	}
 }
 
 // providerAttributeExprWithPath returns an ast.Expr for a provider/schema

@@ -28,7 +28,7 @@
     {
       "path": "docs/index.md",
       "reason": "provider overview and authentication guide",
-      "body_hash": "d8770bfd207a2b6d"
+      "body_hash": "731403e5893e63fb"
     },
     {
       "path": "examples/ephemeral-resources/issue_credentials/ephemeral-resource.tf",
@@ -43,7 +43,7 @@
     {
       "path": "go.mod",
       "reason": "Go module definition",
-      "body_hash": "f4a05246bee69ae1"
+      "body_hash": "885a7a9b120e8e62"
     },
     {
       "path": "internal/client/auth.go",
@@ -58,7 +58,7 @@
     {
       "path": "internal/client/client.go",
       "reason": "generated HTTP client",
-      "body_hash": "ef074d72579059fa"
+      "body_hash": "5488aab68fbd4846"
     },
     {
       "path": "internal/client/client_test.go",
@@ -113,7 +113,7 @@
     {
       "path": "internal/provider/provider.go",
       "reason": "provider schema and registration",
-      "body_hash": "73279f4dfd9a3ef0"
+      "body_hash": "3a5dce9d2dcbba64"
     },
     {
       "path": "internal/provider/provider_test.go",

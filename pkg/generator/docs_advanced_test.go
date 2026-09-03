@@ -173,9 +173,11 @@ func TestFunctionDocsFile_Render(t *testing.T) {
 	}
 }
 
-// TestProviderDocsIndex_AdvancedSections verifies that the generated index
-// includes sections for actions, ephemeral resources, list resources, and
-// functions when the provider defines them.
+// TestProviderDocsIndex_AdvancedSections verifies that the index stays
+// provider-focused — description, example configuration, and schema — even
+// when the provider defines actions, ephemeral resources, list resources, or
+// functions: construct link lists live in the Registry's own navigation, not
+// the index page.
 func TestProviderDocsIndex_AdvancedSections(t *testing.T) {
 	pir := ir.ProviderIR{
 		Name:        "mycloud",
@@ -188,8 +190,6 @@ func TestProviderDocsIndex_AdvancedSections(t *testing.T) {
 			{Name: "temporary_credential", TypeName: "mycloud_temporary_credential"},
 		},
 		ListResources: []ir.ListResourceIR{
-			// Registerable: the provider can register this list against the
-			// mycloud_pets managed resource, so it is documented.
 			{Name: "pets", TypeName: "mycloud_pets", Registerable: true},
 		},
 		Functions: []ir.FunctionIR{
@@ -205,18 +205,30 @@ func TestProviderDocsIndex_AdvancedSections(t *testing.T) {
 	got := buf.String()
 
 	wantSubstrings := []string{
-		"## Actions",
-		"- [mycloud_reboot_server](actions/reboot_server.md)",
-		"## Ephemeral Resources",
-		"- [mycloud_temporary_credential](ephemeral-resources/temporary_credential.md)",
-		"## List Resources",
-		"- [mycloud_pets](list-resources/pets.md)",
-		"## Functions",
-		"- [concat_tags](functions/concat_tags.md)",
+		"# mycloud Provider",
+		"Generated provider for MyCloud.",
+		"## Example Usage",
+		`provider "mycloud" {`,
+		"## Schema",
 	}
 	for _, want := range wantSubstrings {
 		if !strings.Contains(got, want) {
 			t.Errorf("generated index missing %q\ncontent:\n%s", want, got)
+		}
+	}
+
+	for _, gone := range []string{
+		"## Actions",
+		"## Ephemeral Resources",
+		"## List Resources",
+		"## Functions",
+		"(actions/",
+		"(ephemeral-resources/",
+		"(list-resources/",
+		"(functions/",
+	} {
+		if strings.Contains(got, gone) {
+			t.Errorf("generated index unexpectedly contains %q\ncontent:\n%s", gone, got)
 		}
 	}
 }

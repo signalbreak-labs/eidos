@@ -139,28 +139,6 @@ func FunctionDocsFiles(functions []ir.FunctionIR, providerName string) []File {
 	return files
 }
 
-// docsActionRef, docsEphemeralResourceRef, docsListResourceRef, and
-// docsFunctionRef are precomputed link references used by the index template.
-type docsActionRef struct {
-	TypeName string
-	FileName string
-}
-
-type docsEphemeralResourceRef struct {
-	TypeName string
-	FileName string
-}
-
-type docsListResourceRef struct {
-	TypeName string
-	FileName string
-}
-
-type docsFunctionRef struct {
-	TypeName string
-	FileName string
-}
-
 // actionDocsTypeName returns the Terraform action type name for docs.
 func actionDocsTypeName(a ir.ActionIR) string {
 	return docsTypeNameOrFallback(a.TypeName, a.Name, naming.SnakeCase)

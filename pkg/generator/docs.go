@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
-	"time"
 	"unicode"
 
 	"github.com/signalbreak-labs/eidos/pkg/generator/internal/naming"
@@ -13,67 +12,37 @@ import (
 )
 
 // ProviderDocsIndex returns the generated docs/index.md file for a provider.
+//
+// The index documents the provider itself rather than enumerating its
+// constructs: it carries the description, an example provider configuration,
+// and the provider-level schema (the arguments a practitioner can set,
+// including the generator-owned log_* and tls_skip_verify attributes). The
+// Terraform Registry renders resource/data source navigation automatically, so
+// the index no longer lists every construct with links.
 func ProviderDocsIndex(pir ir.ProviderIR) File {
 	name := providerDocsTypeName(pir)
-	resources := make([]docsResourceRef, 0, len(pir.Resources))
-	for _, r := range pir.Resources {
-		resources = append(resources, docsResourceRef{
-			TypeName: resourceDocsTypeName(r),
-			FileName: naming.SnakeCase(r.Name) + ".md",
-		})
-	}
-	dataSources := make([]docsDataSourceRef, 0, len(pir.DataSources))
-	for _, ds := range pir.DataSources {
-		dataSources = append(dataSources, docsDataSourceRef{
-			TypeName: dataSourceDocsTypeName(ds),
-			FileName: naming.SnakeCase(ds.Name) + ".md",
-		})
-	}
-	actions := make([]docsActionRef, 0, len(pir.Actions))
-	for _, a := range pir.Actions {
-		actions = append(actions, docsActionRef{
-			TypeName: actionDocsTypeName(a),
-			FileName: naming.SnakeCase(a.Name) + ".md",
-		})
-	}
-	ephemeralResources := make([]docsEphemeralResourceRef, 0, len(pir.EphemeralResources))
-	for _, er := range pir.EphemeralResources {
-		ephemeralResources = append(ephemeralResources, docsEphemeralResourceRef{
-			TypeName: ephemeralResourceDocsTypeName(er),
-			FileName: naming.SnakeCase(er.Name) + ".md",
-		})
-	}
-	listResources := make([]docsListResourceRef, 0, len(pir.ListResources))
-	for _, lr := range pir.ListResources {
-		// Only list resources the provider can register (they pair with a
-		// managed resource, so terraform query exposes them) are indexed;
-		// unregistered lists get no docs at all (ListResourceDocsFiles).
-		if !lr.Registerable {
-			continue
-		}
-		listResources = append(listResources, docsListResourceRef{
-			TypeName: listResourceDocsTypeName(lr),
-			FileName: naming.SnakeCase(lr.Name) + ".md",
-		})
-	}
-	functions := make([]docsFunctionRef, 0, len(pir.Functions))
-	for _, fn := range pir.Functions {
-		functions = append(functions, docsFunctionRef{
-			TypeName: functionDocsTypeName(fn),
-			FileName: naming.SnakeCase(fn.Name) + ".md",
-		})
-	}
+
+	// The example configuration shows the spec-declared provider attributes and
+	// blocks; generator-owned housekeeping attributes (log_*, tls_skip_verify)
+	// are documented in the Schema section below but do not clutter the common
+	// configuration example.
+	var h hclBuilder
+	h.indent = 1
+	writeHCLBody(&h, pir.ConfigSchema)
+
+	// Provider config attributes are never Computed or WriteOnly
+	// (validateProviderConfig enforces this), so the Arguments section lists
+	// every settable parameter.
+	arguments, _, blocks, nested := renderDocsSections(providerConfigAttributes(pir), providerConfigAttributes(pir), pir.ConfigSchema.Blocks)
 
 	return Template("docs/index.md", indexTemplate, map[string]any{
-		"ProviderName":       name,
-		"Description":        plainTextSummary(pir.Description),
-		"DescriptionBody":    bodyDescription(pir.Description),
-		"Resources":          resources,
-		"DataSources":        dataSources,
-		"Actions":            actions,
-		"EphemeralResources": ephemeralResources,
-		"ListResources":      listResources,
-		"Functions":          functions,
+		"ProviderName":    name,
+		"Description":     plainTextSummary(pir.Description),
+		"DescriptionBody": bodyDescription(pir.Description),
+		"ExampleArgs":     h.b.String(),
+		"Arguments":       arguments,
+		"Blocks":          blocks,
+		"NestedSchemas":   nested,
 	})
 }
 
@@ -137,30 +106,19 @@ func article(word string) string {
 // appendTimeoutsDocs adds the `timeouts` block row to the Blocks section and
 // its "### Nested Schema for `timeouts`" section to the nested schemas for a
 // resource with configured CRUD timeouts. The block is a framework
-// SingleNestedBlock whose attributes are optional strings parsed as
-// time.Duration by the framework-timeouts package.
+// SingleNestedBlock whose attributes are optional Int64 values carrying the
+// per-operation timeout in seconds.
 func appendTimeoutsDocs(r ir.ResourceIR, blocks, nestedSchemas string) (string, string) {
 	if !resourceHasTimeouts(r) {
 		return blocks, nestedSchemas
 	}
 	attrs := make([]ir.AttributeIR, 0, 4)
-	for _, op := range []struct {
-		name     string
-		duration *time.Duration
-	}{
-		{"create", r.Timeouts.Create},
-		{"read", r.Timeouts.Read},
-		{"update", r.Timeouts.Update},
-		{"delete", r.Timeouts.Delete},
-	} {
-		if op.duration == nil {
-			continue
-		}
+	for _, op := range resourceConfiguredTimeoutOps(r) {
 		attrs = append(attrs, ir.AttributeIR{
 			Name:        op.name,
 			Optional:    true,
-			Description: fmt.Sprintf("%s %s timeout for this operation, e.g. %q. Overrides the generator default (%s).", article(op.name), op.name, op.duration, op.duration),
-			Schema:      ir.SchemaIR{Type: ir.TypeString},
+			Description: fmt.Sprintf("%s %s timeout in seconds for this operation. Overrides the generator default (%d seconds).", article(op.name), op.name, int(op.duration.Seconds())),
+			Schema:      ir.SchemaIR{Type: ir.TypeInt},
 		})
 	}
 	blocks += "* `timeouts` (Block Single) (see [below for nested schema](#nestedatt--timeouts))\n"
@@ -213,18 +171,6 @@ func DataSourceDocsFiles(dss []ir.DataSourceIR) []File {
 		files = append(files, DataSourceDocsFile(ds))
 	}
 	return files
-}
-
-// docsResourceRef is a precomputed link reference used by the index template.
-type docsResourceRef struct {
-	TypeName string
-	FileName string
-}
-
-// docsDataSourceRef is a precomputed link reference used by the index template.
-type docsDataSourceRef struct {
-	TypeName string
-	FileName string
 }
 
 // providerDocsTypeName returns the provider type name for documentation.
@@ -291,7 +237,9 @@ func dataSourceDocsTypeName(ds ir.DataSourceIR) string {
 }
 
 // indexTemplate is the Terraform Registry-compatible frontmatter and body for
-// docs/index.md.
+// docs/index.md. It documents the provider itself — description, example
+// configuration, and settable arguments — rather than listing resources and
+// data sources, which the Registry renders in its own navigation.
 const indexTemplate = `---
 page_title: "{{.ProviderName}} Provider"
 subcategory: ""
@@ -303,41 +251,28 @@ description: |-
 
 {{.DescriptionBody}}
 
-{{if .Resources -}}
-## Resources
+## Example Usage
 
-{{range .Resources}}- [{{.TypeName}}](resources/{{.FileName}})
-{{end}}
+` + "```terraform" + `
+provider "{{.ProviderName}}" {
+{{.ExampleArgs}}}
+` + "```" + `
+{{if or .Arguments .Blocks}}
+## Schema
+
+{{if .Arguments -}}
+### Arguments
+
+The following arguments are supported:
+
+{{.Arguments}}
 {{end -}}
-{{if .DataSources -}}
-## Data Sources
+{{if .Blocks -}}
+### Nested Blocks
 
-{{range .DataSources}}- [{{.TypeName}}](data-sources/{{.FileName}})
-{{end}}
+{{.Blocks}}
 {{end -}}
-{{if .Actions -}}
-## Actions
-
-{{range .Actions}}- [{{.TypeName}}](actions/{{.FileName}})
-{{end}}
-{{end -}}
-{{if .EphemeralResources -}}
-## Ephemeral Resources
-
-{{range .EphemeralResources}}- [{{.TypeName}}](ephemeral-resources/{{.FileName}})
-{{end}}
-{{end -}}
-{{if .ListResources -}}
-## List Resources
-
-{{range .ListResources}}- [{{.TypeName}}](list-resources/{{.FileName}})
-{{end}}
-{{end -}}
-{{if .Functions -}}
-## Functions
-
-{{range .Functions}}- [{{.TypeName}}](functions/{{.FileName}})
-{{end}}
+{{.NestedSchemas}}
 {{end -}}
 `
 

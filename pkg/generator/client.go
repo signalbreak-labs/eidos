@@ -187,6 +187,7 @@ const clientGoTemplate = `package client
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"fmt"
 	"io"
 	"net/http"
@@ -222,6 +223,7 @@ type Client struct {
 	maxRetries        int
 	backoff           BackoffFunc
 	logging           LoggingConfig
+	tlsSkipVerify     bool
 }
 
 // ClientOption configures a Client.
@@ -305,6 +307,36 @@ func WithLogging(cfg LoggingConfig) ClientOption {
 	return func(c *Client) { c.logging = cfg }
 }
 
+// WithTLSSkipVerify disables TLS certificate and hostname verification for all
+// requests when skip is true. Enable it only against endpoints using
+// self-signed or otherwise untrusted certificates; leaving verification on is
+// the default and the safe choice.
+func WithTLSSkipVerify(skip bool) ClientOption {
+	return func(c *Client) { c.tlsSkipVerify = skip }
+}
+
+// tlsSkipVerifyTransport wraps base with TLS certificate verification
+// disabled. The base *http.Transport is cloned — never mutated in place — so a
+// shared default transport keeps verifying certificates for every other
+// caller. A non-*http.Transport base is returned unchanged because its TLS
+// behavior is not configurable through this package.
+func tlsSkipVerifyTransport(base http.RoundTripper) http.RoundTripper {
+	if base == nil {
+		base = http.DefaultTransport
+	}
+	inner, ok := base.(*http.Transport)
+	if !ok {
+		return base
+	}
+	clone := inner.Clone()
+	if clone.TLSClientConfig == nil {
+		clone.TLSClientConfig = &tls.Config{}
+	}
+	//nolint:gosec // G402: verification is disabled only by explicit practitioner opt-in via the provider's tls_skip_verify attribute.
+	clone.TLSClientConfig.InsecureSkipVerify = true
+	return clone
+}
+
 // New creates a new Client with the supplied options.
 func New(opts ...ClientOption) *Client {
 	c := &Client{
@@ -317,6 +349,9 @@ func New(opts ...ClientOption) *Client {
 	}
 	for _, opt := range opts {
 		opt(c)
+	}
+	if c.tlsSkipVerify {
+		c.httpClient.Transport = tlsSkipVerifyTransport(c.httpClient.Transport)
 	}
 	if c.logging.LogFile != "" {
 		c.httpClient.Transport = NewLoggingRoundTripper(c.httpClient.Transport, c.logging)
