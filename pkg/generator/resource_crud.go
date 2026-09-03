@@ -2355,30 +2355,37 @@ func resourceTimeoutWiringNeedsTime(r ir.ResourceIR, wiring resourceWiringPlan) 
 	return r.Timeouts.Update != nil && wiring.update
 }
 
-// resourceTimeoutWiringStmts emits the framework timeout wiring for one CRUD
-// operation: it reads the configured timeout from the model's timeouts block
-// (falling back to the generator.yaml default), surfaces any parse diagnostics,
-// and bounds the remaining HTTP exchange with context.WithTimeout. Emitted only
-// for wired operations with a configured timeout (M-14). modelVar is the plan
-// or state variable whose Timeouts field carries the block value; op is the
-// timeouts.Value accessor (Create/Read/Update/Delete).
+// resourceTimeoutWiringStmts emits the timeout wiring for one CRUD operation:
+// it reads the configured timeout in seconds from the model's timeouts block
+// (falling back to the generator.yaml default) and bounds the remaining HTTP
+// exchange with context.WithTimeout. Emitted only for wired operations with a
+// configured timeout (M-14). modelVar is the plan or state variable whose
+// Timeouts pointer carries the block value; op is the model struct field
+// (Create/Read/Update/Delete).
 func resourceTimeoutWiringStmts(modelVar, op string, defaultTimeout time.Duration) []ast.Stmt {
+	block := astgen.Selector(astgen.Ident(modelVar), "Timeouts")
+	field := astgen.Selector(block, op)
 	return []ast.Stmt{
-		astgen.Assign(
-			[]ast.Expr{astgen.Ident("timeout"), astgen.Ident("diags")},
-			[]ast.Expr{astgen.Call(
-				astgen.Selector(astgen.Selector(astgen.Ident(modelVar), "Timeouts"), op),
-				astgen.Ident("ctx"),
-				goDurationAST(defaultTimeout),
-			)},
-		),
-		astgen.ExprStmt(astgen.Call(
-			astgen.Selector(astgen.Selector(astgen.Ident("resp"), "Diagnostics"), "Append"),
-			astgen.Ellipsis(astgen.Ident("diags")),
-		)),
+		astgen.AssignSingle(astgen.Ident("timeout"), goDurationAST(defaultTimeout)),
 		astgen.If(
-			astgen.Call(astgen.Selector(astgen.Selector(astgen.Ident("resp"), "Diagnostics"), "HasError")),
-			astgen.Return(),
+			astgen.Binary(
+				astgen.Binary(
+					astgen.NotEqual(block, astgen.Nil()),
+					token.LAND,
+					astgen.Unary(token.NOT, astgen.Call(astgen.Selector(field, "IsNull"))),
+				),
+				token.LAND,
+				astgen.Unary(token.NOT, astgen.Call(astgen.Selector(field, "IsUnknown"))),
+			),
+			astgen.AssignStmt(
+				[]ast.Expr{astgen.Ident("timeout")},
+				[]ast.Expr{astgen.Binary(
+					astgen.Call(astgen.QualExpr("time", "Duration"), astgen.Call(astgen.Selector(field, "ValueInt64"))),
+					token.MUL,
+					astgen.QualExpr("time", "Second"),
+				)},
+				token.ASSIGN,
+			),
 		),
 		astgen.Assign(
 			[]ast.Expr{astgen.Ident("ctx"), astgen.Ident("cancel")},

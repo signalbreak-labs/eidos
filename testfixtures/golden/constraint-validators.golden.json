@@ -23,7 +23,7 @@
     {
       "path": "docs/index.md",
       "reason": "provider overview and authentication guide",
-      "body_hash": "ef4bb09ae019f0ec"
+      "body_hash": "ff7c1316bf2177c3"
     },
     {
       "path": "docs/resources/widget.md",
@@ -43,12 +43,12 @@
     {
       "path": "go.mod",
       "reason": "Go module definition",
-      "body_hash": "10c21e79737f5e6d"
+      "body_hash": "d469b9197a3c3756"
     },
     {
       "path": "internal/client/client.go",
       "reason": "generated HTTP client",
-      "body_hash": "eb18017a1beb2ffd"
+      "body_hash": "859f3eb2e956d655"
     },
     {
       "path": "internal/client/client_test.go",
@@ -93,7 +93,7 @@
     {
       "path": "internal/provider/provider.go",
       "reason": "provider schema and registration",
-      "body_hash": "38346fdcc3db5fba"
+      "body_hash": "93b5236df23ae9bc"
     },
     {
       "path": "internal/provider/provider_test.go",

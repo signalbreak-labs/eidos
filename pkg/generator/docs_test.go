@@ -11,7 +11,9 @@ import (
 )
 
 // TestProviderDocsIndex_Render verifies that ProviderDocsIndex emits the
-// expected frontmatter, provider name, and resource/data source links.
+// expected frontmatter, provider name, an example provider configuration, and
+// the settable provider arguments — and no longer links out to every resource
+// and data source (the Terraform Registry renders construct navigation).
 func TestProviderDocsIndex_Render(t *testing.T) {
 	pir := sampleProviderIR()
 
@@ -29,14 +31,34 @@ func TestProviderDocsIndex_Render(t *testing.T) {
 		"description: |-",
 		"Generated provider for MyCloud.",
 		"# mycloud Provider",
-		"## Resources",
-		"- [mycloud_pet](resources/pet.md)",
-		"## Data Sources",
-		"- [mycloud_pets](data-sources/pets.md)",
+		"## Example Usage",
+		`provider "mycloud" {`,
+		"## Schema",
+		"### Arguments",
+		"* `api_key` (String, required)",
+		"* `endpoint` (String, optional)",
+		"* `tls_skip_verify` (Boolean, optional)",
 	}
 	for _, want := range wantSubstrings {
 		if !strings.Contains(got, want) {
 			t.Errorf("generated index.md missing %q\ncontent:\n%s", want, got)
+		}
+	}
+
+	// The index documents the provider itself; construct link lists belong to
+	// the Registry's own navigation and must not be emitted.
+	for _, gone := range []string{
+		"## Resources",
+		"## Data Sources",
+		"## Actions",
+		"## Ephemeral Resources",
+		"## List Resources",
+		"## Functions",
+		"(resources/",
+		"(data-sources/",
+	} {
+		if strings.Contains(got, gone) {
+			t.Errorf("generated index.md unexpectedly contains %q\ncontent:\n%s", gone, got)
 		}
 	}
 }
@@ -515,8 +537,8 @@ func TestRenderDocsSections_OptionalComputedNotDuplicated(t *testing.T) {
 // TestResourceDocsFile_TimeoutsSection locks in the G39 fix: a resource with
 // configured CRUD timeouts documents its `timeouts` block — a Blocks-section
 // row linking to a "### Nested Schema for `timeouts`" section listing each
-// configured operation as an optional string — instead of the block being
-// silently absent from the docs.
+// configured operation as an optional number of seconds — instead of the block
+// being silently absent from the docs.
 func TestResourceDocsFile_TimeoutsSection(t *testing.T) {
 	r := sampleResourceIR()
 	create := 20 * time.Minute
@@ -532,15 +554,15 @@ func TestResourceDocsFile_TimeoutsSection(t *testing.T) {
 	for _, want := range []string{
 		"* `timeouts` (Block Single) (see [below for nested schema](#nestedatt--timeouts))",
 		"### Nested Schema for `timeouts`",
-		"* `create` (String) - A create timeout for this operation",
-		"* `delete` (String) - A delete timeout for this operation",
+		"* `create` (Number) - A create timeout in seconds for this operation. Overrides the generator default (1200 seconds).",
+		"* `delete` (Number) - A delete timeout in seconds for this operation. Overrides the generator default (1200 seconds).",
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("timeouts documentation missing %q\ncontent:\n%s", want, got)
 		}
 	}
 	// Read was not configured: it must not be documented.
-	if strings.Contains(got, "* `read` (String)") {
+	if strings.Contains(got, "* `read` (Number)") {
 		t.Errorf("unconfigured read timeout must not be documented\ncontent:\n%s", got)
 	}
 

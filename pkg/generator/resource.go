@@ -6,6 +6,7 @@ import (
 	"go/ast"
 	"go/token"
 	"strings"
+	"time"
 
 	"github.com/signalbreak-labs/eidos/pkg/generator/astgen"
 	"github.com/signalbreak-labs/eidos/pkg/generator/internal/naming"
@@ -109,16 +110,20 @@ func generateResourceFile(r ir.ResourceIR, clientImport string) (*ast.File, erro
 		))
 	}
 	// A resource with configured timeouts carries a timeouts block in its schema
-	// and a matching timeouts.Value model field so the framework round-trips the
-	// practitioner's per-operation timeout configuration (M-14).
+	// and a matching *<Name>TimeoutsModel model field so the framework round-trips
+	// the practitioner's per-operation timeout configuration in seconds (M-14).
 	if resourceHasTimeouts(r) {
 		modelFields = append(modelFields, astgen.Field(
 			"Timeouts",
-			astgen.QualExpr("timeouts", "Value"),
+			astgen.StarExpr(astgen.Ident(resourceTimeoutsModelName(r))),
 			`tfsdk:"timeouts"`,
 		))
 	}
 	f.AddDecl(astgen.TypeDecl(modelName, astgen.StructType(modelFields...)))
+	if resourceHasTimeouts(r) {
+		f.AddCommentf("%s describes the per-operation timeout configuration (in seconds) for the %s resource.", resourceTimeoutsModelName(r), resourceTypeName(r))
+		f.AddDecl(astgen.TypeDecl(resourceTimeoutsModelName(r), timeoutsModelStructType(r)))
+	}
 
 	// Metadata method.
 	f.AddComment("Metadata returns the resource type name.")
@@ -137,19 +142,13 @@ func generateResourceFile(r ir.ResourceIR, clientImport string) (*ast.File, erro
 		)),
 	))
 
-	// Schema method. When the resource has configured timeouts the context
-	// parameter is named (not blanked) so the timeouts block can be built with
-	// timeouts.Block(ctx, ...) (M-14).
+	// Schema method.
 	f.AddComment("Schema returns the Terraform schema for this resource.")
 	schemaValues := resourceSchemaValues(r)
-	schemaCtxParam := "_"
-	if resourceHasTimeouts(r) {
-		schemaCtxParam = "ctx"
-	}
 	f.AddDecl(astgen.MethodDecl(
 		"Schema", "r", astgen.StarExpr(astgen.Ident(structName)),
 		astgen.Params(
-			astgen.Field(schemaCtxParam, astgen.QualExpr("context", "Context"), ""),
+			astgen.Field("_", astgen.QualExpr("context", "Context"), ""),
 			astgen.Field("_", astgen.QualExpr("resource", "SchemaRequest"), ""),
 			astgen.Field("resp", astgen.StarExpr(astgen.QualExpr("resource", "SchemaResponse")), ""),
 		),
@@ -412,16 +411,14 @@ func registerResourceImports(f *astgen.File, r ir.ResourceIR, wiring resourceWir
 	if hasStateUpgrades(r) && stateUpgradeNeedsAttr(r) {
 		f.AddImport("github.com/hashicorp/terraform-plugin-framework/attr", "attr")
 	}
-	// Configured timeouts emit a timeouts schema block and model field, which
-	// reference the framework-timeouts package. The time package is only needed
-	// when a wired CRUD body actually wires a timeout (its default is rendered
-	// as "N * time.Minute" etc.); a scaffolded resource keeps its honest scaffold
-	// body and never references time (M-14).
-	if resourceHasTimeouts(r) {
-		f.AddImport("github.com/hashicorp/terraform-plugin-framework-timeouts/resource/timeouts", "timeouts")
-		if resourceTimeoutWiringNeedsTime(r, wiring) {
-			f.AddImport("time", "")
-		}
+	// Configured timeouts emit a plain schema block and model struct, so they
+	// reference no external package. The time package is only needed when a
+	// wired CRUD body actually wires a timeout (its default is rendered as
+	// "N * time.Minute" etc. and the practitioner's seconds value is converted
+	// with time.Duration); a scaffolded resource keeps its honest scaffold body
+	// and never references time (M-14).
+	if resourceHasTimeouts(r) && resourceTimeoutWiringNeedsTime(r, wiring) {
+		f.AddImport("time", "")
 	}
 	return nil
 }
@@ -831,18 +828,13 @@ func resourceSchemaValues(r ir.ResourceIR) []ast.Expr {
 				resourceBlockExpr(block, ""),
 			))
 		}
-		// Configured timeouts emit the framework-timeouts block so practitioners
-		// can override the generator.yaml defaults per resource (M-14). The block
-		// is built with the Schema method's ctx parameter, which is why that
-		// parameter is named (not blanked) when timeouts are present.
+		// Configured timeouts emit a plain single nested block of Int64 seconds
+		// attributes so practitioners can override the generator.yaml defaults
+		// per resource with plain numbers (M-14).
 		if resourceHasTimeouts(r) {
 			blockElems = append(blockElems, astgen.KeyValueExpr(
 				astgen.Lit("timeouts"),
-				astgen.Call(
-					astgen.QualExpr("timeouts", "Block"),
-					astgen.Ident("ctx"),
-					resourceTimeoutOpts(r),
-				),
+				resourceBlockExpr(resourceTimeoutsBlock(r), ""),
 			))
 		}
 		elems = append(elems, astgen.KeyValue("Blocks", astgen.CompositeLit(
@@ -856,30 +848,77 @@ func resourceSchemaValues(r ir.ResourceIR) []ast.Expr {
 
 // resourceHasTimeouts reports whether the resource has any configured CRUD
 // timeout. When true, the generated resource emits a timeouts schema block, a
-// timeouts.Value model field, and per-operation context timeout wiring in the
-// wired CRUD methods (M-14).
+// *<Name>TimeoutsModel model field, and per-operation context timeout wiring
+// in the wired CRUD methods (M-14).
 func resourceHasTimeouts(r ir.ResourceIR) bool {
 	return r.Timeouts != nil && (r.Timeouts.Create != nil || r.Timeouts.Read != nil || r.Timeouts.Update != nil || r.Timeouts.Delete != nil)
 }
 
-// resourceTimeoutOpts returns the timeouts.Opts composite literal for the
-// resource's configured operations, so the emitted timeouts block exposes
-// exactly the operations the generator.yaml configured (M-14).
-func resourceTimeoutOpts(r ir.ResourceIR) ast.Expr {
-	opts := make([]ast.Expr, 0, 4)
-	if r.Timeouts.Create != nil {
-		opts = append(opts, astgen.KeyValue("Create", astgen.Ident("true")))
+// resourceTimeoutsModelName returns the name of the generated timeouts model
+// struct for a resource, e.g. "WorkspaceTimeoutsModel".
+func resourceTimeoutsModelName(r ir.ResourceIR) string {
+	return naming.GoTypeName(r.Name) + "TimeoutsModel"
+}
+
+// resourceConfiguredTimeoutOps returns the resource's configured timeout
+// operations in fixed create/read/update/delete order so generation stays
+// deterministic.
+func resourceConfiguredTimeoutOps(r ir.ResourceIR) []struct {
+	name     string
+	duration *time.Duration
+} {
+	ops := []struct {
+		name     string
+		duration *time.Duration
+	}{
+		{"create", r.Timeouts.Create},
+		{"read", r.Timeouts.Read},
+		{"update", r.Timeouts.Update},
+		{"delete", r.Timeouts.Delete},
 	}
-	if r.Timeouts.Read != nil {
-		opts = append(opts, astgen.KeyValue("Read", astgen.Ident("true")))
+	out := ops[:0]
+	for _, op := range ops {
+		if op.duration != nil {
+			out = append(out, op)
+		}
 	}
-	if r.Timeouts.Update != nil {
-		opts = append(opts, astgen.KeyValue("Update", astgen.Ident("true")))
+	return out
+}
+
+// timeoutsModelStructType returns the struct type for the resource's timeouts
+// model: one types.Int64 field per configured operation, carrying the
+// practitioner's per-operation timeout in seconds.
+func timeoutsModelStructType(r ir.ResourceIR) ast.Expr {
+	fields := make([]*ast.Field, 0, 4)
+	for _, op := range resourceConfiguredTimeoutOps(r) {
+		fields = append(fields, astgen.Field(
+			naming.GoFieldName(op.name),
+			astgen.QualExpr("types", "Int64"),
+			fmt.Sprintf("tfsdk:%q", op.name),
+		))
 	}
-	if r.Timeouts.Delete != nil {
-		opts = append(opts, astgen.KeyValue("Delete", astgen.Ident("true")))
+	return astgen.StructType(fields...)
+}
+
+// resourceTimeoutsBlock returns the synthesized timeouts nested block for the
+// resource's configured operations: a single optional block whose Int64
+// attributes carry per-operation timeouts in seconds.
+func resourceTimeoutsBlock(r ir.ResourceIR) ir.BlockIR {
+	attrs := make([]ir.AttributeIR, 0, 4)
+	for _, op := range resourceConfiguredTimeoutOps(r) {
+		attrs = append(attrs, ir.AttributeIR{
+			Name:        op.name,
+			Optional:    true,
+			Description: fmt.Sprintf("Maximum time in seconds for the %s operation. Defaults to %d.", op.name, int(op.duration.Seconds())),
+			Schema:      ir.SchemaIR{Type: ir.TypeInt},
+		})
 	}
-	return astgen.CompositeLit(astgen.QualExpr("timeouts", "Opts"), opts...)
+	return ir.BlockIR{
+		Name:        "timeouts",
+		NestingMode: ir.NestingSingle,
+		Description: "Per-operation timeouts in seconds.",
+		Schema:      ir.ObjectSchemaIR{Attributes: attrs},
+	}
 }
 
 // resourceAttributeExpr returns an ast expression for a resource/schema Attribute.
