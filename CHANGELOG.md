@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.0](https://github.com/signalbreak-labs/eidos/compare/v0.7.4...v0.8.0) (2026-09-03)
+
+
+### Features
+
+* **generator:** child-resource read via read_collection_path + exclude_attributes ([01dd7a9](https://github.com/signalbreak-labs/eidos/commit/01dd7a9769d24b4c13abf131368a5677adb12403))
+
+
+### Bug Fixes
+
+* **generator:** child-resource read correctness + coverage for read_collection_path/exclude_attributes ([a66a0b3](https://github.com/signalbreak-labs/eidos/commit/a66a0b3ce83cf189f62e9a66190e7d60b0af1f03))
+
 ## [0.7.4](https://github.com/signalbreak-labs/eidos/compare/v0.7.3...v0.7.4) (2026-09-01)
 
 
