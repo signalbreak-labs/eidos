@@ -2523,6 +2523,29 @@ func resourceNameFromOverride(ro config.ResourceOverride, createPath string) str
 // includeCreateResponse lists create-response-only properties to keep as
 // Computed attributes (config ResourceOverride.IncludeCreateResponseAttributes).
 func resourceFromOverrideCRUD(spec *parser.Spec, providerName string, g transformer.ResourceCRUD, diags *diagnostics.Diagnostics, skipUserSettableID bool, includeCreateResponse []string, readCollectionPath string) *ir.ResourceIR {
+	// Validate the read_collection_path once, mirroring
+	// transformer.applyResourceReadCollectionPath: a malformed path (empty
+	// segment, wildcard mid-path) must never reach the generator, whose
+	// navigation would silently resolve to an empty array and report the
+	// resource removed on every read. Drop the override fail-loud instead —
+	// and with it the child-resource state shape, which is only honest when
+	// the nested read actually selects the element.
+	nestedPath := strings.TrimSpace(readCollectionPath)
+	childRead := nestedPath != ""
+	if childRead && !transformer.ValidReadCollectionPath(nestedPath) {
+		childRead = false
+		nestedPath = ""
+		if diags != nil {
+			*diags = append(*diags, diagnostics.Diagnostic{
+				Severity: diagnostics.Warning,
+				Summary:  "read_collection_path override cannot be applied",
+				Detail: fmt.Sprintf(
+					"Resource %q: read_collection_path %q must be a dot-separated path with a wildcard only in the final segment (e.g. \"rules.*\").",
+					transformer.ToSnakeCase(g.Name), strings.TrimSpace(readCollectionPath),
+				),
+			})
+		}
+	}
 	// Normalize the CRUD group name to snake_case for the Terraform type name
 	// (camelCase is a convention violation; hyphens make the resource handle
 	// unreferenceable in HCL expressions). See the inferred-group counterpart
@@ -2566,8 +2589,8 @@ func resourceFromOverrideCRUD(spec *parser.Spec, providerName string, g transfor
 		// selects the element whose identifier matches state — even though the
 		// parent path carries a placeholder, which isCollectionRead would
 		// reject. The override's read_collection_path supplies the nested path.
-		if strings.TrimSpace(readCollectionPath) != "" {
-			res.CRUDMapping.Read.NestedCollectionPath = strings.TrimSpace(readCollectionPath)
+		if childRead {
+			res.CRUDMapping.Read.NestedCollectionPath = nestedPath
 			res.CRUDMapping.Read.ResponseIsCollection = true
 		}
 	}
@@ -2583,7 +2606,7 @@ func resourceFromOverrideCRUD(spec *parser.Spec, providerName string, g transfor
 		res.CRUDMapping.Delete = resourceOperationMapping(spec, string(g.Delete.Method), g.Delete.Path, parserOp(spec, g.Delete.Path, string(g.Delete.Method)), envelopeOf(g.Delete))
 		res.CRUDMapping.Delete.MediaType = mediaTypeOf(g.Delete)
 	}
-	schema, idAttr := transformer.ManagedResourceSchemaWithDiagnostics(g, diags, skipUserSettableID, strings.TrimSpace(readCollectionPath) != "")
+	schema, idAttr := transformer.ManagedResourceSchemaWithDiagnostics(g, diags, skipUserSettableID, childRead)
 	res.Schema = schema
 	res.IDAttribute = idAttr
 	// Create-response-only properties the override asked to keep (e.g. an

@@ -231,7 +231,13 @@ func acceptanceTestSteps(r ir.ResourceIR, resourceAddr, configFuncName string, h
 	if hasParam && planResourceWiring(r).update {
 		elems = append(elems, updateTestStep(r, resourceAddr, configFuncName, hasEndpoint, hasTokenURL, hasOIDCTokenURL, paramAttr, paramUpdated))
 	}
-	if r.Importable {
+	// A child resource (read via read_collection_path, a parent GET whose
+	// response nests the collection) selects the element whose identifier
+	// matches the imported id — but the mock's read path carries only the
+	// parent id, so it cannot serve an element keyed by an arbitrary imported
+	// identifier. The import step would exercise a mismatch the mock cannot
+	// resolve, so it is skipped; create/update/delete coverage remains.
+	if r.Importable && strings.TrimSpace(r.CRUDMapping.Read.NestedCollectionPath) == "" {
 		importID, err := acceptanceImportID(r)
 		if err != nil {
 			return nil, fmt.Errorf("resource %q acceptance import step: %w", r.Name, err)
@@ -770,6 +776,16 @@ type mockRoute struct {
 	readStatus   int
 	updateStatus int
 	deleteStatus int
+	// readNestedPath/readNestedEnvelope describe a child-resource read: the
+	// parent GET's response (after the readNestedEnvelope unwrap) nests the
+	// collection under readNestedPath (config read_collection_path, e.g. a port
+	// filter rule read nested at "rules.*" inside {"portFilter": {...}}). The
+	// mock's GET branch must serve the stored element body wrapped in that
+	// shape, or the generated read's navigation finds no array and reports the
+	// resource removed — failing the acceptance test it cannot otherwise
+	// distinguish from a genuine deletion.
+	readNestedPath     []string
+	readNestedEnvelope string
 }
 
 // firstSuccessCode returns the first declared success code for an operation,
@@ -868,18 +884,7 @@ func mockRoutes(m ir.CRUDMappingIR) []mockRoute {
 	byPath := map[string]mockRoute{}
 
 	addRoute := func(pathTemplate, method string, status int, kind routeKind, pathParams []ir.ParamIR) {
-		// Substitute static path placeholders (those with a const/default/enum
-		// in pathParams) with their literal values before computing the route
-		// prefix. A leading static segment such as {apiVersion} (enum
-		// ["v4beta"]) resolves to "v4beta", turning /{apiVersion}/things into
-		// /v4beta/things so the mock registers a real handler path instead of
-		// truncating at the first '{' to an empty prefix and dropping the route.
-		pathTemplate = substituteStaticPathPlaceholders(pathTemplate, pathParams)
-		path := pathTemplate
-		if idx := strings.Index(pathTemplate, "{"); idx >= 0 {
-			path = pathTemplate[:idx]
-		}
-		path = strings.TrimRight(path, "/")
+		path := mockRoutePrefix(pathTemplate, pathParams)
 		if path == "" {
 			return
 		}
@@ -906,6 +911,18 @@ func mockRoutes(m ir.CRUDMappingIR) []mockRoute {
 
 	addRoute(m.Create.PathTemplate, m.Create.Method, firstSuccessCode(m.Create.SuccessCodes, 201), routeCreate, m.Create.PathParams)
 	addRoute(m.Read.PathTemplate, m.Read.Method, firstSuccessCode(m.Read.SuccessCodes, 200), routeRead, m.Read.PathParams)
+	// A child-resource read (read_collection_path) is a parent GET whose
+	// response nests the collection: the GET handler must serve the stored
+	// element wrapped in that envelope + path shape so the generated read's
+	// navigation finds it. Attach the shape to the read's route bucket.
+	if nested := strings.TrimSpace(m.Read.NestedCollectionPath); nested != "" {
+		if path := mockRoutePrefix(m.Read.PathTemplate, m.Read.PathParams); path != "" {
+			route := byPath[path]
+			route.readNestedPath = strings.Split(nested, ".")
+			route.readNestedEnvelope = m.Read.ResponseEnvelope
+			byPath[path] = route
+		}
+	}
 	if m.Update != nil {
 		addRoute(m.Update.PathTemplate, m.Update.Method, firstSuccessCode(m.Update.SuccessCodes, 200), routeUpdate, m.Update.PathParams)
 	}
@@ -922,6 +939,21 @@ func mockRoutes(m ir.CRUDMappingIR) []mockRoute {
 		routes = append(routes, byPath[k])
 	}
 	return routes
+}
+
+// mockRoutePrefix computes the route-registration prefix for a path template:
+// static placeholders (const/default/enum in pathParams) are substituted with
+// their literal values so a leading static segment such as {apiVersion} (enum
+// ["v4beta"]) turns /{apiVersion}/things into /v4beta/things, then the path is
+// truncated at the first dynamic '{' placeholder and trailing slashes trimmed.
+// "" is returned when nothing remains (the mock cannot register an empty path).
+func mockRoutePrefix(pathTemplate string, pathParams []ir.ParamIR) string {
+	pathTemplate = substituteStaticPathPlaceholders(pathTemplate, pathParams)
+	path := pathTemplate
+	if idx := strings.Index(pathTemplate, "{"); idx >= 0 {
+		path = pathTemplate[:idx]
+	}
+	return strings.TrimRight(path, "/")
 }
 
 // substituteStaticPathPlaceholders replaces path placeholders that resolve to a
@@ -1349,6 +1381,46 @@ func mockIDValue(t ir.PrimitiveType) ast.Expr {
 	}
 }
 
+// mockWildcardCollectionKey is the object key the mock's GET branch uses for a
+// trailing "*" segment of a child resource's read_collection_path. The
+// generated provider's wildcard read aggregates every array value at that
+// level regardless of key name, so any deterministic key satisfies it; the
+// name documents that the array is a stand-in for the spec's sibling arrays
+// (e.g. passRules/dropRules), which the mock cannot reconstruct.
+const mockWildcardCollectionKey = "mock_collection"
+
+// mockReadResponseExpr returns the expression the mock's GET branch encodes as
+// the response. A plain read serves the stored element body directly; a
+// child-resource read (readNestedPath set) must serve it wrapped in the parent
+// response's shape — the envelope (when declared), then each collection-path
+// segment as an object key, with the innermost segment holding a one-element
+// array — so the generated read's path navigation finds the collection and its
+// identifier selection matches the stored element. The shape is static, so the
+// wrapper is a single composite literal.
+func mockReadResponseExpr(route mockRoute) ast.Expr {
+	if len(route.readNestedPath) == 0 {
+		return astgen.Ident("body")
+	}
+	wrapped := ast.Expr(astgen.CompositeLit(astgen.ArrayType(nil, astgen.Ident("any")), astgen.Ident("body")))
+	for i := len(route.readNestedPath) - 1; i >= 0; i-- {
+		seg := route.readNestedPath[i]
+		if seg == "*" {
+			seg = mockWildcardCollectionKey
+		}
+		wrapped = astgen.CompositeLit(
+			astgen.MapType(astgen.Ident("string"), astgen.Ident("any")),
+			astgen.KeyValueExpr(astgen.Lit(seg), wrapped),
+		)
+	}
+	if route.readNestedEnvelope != "" {
+		wrapped = astgen.CompositeLit(
+			astgen.MapType(astgen.Ident("string"), astgen.Ident("any")),
+			astgen.KeyValueExpr(astgen.Lit(route.readNestedEnvelope), wrapped),
+		)
+	}
+	return wrapped
+}
+
 // statefulMockRouteHandler generates a handler closure with per-route state
 // keyed by resource ID so that POST/PUT/PATCH echo the request body back and
 // GET returns the stored body for the requested ID. DELETE removes the entry,
@@ -1511,7 +1583,7 @@ func statefulMockRouteHandler(route mockRoute, index int, schemes []ir.SecurityS
 			astgen.ExprStmt(astgen.Call(astgen.Selector(astgen.Ident("w"), "WriteHeader"), astgen.IntLit(route.readStatus))),
 			astgen.AssignStmt(
 				[]ast.Expr{astgen.Ident("_")},
-				[]ast.Expr{astgen.Call(astgen.Selector(astgen.Call(astgen.QualExpr("json", "NewEncoder"), astgen.Ident("w")), "Encode"), astgen.Ident("body"))},
+				[]ast.Expr{astgen.Call(astgen.Selector(astgen.Call(astgen.QualExpr("json", "NewEncoder"), astgen.Ident("w")), "Encode"), mockReadResponseExpr(route))},
 				token.ASSIGN,
 			),
 			astgen.Return(),

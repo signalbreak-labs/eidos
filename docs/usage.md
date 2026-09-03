@@ -446,6 +446,12 @@ resource_overrides:
     force_new: [species]
     computed_attributes: [created_at]
     sensitive_attributes: [api_secret]
+    exclude_attributes: [rules]
+    include_create_response_attributes: [activation_id]
+    path_params:
+      read:
+        entlItemId: eli_id
+    read_collection_path: "rules.*"
     write_only_attributes:
       - name: password
         path: password
@@ -479,6 +485,7 @@ resource_overrides:
 | `timeouts` | TimeoutConfig | Per-resource CRUD timeouts. |
 | `force_new` | []string | Attributes that trigger replacement on change. |
 | `computed_attributes` | []string | Attributes forced to `Computed`. |
+| `exclude_attributes` | []string | Attributes (and matching blocks) removed from the resource schema entirely, at any nesting depth; names match case-insensitively and ignoring underscores. Used when a child resource manages a nested collection separately (e.g. `port_filter_rule` owning `port_filter`'s `rules`). |
 | `sensitive_attributes` | []string | Attributes forced to `Sensitive`. |
 | `write_only_attributes` | []WriteOnlyAttribute | Write-only arguments. |
 | `skip` | bool | Skip this resource entirely (the per-resource opt-out — drops the resource from generation). |
@@ -488,6 +495,9 @@ resource_overrides:
 | `read_operation` | string | OpenAPI operationId for Read. |
 | `update_operation` | string | OpenAPI operationId for Update (optional). |
 | `delete_operation` | string | OpenAPI operationId for Delete. |
+| `include_create_response_attributes` | []string | Create-response-only properties to include as `Computed` attributes (e.g. an activation id returned by POST but absent from the read). Each name must be a create response property; a missing property is surfaced fail-loud. |
+| `path_params` | map | Per-CRUD-operation mapping of path placeholders to the schema attributes that supply their values (`read: { entlItemId: eli_id }`), overriding name-match and id-attribute fallbacks. |
+| `read_collection_path` | string | Dot-separated path into the read response (after envelope unwrap) locating the nested collection for a child resource whose read is a parent GET. A trailing `*` segment searches every array value at that level. Pairs with `generate_resource: true`; on an inferred resource it changes only the read selection (the state keeps the read-response shape) and emits a `Warning`. A malformed path (empty segment, wildcard mid-path) is dropped fail-loud. Child resources get no generated import step. |
 | `schema_version` | int | Schema version for state upgrades. |
 | `state_upgrades` | []StateUpgradeConfig | State migrations. |
 | `description` | string | Override the resource's description (replaces the spec-derived description). |

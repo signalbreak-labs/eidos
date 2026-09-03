@@ -1291,6 +1291,10 @@ func newAttributeFromParam(snake string, p *operationParamFlags) ir.AttributeIR 
 		// input the computed_attributes override must not be able to make
 		// Computed-only (G39).
 		RequestInput: true,
+		// A path parameter folded into the schema (child resources only; path
+		// params are otherwise skipped) fills the URL from state but is not a
+		// request-body property — the generated JSON/XML body must omit it.
+		PathParam: strings.EqualFold(p.in, "path"),
 	}
 	if p.required {
 		attr.Required = true

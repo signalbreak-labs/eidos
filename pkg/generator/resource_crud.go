@@ -2101,37 +2101,67 @@ func identityPathParamField(r ir.ResourceIR, idAttr ir.AttributeIR) string {
 // otherwise the body is JSON (modelToJSONMap + json.Marshal) or XML (mapToXML).
 // The paths are mutually exclusive: an operation declares either a JSON/XML
 // request body or formData parameters, never both.
-func requestBodyStmts(op crudOperationPlan, summary, modelVar string) ([]ast.Stmt, ast.Expr) {
+func requestBodyStmts(op crudOperationPlan, summary, modelVar string, bodyOmitKeys []string) ([]ast.Stmt, ast.Expr) {
 	switch op.bodyEncoding {
 	case bodyForm:
 		return formBodyStmts(op, modelVar)
 	case bodyMultipart:
 		return multipartBodyStmts(op, summary, modelVar)
 	case bodyXML:
-		return xmlBodyStmts(op, summary, modelVar)
+		return xmlBodyStmts(op, summary, modelVar, bodyOmitKeys)
 	default: // bodyJSON
-		return jsonBodyStmts(summary, modelVar)
+		return jsonBodyStmts(summary, modelVar, bodyOmitKeys)
 	}
 }
 
 // jsonBodyStmts builds a JSON request body from the model: modelToJSONMap
 // converts the typed model to a map, json.Marshal encodes it, and bytes.NewReader
-// wraps the encoded payload as the request body reader.
-func jsonBodyStmts(summary, modelVar string) ([]ast.Stmt, ast.Expr) {
-	stmts := []ast.Stmt{
+// wraps the encoded payload as the request body reader. bodyOmitKeys names JSON
+// keys deleted from the map before marshaling — attributes that live in the
+// model only to fill path/query parameters (e.g. a child resource's folded path
+// parameters) and must not be sent to the API as body properties.
+func jsonBodyStmts(summary, modelVar string, bodyOmitKeys []string) ([]ast.Stmt, ast.Expr) {
+	stmts := make([]ast.Stmt, 0, len(bodyOmitKeys)+4)
+	stmts = append(stmts,
 		astgen.Assign(
 			[]ast.Expr{astgen.Ident("body"), astgen.Ident("err")},
 			[]ast.Expr{astgen.Call(astgen.Ident("modelToJSONMap"), astgen.UnaryPtr(astgen.Ident(modelVar)))},
 		),
 		errCheckStmt(summary, "Could not build request body: %s"),
+	)
+	for _, key := range bodyOmitKeys {
+		stmts = append(stmts, astgen.ExprStmt(astgen.Call(astgen.Ident("delete"), astgen.Ident("body"), astgen.Lit(key))))
+	}
+	stmts = append(stmts,
 		astgen.Assign(
 			[]ast.Expr{astgen.Ident("payload"), astgen.Ident("err")},
 			[]ast.Expr{astgen.Call(astgen.QualExpr("json", "Marshal"), astgen.Ident("body"))},
 		),
 		errCheckStmt(summary, "Could not encode request body: %s"),
-	}
+	)
 	body := astgen.Call(astgen.QualExpr("bytes", "NewReader"), astgen.Ident("payload"))
 	return stmts, body
+}
+
+// pathParamBodyOmitKeys returns the wire names of attributes folded into the
+// schema from path parameters (child resources), sorted for deterministic
+// output. modelToJSONMap encodes the whole model, so a child resource's create/
+// update body would otherwise leak the URL path parameters (e.g. portId,
+// ruleType) as body properties the API never declared.
+func pathParamBodyOmitKeys(r ir.ResourceIR) []string {
+	keys := make([]string, 0, 2)
+	for _, attr := range r.Schema.Attributes {
+		if !attr.PathParam {
+			continue
+		}
+		key := attr.WireName
+		if key == "" {
+			key = attr.Name
+		}
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return keys
 }
 
 // formBodyStmts builds an application/x-www-form-urlencoded request body from
@@ -2273,19 +2303,25 @@ func multipartBodyStmts(op crudOperationPlan, summary, modelVar string) ([]ast.S
 // resource's XML root element with deterministic sorted child order. The
 // encoded payload is wrapped with bytes.NewReader as the request body reader
 // (A2).
-func xmlBodyStmts(op crudOperationPlan, summary, modelVar string) ([]ast.Stmt, ast.Expr) {
-	stmts := []ast.Stmt{
+func xmlBodyStmts(op crudOperationPlan, summary, modelVar string, bodyOmitKeys []string) ([]ast.Stmt, ast.Expr) {
+	stmts := make([]ast.Stmt, 0, len(bodyOmitKeys)+4)
+	stmts = append(stmts,
 		astgen.Assign(
 			[]ast.Expr{astgen.Ident("body"), astgen.Ident("err")},
 			[]ast.Expr{astgen.Call(astgen.Ident("modelToJSONMap"), astgen.UnaryPtr(astgen.Ident(modelVar)))},
 		),
 		errCheckStmt(summary, "Could not build request body: %s"),
+	)
+	for _, key := range bodyOmitKeys {
+		stmts = append(stmts, astgen.ExprStmt(astgen.Call(astgen.Ident("delete"), astgen.Ident("body"), astgen.Lit(key))))
+	}
+	stmts = append(stmts,
 		astgen.Assign(
 			[]ast.Expr{astgen.Ident("payload"), astgen.Ident("err")},
 			[]ast.Expr{astgen.Call(astgen.Ident("mapToXML"), astgen.Ident("body"), astgen.Lit(op.xmlRoot))},
 		),
 		errCheckStmt(summary, "Could not encode request body: %s"),
-	}
+	)
 	body := astgen.Call(astgen.QualExpr("bytes", "NewReader"), astgen.Ident("payload"))
 	return stmts, body
 }
@@ -2410,7 +2446,7 @@ func wiredCreateHelperBody(r ir.ResourceIR, plan resourceWiringPlan) []ast.Stmt 
 	var bodyStmts []ast.Stmt
 	var bodyExpr ast.Expr
 	if plan.create.hasBody {
-		bodyStmts, bodyExpr = requestBodyStmts(plan.create, summary, "plan")
+		bodyStmts, bodyExpr = requestBodyStmts(plan.create, summary, "plan", pathParamBodyOmitKeys(r))
 	}
 	stmts := make([]ast.Stmt, 0, 16)
 	stmts = append(stmts, clientGuardStmt("r"))
@@ -2680,7 +2716,7 @@ func wiredUpdateHelperBody(r ir.ResourceIR, plan resourceWiringPlan) []ast.Stmt 
 	var bodyStmts []ast.Stmt
 	var bodyExpr ast.Expr
 	if plan.updateOp.hasBody {
-		bodyStmts, bodyExpr = requestBodyStmts(plan.updateOp, summary, "plan")
+		bodyStmts, bodyExpr = requestBodyStmts(plan.updateOp, summary, "plan", pathParamBodyOmitKeys(r))
 	}
 	stmts := make([]ast.Stmt, 0, 16)
 	stmts = append(stmts, clientGuardStmt("r"))

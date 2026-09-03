@@ -1241,6 +1241,92 @@ func TestSuggestPagination(t *testing.T) {
 // ResponseIsCollection on its Read mapping, so the generated readRemote
 // selects the matching element by identifier. An instance read (placeholder
 // path) whose response is a get-one array wrapper keeps the flag clear.
+// TestResourceFromOverrideCRUD_ReadCollectionPath drives the
+// read_collection_path branch of resourceFromOverrideCRUD: a valid path sets
+// the nested-collection read mapping and switches the schema to the
+// create-body state shape; an invalid path is dropped fail-loud (Warning) and
+// the mapping keeps a plain read.
+func TestResourceFromOverrideCRUD_ReadCollectionPath(t *testing.T) {
+	childGroup := func() transformer.ResourceCRUD {
+		ruleSpec := &transformer.SchemaSpec{Type: "object", Properties: map[string]transformer.SchemaSpec{
+			"ruleId": {Type: "string"},
+			"match":  {Type: "string"},
+		}}
+		return transformer.ResourceCRUD{
+			Name:           "port_filter_rule",
+			CollectionPath: "/ports/{portId}/filters/rules",
+			InstancePath:   "/ports/{portId}/filters/rules/{ruleId}",
+			Create: &transformer.Operation{Method: transformer.MethodPost, Path: "/ports/{portId}/filters/rules", OperationID: "createRule",
+				RequestSchema: ruleSpec},
+			Read: &transformer.Operation{Method: transformer.MethodGet, Path: "/ports/{portId}/filters/rules", OperationID: "listRules",
+				ResponseSchema: &transformer.SchemaSpec{Type: "object", Properties: map[string]transformer.SchemaSpec{
+					"rules": {Type: "array", Items: ruleSpec},
+				}}},
+			Update: &transformer.Operation{Method: transformer.MethodPut, Path: "/ports/{portId}/filters/rules/{ruleId}", OperationID: "updateRule"},
+			Delete: &transformer.Operation{Method: transformer.MethodDelete, Path: "/ports/{portId}/filters/rules/{ruleId}", OperationID: "deleteRule"},
+		}
+	}
+	spec := &parser.Spec{Paths: map[string]*parser.PathItem{
+		"/ports/{portId}/filters/rules": {
+			Post: &parser.Operation{OperationID: "createRule"},
+			Get:  &parser.Operation{OperationID: "listRules"},
+		},
+		"/ports/{portId}/filters/rules/{ruleId}": {
+			Put:    &parser.Operation{OperationID: "updateRule"},
+			Delete: &parser.Operation{OperationID: "deleteRule"},
+		},
+	}}
+
+	t.Run("valid nested path wires the child read", func(t *testing.T) {
+		var diags diagnostics.Diagnostics
+		res := resourceFromOverrideCRUD(spec, "acme", childGroup(), &diags, false, nil, "rules.*")
+		if res == nil {
+			t.Fatal("resourceFromOverrideCRUD returned nil")
+		}
+		if got := res.CRUDMapping.Read.NestedCollectionPath; got != "rules.*" {
+			t.Errorf("NestedCollectionPath = %q, want rules.*", got)
+		}
+		if !res.CRUDMapping.Read.ResponseIsCollection {
+			t.Error("ResponseIsCollection must be true for a nested collection read")
+		}
+		// The state shape comes from the create request body, not the parent
+		// read response: "match" is present, "rules" is not.
+		names := map[string]bool{}
+		for _, a := range res.Schema.Attributes {
+			names[a.Name] = true
+		}
+		if !names["match"] {
+			t.Errorf("create-body attribute match expected, got %v", names)
+		}
+		if names["rules"] {
+			t.Errorf("parent-read attribute rules must be absent, got %v", names)
+		}
+	})
+
+	t.Run("invalid nested path is dropped with a warning", func(t *testing.T) {
+		var diags diagnostics.Diagnostics
+		res := resourceFromOverrideCRUD(spec, "acme", childGroup(), &diags, false, nil, "rules.*.x")
+		if res == nil {
+			t.Fatal("resourceFromOverrideCRUD returned nil")
+		}
+		if got := res.CRUDMapping.Read.NestedCollectionPath; got != "" {
+			t.Errorf("NestedCollectionPath = %q, want dropped", got)
+		}
+		if res.CRUDMapping.Read.ResponseIsCollection {
+			t.Error("ResponseIsCollection must stay clear when the path is dropped")
+		}
+		found := false
+		for _, d := range diags {
+			if d.Severity == diagnostics.Warning && strings.Contains(d.Detail, "read_collection_path") {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("expected a read_collection_path warning, got %+v", diags)
+		}
+	})
+}
+
 func TestResourceFromOverrideCRUD_CollectionReadFlag(t *testing.T) {
 	arrayResponse := &transformer.SchemaSpec{Type: "array", Items: &transformer.SchemaSpec{
 		Type: "object",

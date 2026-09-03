@@ -242,6 +242,94 @@ func TestPathParamDescription(t *testing.T) {
 // gate through the public schema builder: an explicit id_attribute/import_format
 // override keeps the synthetic Computed placeholder named for the path parameter
 // instead of preferring a practitioner-supplied create-body attribute.
+// TestManagedResourceSchema_ChildRead drives the childRead gate through the
+// public schema builder: a child resource (read_collection_path, issue #64)
+// derives its state shape from the create request body instead of the
+// parent-collection read response, and folds the parent path parameters into
+// the schema as Required PathParam attributes so the CRUD paths can be filled
+// from state (and the request body, which reflects the whole model, can omit
+// them).
+func TestManagedResourceSchema_ChildRead(t *testing.T) {
+	childCRUD := func() ResourceCRUD {
+		return ResourceCRUD{
+			Name:           "port_filter_rule",
+			CollectionPath: "/ports/{portId}/filters/rules",
+			InstancePath:   "/ports/{portId}/filters/rules/{ruleId}",
+			Create: &Operation{
+				Method: MethodPost,
+				Path:   "/ports/{portId}/filters/rules",
+				Parameters: []Parameter{
+					{Name: "portId", In: "path", Required: true, Type: "string", Description: "parent port"},
+				},
+				RequestSchema: &SchemaSpec{
+					Type:     "object",
+					Required: []string{"ruleAction"},
+					Properties: map[string]SchemaSpec{
+						"ruleId":     {Type: "string"},
+						"ruleAction": {Type: "string", Description: "pass or drop"},
+					},
+				},
+			},
+			Read: &Operation{
+				Method: MethodGet,
+				Path:   "/ports/{portId}/filters/rules/{ruleId}",
+				Parameters: []Parameter{
+					{Name: "portId", In: "path", Required: true, Type: "string"},
+					{Name: "ruleId", In: "path", Required: true, Type: "string"},
+				},
+				// The parent read returns the whole filter, not a rule: its
+				// shape must NOT leak into the child's state.
+				ResponseSchema: &SchemaSpec{
+					Type:       "object",
+					Properties: map[string]SchemaSpec{"ruleCount": {Type: "integer"}},
+				},
+			},
+			Delete: &Operation{Method: MethodDelete, Path: "/ports/{portId}/filters/rules/{ruleId}"},
+			ID:     IDInfo{Kind: IDSimple, ParameterNames: []string{"ruleId"}, AttributeName: "rule_id", ImportFormat: "%s"},
+		}
+	}
+
+	t.Run("state shape comes from the create request body", func(t *testing.T) {
+		schema, _ := ManagedResourceSchemaWithDiagnostics(childCRUD(), nil, false, true)
+		if _, ok := findAttr(schema.Attributes, "rule_action"); !ok {
+			t.Errorf("rule_action from the create body expected, got %+v", schema.Attributes)
+		}
+		if _, ok := findAttr(schema.Attributes, "rule_count"); ok {
+			t.Errorf("rule_count belongs to the parent read shape and must be absent, got %+v", schema.Attributes)
+		}
+	})
+
+	t.Run("path parameters fold in as Required PathParam attributes", func(t *testing.T) {
+		schema, _ := ManagedResourceSchemaWithDiagnostics(childCRUD(), nil, false, true)
+		attr, ok := findAttr(schema.Attributes, "port_id")
+		if !ok {
+			t.Fatalf("folded port_id attribute expected, got %+v", schema.Attributes)
+		}
+		if !attr.Required || attr.Optional || attr.Computed {
+			t.Errorf("port_id flags = Required:%v Optional:%v Computed:%v, want Required only", attr.Required, attr.Optional, attr.Computed)
+		}
+		if !attr.PathParam {
+			t.Errorf("port_id PathParam = false, want true (request bodies must omit it)")
+		}
+		if attr.WireName != "portId" {
+			t.Errorf("port_id WireName = %q, want portId", attr.WireName)
+		}
+		if attr.Description != "parent port" {
+			t.Errorf("port_id Description = %q, want parent port", attr.Description)
+		}
+	})
+
+	t.Run("without childRead the read shape wins and path params stay out", func(t *testing.T) {
+		schema, _ := ManagedResourceSchemaWithDiagnostics(childCRUD(), nil, false, false)
+		if _, ok := findAttr(schema.Attributes, "rule_count"); !ok {
+			t.Errorf("rule_count from the read response expected, got %+v", schema.Attributes)
+		}
+		if attr, ok := findAttr(schema.Attributes, "port_id"); ok && attr.PathParam {
+			t.Errorf("port_id must not be a folded PathParam without childRead, got %+v", attr)
+		}
+	})
+}
+
 func TestManagedResourceSchema_SkipUserSettableID(t *testing.T) {
 	c := ResourceCRUD{
 		Name:           "port",

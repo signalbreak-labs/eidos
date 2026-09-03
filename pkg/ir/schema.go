@@ -45,7 +45,14 @@ type AttributeIR struct {
 	// would leave the request sending a value the practitioner can never
 	// supply (e.g. a required clusterId query param), breaking create and
 	// import (G39).
-	RequestInput       bool             `json:"request_input,omitempty"`
+	RequestInput bool `json:"request_input,omitempty"`
+	// PathParam marks an attribute folded into the schema from an operation
+	// path parameter (child resources: ManagedResourceSchemaWithDiagnostics
+	// with childRead). It exists only so the CRUD paths can be filled from
+	// state; it is not a request-body property, so the generator's JSON body
+	// omits it (delete on the marshaled map) even though modelToJSONMap
+	// encodes the whole model.
+	PathParam          bool             `json:"path_param,omitempty"`
 	Deprecated         bool             `json:"deprecated,omitempty"`
 	DeprecationMessage string           `json:"deprecation_message,omitempty"`
 	Default            *any             `json:"default,omitempty"`

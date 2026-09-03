@@ -1387,3 +1387,88 @@ func TestResourceAcceptanceTestFile_DiscriminatedUnion(t *testing.T) {
 		t.Errorf("union object literal must include a variant field\ncontent:\n%s", got)
 	}
 }
+
+// TestResourceAcceptanceTestFile_NestedCollectionRead verifies that the
+// stateful mock for a child resource (read_collection_path) wraps the stored
+// element in the nested read shape the generated Read navigation expects —
+// {"portFilter": {"rules": {"mock_collection": [body]}}} for NestedCollectionPath
+// "rules.*" with envelope "portFilter" — and that the import step is omitted:
+// the mock's read path carries only the parent id, so it cannot serve an
+// element keyed by an arbitrary imported identifier.
+func TestResourceAcceptanceTestFile_NestedCollectionRead(t *testing.T) {
+	r := ir.ResourceIR{
+		Name:     "port_filter_rule",
+		TypeName: "gigavuecore_port_filter_rule",
+		Schema: ir.ObjectSchemaIR{Attributes: []ir.AttributeIR{
+			{Name: "id", Computed: true, Schema: ir.SchemaIR{Type: ir.TypeString}},
+			{Name: "port_id", Required: true, WireName: "portId", PathParam: true, Schema: ir.SchemaIR{Type: ir.TypeString}},
+			{Name: "action", Required: true, Schema: ir.SchemaIR{Type: ir.TypeString}},
+		}},
+		CRUDMapping: ir.CRUDMappingIR{
+			Create: ir.OperationMappingIR{Method: "POST", PathTemplate: "/ports/{portId}/filters/rules"},
+			Read: ir.OperationMappingIR{
+				Method: "GET", PathTemplate: "/ports/{portId}/filters",
+				ResponseEnvelope: "portFilter", NestedCollectionPath: "rules.*", ResponseIsCollection: true,
+			},
+			Delete: ir.OperationMappingIR{Method: "DELETE", PathTemplate: "/ports/{portId}/filters/rules/{id}"},
+		},
+		Importable: true,
+	}
+	pir := sampleProviderWithResourceIR()
+	pir.Resources = []ir.ResourceIR{r}
+	cfg := BuildConfig{ProviderName: pir.Name, Namespace: pir.Name}
+
+	file := ResourceAcceptanceTestFile(pir, r, cfg)
+	var buf bytes.Buffer
+	if err := file.Render(&buf); err != nil {
+		t.Fatalf("Render() error = %v", err)
+	}
+	got := buf.String()
+
+	if !strings.Contains(got, `map[string]any{"portFilter": map[string]any{"rules": map[string]any{"mock_collection": []any{body}}}}`) {
+		t.Errorf("mock GET response must wrap the stored element in the nested collection shape; content:\n%s", got)
+	}
+	if strings.Contains(got, "ImportState") {
+		t.Errorf("nested-collection child resources must not emit an import step; content:\n%s", got)
+	}
+}
+
+// TestResourceFile_PathParamOmittedFromRequestBody verifies that attributes
+// folded into the schema from operation path parameters (child resources) are
+// deleted from the marshaled request-body maps the generated Create and
+// Update helpers build: modelToJSONMap reflects the whole model, so without
+// the delete the path param would leak into the JSON body (issue #64).
+func TestResourceFile_PathParamOmittedFromRequestBody(t *testing.T) {
+	bodySchema := &ir.SchemaIR{Attributes: []ir.AttributeIR{
+		{Name: "action", Required: true, Schema: ir.SchemaIR{Type: ir.TypeString}},
+	}}
+	r := ir.ResourceIR{
+		Name:     "port_filter_rule",
+		TypeName: "gigavuecore_port_filter_rule",
+		Schema: ir.ObjectSchemaIR{Attributes: []ir.AttributeIR{
+			{Name: "id", Computed: true, Schema: ir.SchemaIR{Type: ir.TypeString}},
+			{Name: "port_id", Required: true, WireName: "portId", PathParam: true, Schema: ir.SchemaIR{Type: ir.TypeString}},
+			{Name: "action", Required: true, Schema: ir.SchemaIR{Type: ir.TypeString}},
+		}},
+		CRUDMapping: ir.CRUDMappingIR{
+			Create: ir.OperationMappingIR{Method: "POST", PathTemplate: "/ports/{portId}/filters/rules", BodySchema: bodySchema},
+			Read:   ir.OperationMappingIR{Method: "GET", PathTemplate: "/ports/{portId}/filters/rules/{id}"},
+			Update: &ir.OperationMappingIR{Method: "PUT", PathTemplate: "/ports/{portId}/filters/rules/{id}", BodySchema: bodySchema},
+			Delete: ir.OperationMappingIR{Method: "DELETE", PathTemplate: "/ports/{portId}/filters/rules/{id}"},
+		},
+	}
+
+	file := ResourceFile(r, testClientImport)
+	var buf bytes.Buffer
+	if err := file.Render(&buf); err != nil {
+		t.Fatalf("Render() error = %v", err)
+	}
+	got := buf.String()
+
+	if n := strings.Count(got, `delete(body, "portId")`); n != 2 {
+		t.Errorf("create AND update bodies must each omit the path param (found %d deletes); content:\n%s", n, got)
+	}
+	if strings.Contains(got, `delete(body, "action")`) || strings.Contains(got, `delete(body, "id")`) {
+		t.Errorf("non-path-param attributes must not be deleted from the body; content:\n%s", got)
+	}
+}

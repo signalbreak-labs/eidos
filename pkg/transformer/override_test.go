@@ -1258,6 +1258,155 @@ func TestApplyOverrides_ExcludeAttributesNested(t *testing.T) {
 	}
 }
 
+// TestApplyOverrides_ExcludeAttributesBlock locks in block removal: an
+// exclude_attributes entry whose name matches a nested block drops the whole
+// block, not just its contents — a nested collection rendered as a block
+// (legacy nesting mode) must leave the parent schema as completely as one
+// rendered as an attribute.
+func TestApplyOverrides_ExcludeAttributesBlock(t *testing.T) {
+	provider := &ir.ProviderIR{
+		Resources: []ir.ResourceIR{{
+			Name:     "port_filter",
+			TypeName: "port_filter",
+			Schema: ir.ObjectSchemaIR{
+				Attributes: []ir.AttributeIR{
+					{Name: "port", Required: true, Schema: ir.SchemaIR{Type: ir.TypeString}},
+				},
+				Blocks: []ir.BlockIR{
+					{
+						Name:        "rules",
+						NestingMode: ir.NestingList,
+						Schema: ir.ObjectSchemaIR{
+							Attributes: []ir.AttributeIR{
+								{Name: "rule_id", Required: true, Schema: ir.SchemaIR{Type: ir.TypeString}},
+							},
+						},
+					},
+					{
+						Name:        "tags",
+						NestingMode: ir.NestingList,
+						Schema: ir.ObjectSchemaIR{
+							Attributes: []ir.AttributeIR{
+								{Name: "key", Required: true, Schema: ir.SchemaIR{Type: ir.TypeString}},
+							},
+						},
+					},
+				},
+			},
+		}},
+	}
+	cfg := &config.Config{
+		Provider: config.ProviderConfig{Name: "test", Version: "0.0.1"},
+		ResourceOverrides: []config.ResourceOverride{{
+			Schema:            "port_filter",
+			ExcludeAttributes: []string{"rules"},
+		}},
+	}
+
+	if err := ApplyOverrides(provider, cfg); err != nil {
+		t.Fatalf("ApplyOverrides() = %v, want nil", err)
+	}
+	blocks := provider.Resources[0].Schema.Blocks
+	if len(blocks) != 1 || blocks[0].Name != "tags" {
+		t.Errorf("Blocks = %+v, want only [tags] surviving", blocks)
+	}
+}
+
+// TestApplyOverrides_ReadCollectionPathInvalid locks in the fail-loud drop of a
+// malformed read_collection_path (empty segment, wildcard mid-path): the
+// override is not applied and a Warning is surfaced, so the generator never
+// emits a navigation that silently resolves to "removed".
+func TestApplyOverrides_ReadCollectionPathInvalid(t *testing.T) {
+	for _, path := range []string{"rules..passRules", "rules.*.x", ".*", "rules."} {
+		provider := &ir.ProviderIR{
+			Resources: []ir.ResourceIR{{
+				Name:            "port_filter_rule",
+				TypeName:        "port_filter_rule",
+				SourceOperation: "addPortFilterRule",
+				OverrideCreated: true,
+				CRUDMapping: ir.CRUDMappingIR{
+					Read: ir.OperationMappingIR{Method: "GET", PathTemplate: "/portFilters/{portId}"},
+				},
+			}},
+		}
+		cfg := &config.Config{
+			Provider: config.ProviderConfig{Name: "test", Version: "0.0.1"},
+			ResourceOverrides: []config.ResourceOverride{{
+				Operation:          "addPortFilterRule",
+				ReadCollectionPath: path,
+			}},
+		}
+		var diags diagnostics.Diagnostics
+		if err := ApplyOverridesWithDiagnostics(provider, cfg, &diags); err != nil {
+			t.Fatalf("ApplyOverrides(%q) = %v, want nil", path, err)
+		}
+		if got := provider.Resources[0].CRUDMapping.Read.NestedCollectionPath; got != "" {
+			t.Errorf("path %q: NestedCollectionPath = %q, want dropped", path, got)
+		}
+		warned := false
+		for _, d := range diags {
+			if d.Severity == diagnostics.Warning && strings.Contains(d.Summary, "read_collection_path") {
+				warned = true
+			}
+		}
+		if !warned {
+			t.Errorf("path %q: no fail-loud warning for malformed read_collection_path", path)
+		}
+	}
+}
+
+// TestApplyOverrides_ReadCollectionPathInferredWarns locks in the shape-mismatch
+// warning: read_collection_path on an inferred (not override-created) resource
+// selects a child-shaped element but the schema still derives from the parent
+// read response, so the override warns and points at generate_resource.
+func TestApplyOverrides_ReadCollectionPathInferredWarns(t *testing.T) {
+	provider := &ir.ProviderIR{
+		Resources: []ir.ResourceIR{{
+			Name:            "port_filter_rule",
+			TypeName:        "port_filter_rule",
+			SourceOperation: "addPortFilterRule",
+			CRUDMapping: ir.CRUDMappingIR{
+				Read: ir.OperationMappingIR{Method: "GET", PathTemplate: "/portFilters/{portId}"},
+			},
+		}},
+	}
+	cfg := &config.Config{
+		Provider: config.ProviderConfig{Name: "test", Version: "0.0.1"},
+		ResourceOverrides: []config.ResourceOverride{{
+			Operation:          "addPortFilterRule",
+			ReadCollectionPath: "rules.*",
+		}},
+	}
+	var diags diagnostics.Diagnostics
+	if err := ApplyOverridesWithDiagnostics(provider, cfg, &diags); err != nil {
+		t.Fatalf("ApplyOverrides() = %v, want nil", err)
+	}
+	if got := provider.Resources[0].CRUDMapping.Read.NestedCollectionPath; got != "rules.*" {
+		t.Errorf("NestedCollectionPath = %q, want rules.*", got)
+	}
+	warned := false
+	for _, d := range diags {
+		if d.Severity == diagnostics.Warning && strings.Contains(d.Detail, "generate_resource") {
+			warned = true
+		}
+	}
+	if !warned {
+		t.Errorf("no shape-mismatch warning for inferred resource with read_collection_path")
+	}
+
+	// An override-created resource (the supported path) warns only about schema shape.
+	provider.Resources[0].OverrideCreated = true
+	diags = nil
+	if err := ApplyOverridesWithDiagnostics(provider, cfg, &diags); err != nil {
+		t.Fatalf("ApplyOverrides() = %v, want nil", err)
+	}
+	for _, d := range diags {
+		if d.Severity == diagnostics.Warning && strings.Contains(d.Detail, "generate_resource") {
+			t.Errorf("override-created resource should not warn: %v", d)
+		}
+	}
+}
+
 func TestApplyOverrides_DatasourceName(t *testing.T) {
 	provider := &ir.ProviderIR{
 		DataSources: []ir.DataSourceIR{{

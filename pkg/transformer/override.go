@@ -471,6 +471,33 @@ func applyResourceReadCollectionPath(r *ir.ResourceIR, override config.ResourceO
 	}
 	r.CRUDMapping.Read.NestedCollectionPath = path
 	r.CRUDMapping.Read.ResponseIsCollection = true
+	// The child-resource state shape (create-body attributes plus folded path
+	// parameters) is only derived for override-created resources, where the API
+	// layer receives the path before the schema is built. An inferred resource
+	// keeps its read-response-derived schema even though the generated read now
+	// applies a nested child element to it — a silent shape mismatch. Warn so
+	// the practitioner promotes the resource deliberately (generate_resource:
+	// true) instead of discovering the mismatch at plan time.
+	if !r.OverrideCreated && diags != nil {
+		*diags = diags.Append(diagnostics.Diagnostic{
+			Severity: diagnostics.Warning,
+			Summary:  "read_collection_path on an inferred resource keeps the read-response state shape",
+			Detail: fmt.Sprintf(
+				"Resource %q: read_collection_path %q selects a nested element whose shape comes from the create request body, but this resource was inferred, so its schema was derived from the parent read response. Recreate it with generate_resource: true (and its CRUD operations) so the schema, folded path parameters, and read stay consistent.",
+				r.Name, path,
+			),
+		})
+	}
+}
+
+// ValidReadCollectionPath reports whether a read_collection_path is well-formed:
+// a non-empty dot-separated path whose segments are non-empty and whose wildcard
+// ("*"), if any, appears only in the final segment. It is exported so the API
+// layer can validate the override at resource-creation time (the malformed path
+// must never reach the generator, which would silently emit a navigation that
+// always resolves to "removed").
+func ValidReadCollectionPath(path string) bool {
+	return validCollectionPath(path)
 }
 
 // validCollectionPath reports whether a read_collection_path is well-formed: a
@@ -802,6 +829,31 @@ func excludeAttributesAtPath(obj *ir.ObjectSchemaIR, names []string) {
 	}
 	obj.Attributes = kept
 
+	// A block whose own name matches is dropped entirely, with the same
+	// exact-name-wins disambiguation as attributes — a nested collection
+	// rendered as a block (legacy nesting mode) must leave the parent's schema
+	// just as completely as one rendered as an attribute.
+	exactBlockIndex := exactBlockNameIndex(obj.Blocks, names)
+	keptBlocks := obj.Blocks[:0]
+	for i := range obj.Blocks {
+		excluded := false
+		for _, n := range names {
+			if !attributeNameMatches(obj.Blocks[i].Name, n) {
+				continue
+			}
+			if j, ok := exactBlockIndex[n]; ok && j != i {
+				continue // a distinct exact match claims this entry
+			}
+			excluded = true
+			break
+		}
+		if excluded {
+			continue
+		}
+		keptBlocks = append(keptBlocks, obj.Blocks[i])
+	}
+	obj.Blocks = keptBlocks
+
 	for j := range obj.Blocks {
 		excludeAttributesAtPath(&obj.Blocks[j].Schema, names)
 	}
@@ -937,6 +989,26 @@ func exactNameIndex(attrs []ir.AttributeIR, names []string) map[string]int {
 		}
 		for i := range attrs {
 			if exactAttributeName(attrs[i].Name, n) {
+				exactIndex[n] = i
+				break
+			}
+		}
+	}
+	return exactIndex
+}
+
+// exactBlockNameIndex is exactNameIndex for blocks: for each target name, the
+// index of the block at this level that matches exactly (case-insensitive,
+// underscore-sensitive — mirroring exactAttributeName). A name matches at most
+// one block; the first exact match wins.
+func exactBlockNameIndex(blocks []ir.BlockIR, names []string) map[string]int {
+	exactIndex := make(map[string]int, len(names))
+	for _, n := range names {
+		if _, ok := exactIndex[n]; ok {
+			continue
+		}
+		for i := range blocks {
+			if exactAttributeName(blocks[i].Name, n) {
 				exactIndex[n] = i
 				break
 			}
