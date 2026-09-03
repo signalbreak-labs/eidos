@@ -103,6 +103,87 @@ func TestGenerateConfig_GenerateDatasourceRoundTrip(t *testing.T) {
 	}
 }
 
+// TestGenerateConfig_ReadCollectionPathRoundTrip verifies that an
+// override-created child resource whose read descends into a nested collection
+// path re-emits read_collection_path, so a normalized generator.yaml
+// reproduces the child-resource read instead of silently degrading it to an
+// instance read (G8). It also verifies the parent's exclude_attributes
+// round-trips, so the parent keeps dropping the nested collection the child
+// manages.
+func TestGenerateConfig_ReadCollectionPathRoundTrip(t *testing.T) {
+	providerIR := ir.ProviderIR{
+		Name: "port",
+		Resources: []ir.ResourceIR{
+			{
+				Name:            "port_filter_rule",
+				TypeName:        "port_port_filter_rule",
+				SourceOperation: "addPortFilterRule",
+				OverrideCreated: true,
+				CRUDMapping: ir.CRUDMappingIR{
+					Create: ir.OperationMappingIR{Method: "POST", PathTemplate: "/portFilters/{portId}/rules", OperationID: "addPortFilterRule"},
+					Read: ir.OperationMappingIR{
+						Method:               "GET",
+						PathTemplate:         "/portFilters/{portId}",
+						OperationID:          "getPortFilterByPortId",
+						ResponseEnvelope:     "portFilter",
+						ResponseIsCollection: true,
+						NestedCollectionPath: "rules.*",
+					},
+					Update: &ir.OperationMappingIR{Method: "PUT", PathTemplate: "/portFilters/{portId}/rules/{ruleId}", OperationID: "updatePortFilterRule"},
+					Delete: ir.OperationMappingIR{Method: "DELETE", PathTemplate: "/portFilters/{portId}/rules/{ruleId}", OperationID: "removePortFilterRule"},
+				},
+			},
+			{
+				Name:               "port_filter",
+				TypeName:           "port_port_filter",
+				SourceOperation:    "createPortFilter",
+				ExcludedAttributes: []string{"rules"},
+				CRUDMapping: ir.CRUDMappingIR{
+					Create: ir.OperationMappingIR{Method: "POST", PathTemplate: "/portFilters", OperationID: "createPortFilter"},
+					Read:   ir.OperationMappingIR{Method: "GET", PathTemplate: "/portFilters/{portId}", OperationID: "getPortFilterByPortId"},
+					Delete: ir.OperationMappingIR{Method: "DELETE", PathTemplate: "/portFilters/{portId}", OperationID: "deletePortFilter"},
+				},
+			},
+		},
+	}
+
+	cfg, err := GenerateConfig(providerIR)
+	if err != nil {
+		t.Fatalf("GenerateConfig failed: %v", err)
+	}
+
+	found := false
+	for _, ro := range cfg.ResourceOverrides {
+		if ro.Operation != "addPortFilterRule" {
+			continue
+		}
+		found = true
+		if ro.ReadCollectionPath != "rules.*" {
+			t.Errorf("resource override addPortFilterRule read_collection_path = %q, want rules.*", ro.ReadCollectionPath)
+		}
+		if ro.ReadOperation != "getPortFilterByPortId" {
+			t.Errorf("resource override addPortFilterRule read_operation = %q, want getPortFilterByPortId", ro.ReadOperation)
+		}
+	}
+	if !found {
+		t.Fatalf("no resource override for addPortFilterRule in %+v", cfg.ResourceOverrides)
+	}
+
+	foundParent := false
+	for _, ro := range cfg.ResourceOverrides {
+		if ro.Operation != "createPortFilter" {
+			continue
+		}
+		foundParent = true
+		if len(ro.ExcludeAttributes) != 1 || ro.ExcludeAttributes[0] != "rules" {
+			t.Errorf("resource override createPortFilter exclude_attributes = %v, want [rules]", ro.ExcludeAttributes)
+		}
+	}
+	if !foundParent {
+		t.Fatalf("no resource override for createPortFilter in %+v", cfg.ResourceOverrides)
+	}
+}
+
 func TestGenerateConfig_Full(t *testing.T) {
 	providerIR := ir.ProviderIR{
 		Name:        "mycloud",

@@ -129,6 +129,15 @@ type crudOperationPlan struct {
 	// resource removed when no element matches — instead of blindly applying
 	// the first element (G39).
 	responseIsCollection bool
+	// nestedCollectionPath is a dot-separated path into the read response
+	// (after the envelope unwrap) that locates the collection array(s) for a
+	// child resource whose read is a parent GET (e.g. a port filter rule read
+	// via GET /portFilters/{portId}, with the rules at "portFilter.rules.*").
+	// The last segment may be "*" to search every array value at that level.
+	// When non-empty, the generated readRemote navigates the path and selects
+	// the element whose identifier matches state (G39) instead of applying the
+	// whole parent object.
+	nestedCollectionPath string
 	// responseInnerPath is the property name to navigate into AFTER the response
 	// envelope is unwrapped, before applying the body to the model. It handles
 	// create/update responses that nest the created/updated resource under a
@@ -383,6 +392,7 @@ func planOperation(r ir.ResourceIR, op ir.OperationMappingIR, pathOverrides map[
 	planned.successCodes = op.SuccessCodes
 	planned.errorMappings = errorMappingDescriptions(op.ErrorMappings)
 	planned.responseIsCollection = op.ResponseIsCollection
+	planned.nestedCollectionPath = strings.TrimSpace(op.NestedCollectionPath)
 	if planned.method == "" || planned.template == "" {
 		return planned, false
 	}
@@ -733,15 +743,17 @@ func resolvePathSubstitution(r ir.ResourceIR, placeholder string, noIDFallback b
 	}
 	for _, attr := range r.Schema.Attributes {
 		// A schema attribute whose Terraform name matches the placeholder wins.
-		// For a composite path (noIDFallback, multiple dynamic placeholders) the
-		// resource-id fallback is suppressed, so a placeholder whose spec name is
-		// camelCase (e.g. {notifType}) would never match the snake_case attribute
-		// name (notif_type) and the whole resource would stay an honest scaffold
-		// even though the response echoes the identifier. Also accept a match
-		// against the attribute's WireName (the original spec field name) in that
-		// case — this is only reached for composite paths, so simple-id paths keep
-		// their existing name-match-then-id-fallback behavior byte-identical.
-		if attr.Name != placeholder && (!noIDFallback || attr.WireName != placeholder) {
+		// Also accept a match against the attribute's WireName (the original spec
+		// field name): a placeholder is camelCase (e.g. {portId}) while the
+		// attribute is snake_case (port_id), so a name-only match would miss it.
+		// This matters for child resources, whose path parameters are folded into
+		// the schema as Required attributes carrying the spec's wire name — a
+		// simple-id path like /portFilters/{portId} must fill {portId} from the
+		// port_id attribute, not fall back to the resource id (rule_id). The
+		// WireName match is safe on simple-id paths too: when the placeholder is
+		// the id attribute's own wire name, the match resolves to the same field
+		// the id fallback would have chosen.
+		if attr.Name != placeholder && attr.WireName != placeholder {
 			continue
 		}
 		if !schema.IsPrimitiveSchema(attr.Schema) {
@@ -1556,7 +1568,6 @@ func collectionReadSelectable(r ir.ResourceIR) bool {
 // back to the first element, preserving the pre-selection behavior rather
 // than dropping the resource from state.
 func decodeAndApplyCollectionReadStmts(r ir.ResourceIR, summary, envelope string) []ast.Stmt {
-	info := resourceIDFieldInfo(r)
 	// Decode into data exactly as decodeAndApplyStmts does. The statement
 	// list grows across several appended branches below; the capacity keeps
 	// the decode/error-check block together with them without reallocation.
@@ -1587,99 +1598,133 @@ func decodeAndApplyCollectionReadStmts(r ir.ResourceIR, summary, envelope string
 				astgen.Return(),
 			),
 		},
-	)
-
-	// if v, ok := data[<envelope>]; ok {
-	//     if arr, ok := v.([]any); ok {
-	//         var match map[string]any
-	//         if state.<Field>.IsNull() { warn } else { select by identifier }
-	//         if match == nil && len(arr) > 0 { first-element fallback }
-	//         if match != nil { data = match }
-	//     } else if m, ok := v.(map[string]any); ok { data = m }
-	// }
-	selectBy := func() []ast.Stmt {
-		// want := fmt.Sprint(state.<Field>.Value<String|Int64|Float64|Bool>())
-		accessor := "ValueString"
-		switch info.primitive {
-		case ir.TypeInt:
-			accessor = "ValueInt64"
-		case ir.TypeFloat:
-			accessor = "ValueFloat64"
-		case ir.TypeBool:
-			accessor = "ValueBool"
-		}
-		wantExpr := astgen.AssignSingle(
-			astgen.Ident("want"),
-			astgen.Call(
-				astgen.QualExpr("fmt", "Sprint"),
-				astgen.Call(
-					astgen.Selector(astgen.Selector(astgen.Ident("state"), info.field), accessor),
-				),
-			),
-		)
-		// for _, item := range arr {
-		//     m, ok := item.(map[string]any)
-		//     if !ok { continue }
-		//     if idVal, ok := m[<wire>]; ok && fmt.Sprint(idVal) == want {
-		//         match = m
-		//         break
-		//     }
+		// if v, ok := data[<envelope>]; ok {
+		//     if arr, ok := v.([]any); ok {
+		//         <collectionSelectStmts: select by identifier, fall back to first>
+		//     } else if m, ok := v.(map[string]any); ok { data = m }
 		// }
-		// if match == nil { removed = true; return }
-		loop := astgen.RangeStmt(astgen.Ident("_"), astgen.Ident("item"), token.DEFINE, astgen.Ident("arr"), astgen.Block(
-			&ast.IfStmt{
-				Init: astgen.Assign(
-					[]ast.Expr{astgen.Ident("m"), astgen.Ident("ok")},
-					[]ast.Expr{astgen.TypeAssertExpr(astgen.Ident("item"), astgen.MapType(astgen.Ident("string"), astgen.Ident("any")))},
-				),
-				Cond: astgen.Ident("ok"),
-				Body: astgen.Block(
-					&ast.IfStmt{
+		&ast.IfStmt{
+			Init: astgen.Assign(
+				[]ast.Expr{astgen.Ident("v"), astgen.Ident("ok")},
+				[]ast.Expr{astgen.IndexExpr(astgen.Ident("data"), astgen.Lit(envelope))},
+			),
+			Cond: astgen.Ident("ok"),
+			Body: astgen.Block(
+				&ast.IfStmt{
+					Init: astgen.Assign(
+						[]ast.Expr{astgen.Ident("arr"), astgen.Ident("ok")},
+						[]ast.Expr{astgen.TypeAssertExpr(astgen.Ident("v"), astgen.ArrayType(nil, astgen.Ident("any")))},
+					),
+					Cond: astgen.Ident("ok"),
+					Body: astgen.Block(collectionSelectStmts(r, summary, "arr")...),
+					Else: &ast.IfStmt{
 						Init: astgen.Assign(
-							[]ast.Expr{astgen.Ident("idVal"), astgen.Ident("ok")},
-							[]ast.Expr{astgen.IndexExpr(astgen.Ident("m"), astgen.Lit(info.wire))},
+							[]ast.Expr{astgen.Ident("m"), astgen.Ident("ok")},
+							[]ast.Expr{astgen.TypeAssertExpr(astgen.Ident("v"), astgen.MapType(astgen.Ident("string"), astgen.Ident("any")))},
 						),
-						Cond: astgen.Binary(
-							astgen.Ident("ok"),
-							token.LAND,
-							astgen.Binary(
-								astgen.Call(
-									astgen.QualExpr("fmt", "Sprint"),
-									astgen.Ident("idVal"),
-								),
-								token.EQL,
-								astgen.Ident("want"),
-							),
-						),
+						Cond: astgen.Ident("ok"),
 						Body: astgen.Block(
 							astgen.AssignStmt(
-								[]ast.Expr{astgen.Ident("match")},
+								[]ast.Expr{astgen.Ident("data")},
 								[]ast.Expr{astgen.Ident("m")},
 								token.ASSIGN,
 							),
-							astgen.Break(),
 						),
 					},
-				),
-				Else: astgen.Block(astgen.Continue()),
-			},
-		))
-		return []ast.Stmt{
-			wantExpr,
-			loop,
-			astgen.If(
-				astgen.Equal(astgen.Ident("match"), astgen.Nil()),
-				astgen.AssignStmt(
-					[]ast.Expr{astgen.Ident("removed")},
-					[]ast.Expr{astgen.Ident("true")},
-					token.ASSIGN,
-				),
-				astgen.Return(),
+				},
 			),
-		}
-	}()
+		},
+		astgen.AssignStmt(
+			[]ast.Expr{astgen.Ident("err")},
+			[]ast.Expr{astgen.Call(
+				astgen.Ident("applyJSONToModel"),
+				astgen.UnaryPtr(astgen.Ident("state")),
+				astgen.Ident("data"),
+			)},
+			token.ASSIGN,
+		),
+		errCheckStmt(summary, "Could not map response to state: %s"))
+	return stmts
+}
 
-	collectionBody := astgen.Block(
+// collectionSelectStmts emits the statements that select the collection element
+// whose identifier matches the state's identifier attribute from the array
+// variable arrVar, and assigns it to data. Shared by the direct collection read
+// (the response envelope is the array) and the nested collection read (the
+// array is found by navigating a path into the parent response). The identifier
+// is compared by its formatted value, so json.Number and string both match; a
+// null identifier in state cannot select an element, so the body warns and
+// falls back to the first element, preserving the pre-selection behavior rather
+// than dropping the resource from state (G39).
+func collectionSelectStmts(r ir.ResourceIR, summary, arrVar string) []ast.Stmt {
+	info := resourceIDFieldInfo(r)
+	// want := fmt.Sprint(state.<Field>.Value<String|Int64|Float64|Bool>())
+	accessor := "ValueString"
+	switch info.primitive {
+	case ir.TypeInt:
+		accessor = "ValueInt64"
+	case ir.TypeFloat:
+		accessor = "ValueFloat64"
+	case ir.TypeBool:
+		accessor = "ValueBool"
+	}
+	wantExpr := astgen.AssignSingle(
+		astgen.Ident("want"),
+		astgen.Call(
+			astgen.QualExpr("fmt", "Sprint"),
+			astgen.Call(
+				astgen.Selector(astgen.Selector(astgen.Ident("state"), info.field), accessor),
+			),
+		),
+	)
+	// for _, item := range <arrVar> {
+	//     m, ok := item.(map[string]any)
+	//     if !ok { continue }
+	//     if idVal, ok := m[<wire>]; ok && fmt.Sprint(idVal) == want {
+	//         match = m
+	//         break
+	//     }
+	// }
+	// if match == nil { removed = true; return }
+	loop := astgen.RangeStmt(astgen.Ident("_"), astgen.Ident("item"), token.DEFINE, astgen.Ident(arrVar), astgen.Block(
+		&ast.IfStmt{
+			Init: astgen.Assign(
+				[]ast.Expr{astgen.Ident("m"), astgen.Ident("ok")},
+				[]ast.Expr{astgen.TypeAssertExpr(astgen.Ident("item"), astgen.MapType(astgen.Ident("string"), astgen.Ident("any")))},
+			),
+			Cond: astgen.Ident("ok"),
+			Body: astgen.Block(
+				&ast.IfStmt{
+					Init: astgen.Assign(
+						[]ast.Expr{astgen.Ident("idVal"), astgen.Ident("ok")},
+						[]ast.Expr{astgen.IndexExpr(astgen.Ident("m"), astgen.Lit(info.wire))},
+					),
+					Cond: astgen.Binary(
+						astgen.Ident("ok"),
+						token.LAND,
+						astgen.Binary(
+							astgen.Call(
+								astgen.QualExpr("fmt", "Sprint"),
+								astgen.Ident("idVal"),
+							),
+							token.EQL,
+							astgen.Ident("want"),
+						),
+					),
+					Body: astgen.Block(
+						astgen.AssignStmt(
+							[]ast.Expr{astgen.Ident("match")},
+							[]ast.Expr{astgen.Ident("m")},
+							token.ASSIGN,
+						),
+						astgen.Break(),
+					),
+				},
+			),
+			Else: astgen.Block(astgen.Continue()),
+		},
+	))
+	return []ast.Stmt{
 		astgen.DeclStmt(astgen.VarDeclGen(astgen.VarSpec(
 			"match",
 			astgen.MapType(astgen.Ident("string"), astgen.Ident("any")),
@@ -1691,19 +1736,27 @@ func decodeAndApplyCollectionReadStmts(r ir.ResourceIR, summary, envelope string
 				"The identifier attribute %q is null in state, so the matching collection element cannot be identified. Falling back to the first element; this may track the wrong instance when the collection has more than one.",
 				info.attr,
 			)))),
-			astgen.Block(selectBy...),
+			astgen.Block(wantExpr, loop, astgen.If(
+				astgen.Equal(astgen.Ident("match"), astgen.Nil()),
+				astgen.AssignStmt(
+					[]ast.Expr{astgen.Ident("removed")},
+					[]ast.Expr{astgen.Ident("true")},
+					token.ASSIGN,
+				),
+				astgen.Return(),
+			)),
 		),
 		&ast.IfStmt{
 			Cond: astgen.Binary(
 				astgen.Equal(astgen.Ident("match"), astgen.Nil()),
 				token.LAND,
-				astgen.Binary(astgen.Call(astgen.Ident("len"), astgen.Ident("arr")), token.GTR, astgen.IntLit(0)),
+				astgen.Binary(astgen.Call(astgen.Ident("len"), astgen.Ident(arrVar)), token.GTR, astgen.IntLit(0)),
 			),
 			Body: astgen.Block(
 				&ast.IfStmt{
 					Init: astgen.Assign(
 						[]ast.Expr{astgen.Ident("m"), astgen.Ident("ok")},
-						[]ast.Expr{astgen.TypeAssertExpr(astgen.IndexExpr(astgen.Ident("arr"), astgen.IntLit(0)), astgen.MapType(astgen.Ident("string"), astgen.Ident("any")))},
+						[]ast.Expr{astgen.TypeAssertExpr(astgen.IndexExpr(astgen.Ident(arrVar), astgen.IntLit(0)), astgen.MapType(astgen.Ident("string"), astgen.Ident("any")))},
 					),
 					Cond: astgen.Ident("ok"),
 					Body: astgen.Block(
@@ -1724,23 +1777,61 @@ func decodeAndApplyCollectionReadStmts(r ir.ResourceIR, summary, envelope string
 				token.ASSIGN,
 			),
 		),
-	)
+	}
+}
 
-	stmts = append(stmts, &ast.IfStmt{
-		Init: astgen.Assign(
-			[]ast.Expr{astgen.Ident("v"), astgen.Ident("ok")},
-			[]ast.Expr{astgen.IndexExpr(astgen.Ident("data"), astgen.Lit(envelope))},
-		),
-		Cond: astgen.Ident("ok"),
-		Body: astgen.Block(
-			&ast.IfStmt{
-				Init: astgen.Assign(
-					[]ast.Expr{astgen.Ident("arr"), astgen.Ident("ok")},
-					[]ast.Expr{astgen.TypeAssertExpr(astgen.Ident("v"), astgen.ArrayType(nil, astgen.Ident("any")))},
-				),
-				Cond: astgen.Ident("ok"),
-				Body: collectionBody,
-				Else: &ast.IfStmt{
+// decodeAndApplyNestedCollectionReadStmts emits the decode/apply statements for
+// a child-resource read: a parent GET whose response (after the envelope
+// unwrap) nests the collection under a dot-separated path (e.g. a port filter
+// rule read via GET /portFilters/{portId}, with the rules at
+// "portFilter.rules.passRules"). The body navigates the path, collects the
+// array(s) it names (a final "*" segment searches every array value at that
+// level, sidestepping a collection split across sibling arrays), and selects
+// the element whose identifier matches state — reporting the resource removed
+// when no element matches — exactly as the direct collection read does (G39).
+func decodeAndApplyNestedCollectionReadStmts(r ir.ResourceIR, summary, envelope, collectionPath string) []ast.Stmt {
+	// Decode into data exactly as decodeAndApplyCollectionReadStmts does.
+	stmts := make([]ast.Stmt, 0, 7)
+	stmts = append(stmts,
+		astgen.DeclStmt(astgen.VarDeclGen(astgen.VarSpec(
+			"data",
+			astgen.MapType(astgen.Ident("string"), astgen.Ident("any")),
+			nil,
+		))),
+		astgen.AssignSingle(astgen.Ident("decoder"), astgen.Call(
+			astgen.QualExpr("json", "NewDecoder"),
+			astgen.Selector(astgen.Ident("httpResp"), "Body"),
+		)),
+		astgen.ExprStmt(astgen.Call(astgen.Selector(astgen.Ident("decoder"), "UseNumber"))),
+		&ast.IfStmt{
+			Init: astgen.AssignSingle(astgen.Ident("err"), astgen.Call(
+				astgen.Selector(astgen.Ident("decoder"), "Decode"),
+				astgen.UnaryPtr(astgen.Ident("data")),
+			)),
+			Cond: astgen.Binary(
+				astgen.NotEqual(astgen.Ident("err"), astgen.Nil()),
+				token.LAND,
+				astgen.NotEqual(astgen.Ident("err"), astgen.QualExpr("io", "EOF")),
+			),
+			Body: astgen.Block(
+				addErrorfStmt(summary, "Could not decode response body: %s", astgen.Ident("err")),
+				astgen.Return(),
+			),
+		},
+	)
+	// Unwrap the envelope: the parent object is nested under a single property
+	// (e.g. {"portFilter": {...}}). A response that does not carry the envelope
+	// leaves data untouched and the navigation below finds no array, so the
+	// resource is reported removed rather than tracking the wrong shape.
+	if envelope != "" {
+		stmts = append(stmts, &ast.IfStmt{
+			Init: astgen.Assign(
+				[]ast.Expr{astgen.Ident("v"), astgen.Ident("ok")},
+				[]ast.Expr{astgen.IndexExpr(astgen.Ident("data"), astgen.Lit(envelope))},
+			),
+			Cond: astgen.Ident("ok"),
+			Body: astgen.Block(
+				&ast.IfStmt{
 					Init: astgen.Assign(
 						[]ast.Expr{astgen.Ident("m"), astgen.Ident("ok")},
 						[]ast.Expr{astgen.TypeAssertExpr(astgen.Ident("v"), astgen.MapType(astgen.Ident("string"), astgen.Ident("any")))},
@@ -1754,9 +1845,14 @@ func decodeAndApplyCollectionReadStmts(r ir.ResourceIR, summary, envelope string
 						),
 					),
 				},
-			},
-		),
-	},
+			),
+		})
+	}
+	// Navigate the collection path into data, collecting the array(s) it names
+	// into arr, then select the element whose identifier matches state.
+	stmts = append(stmts, collectionPathStmts(collectionPath)...)
+	stmts = append(stmts, collectionSelectStmts(r, summary, "arr")...)
+	stmts = append(stmts,
 		astgen.AssignStmt(
 			[]ast.Expr{astgen.Ident("err")},
 			[]ast.Expr{astgen.Call(
@@ -1768,6 +1864,116 @@ func decodeAndApplyCollectionReadStmts(r ir.ResourceIR, summary, envelope string
 		),
 		errCheckStmt(summary, "Could not map response to state: %s"))
 	return stmts
+}
+
+// collectionPathStmts emits the statements that navigate a read_collection_path
+// into the decoded response (data) and collect the array(s) it names into arr.
+// Each non-final segment must resolve to a map; the final segment is either a
+// concrete array property (arr = that array) or "*" (append every array value
+// at that level, sidestepping a collection split across sibling arrays). A
+// segment that does not resolve leaves arr empty, so the subsequent selection
+// reports the resource removed. The path is validated at override-application
+// time (validCollectionPath), so a wildcard never appears mid-path here.
+func collectionPathStmts(collectionPath string) []ast.Stmt {
+	segs := strings.Split(collectionPath, ".")
+	// Build the navigation innermost-first: the final segment's array
+	// collection wraps in the preceding segments' map assertions, so a missing
+	// or non-object segment short-circuits the whole descent.
+	body := finalCollectionSegmentStmts(segs[len(segs)-1])
+	for i := len(segs) - 2; i >= 0; i-- {
+		seg := segs[i]
+		// The map-assertion block prepends the descent into this segment to the
+		// statements built for the segments below it. The slice is assembled
+		// explicitly because Go rejects mixing a single element with a slice
+		// expansion when the variadic is the first parameter of astgen.Block.
+		inner := make([]ast.Stmt, 0, 1+len(body))
+		inner = append(inner, astgen.AssignStmt(
+			[]ast.Expr{astgen.Ident("data")},
+			[]ast.Expr{astgen.Ident("m")},
+			token.ASSIGN,
+		))
+		inner = append(inner, body...)
+		body = []ast.Stmt{&ast.IfStmt{
+			Init: astgen.Assign(
+				[]ast.Expr{astgen.Ident("v"), astgen.Ident("ok")},
+				[]ast.Expr{astgen.IndexExpr(astgen.Ident("data"), astgen.Lit(seg))},
+			),
+			Cond: astgen.Ident("ok"),
+			Body: astgen.Block(
+				&ast.IfStmt{
+					Init: astgen.Assign(
+						[]ast.Expr{astgen.Ident("m"), astgen.Ident("ok")},
+						[]ast.Expr{astgen.TypeAssertExpr(astgen.Ident("v"), astgen.MapType(astgen.Ident("string"), astgen.Ident("any")))},
+					),
+					Cond: astgen.Ident("ok"),
+					Body: astgen.Block(inner...),
+				},
+			),
+		}}
+	}
+	stmts := make([]ast.Stmt, 0, 1+len(body))
+	stmts = append(stmts, astgen.DeclStmt(astgen.VarDeclGen(astgen.VarSpec(
+		"arr",
+		astgen.ArrayType(nil, astgen.Ident("any")),
+		nil,
+	))))
+	stmts = append(stmts, body...)
+	return stmts
+}
+
+// finalCollectionSegmentStmts emits the innermost navigation statements for the
+// final segment of a read_collection_path. A "*" segment appends every array
+// value of the current map to arr; a concrete segment assigns the named array
+// property to arr. Both are fail-safe: a value that is not an array is skipped
+// and arr stays empty, so the subsequent selection reports the resource removed.
+func finalCollectionSegmentStmts(seg string) []ast.Stmt {
+	if seg == "*" {
+		return []ast.Stmt{&ast.RangeStmt{
+			Key:   astgen.Ident("_"),
+			Value: astgen.Ident("val"),
+			Tok:   token.DEFINE,
+			X:     astgen.Ident("data"),
+			Body: astgen.Block(
+				&ast.IfStmt{
+					Init: astgen.Assign(
+						[]ast.Expr{astgen.Ident("a"), astgen.Ident("ok")},
+						[]ast.Expr{astgen.TypeAssertExpr(astgen.Ident("val"), astgen.ArrayType(nil, astgen.Ident("any")))},
+					),
+					Cond: astgen.Ident("ok"),
+					Body: astgen.Block(
+						astgen.AssignStmt(
+							[]ast.Expr{astgen.Ident("arr")},
+							[]ast.Expr{astgen.Call(astgen.Ident("append"), astgen.Ident("arr"), astgen.Ellipsis(astgen.Ident("a")))},
+							token.ASSIGN,
+						),
+					),
+				},
+			),
+		}}
+	}
+	return []ast.Stmt{&ast.IfStmt{
+		Init: astgen.Assign(
+			[]ast.Expr{astgen.Ident("v"), astgen.Ident("ok")},
+			[]ast.Expr{astgen.IndexExpr(astgen.Ident("data"), astgen.Lit(seg))},
+		),
+		Cond: astgen.Ident("ok"),
+		Body: astgen.Block(
+			&ast.IfStmt{
+				Init: astgen.Assign(
+					[]ast.Expr{astgen.Ident("a"), astgen.Ident("ok")},
+					[]ast.Expr{astgen.TypeAssertExpr(astgen.Ident("v"), astgen.ArrayType(nil, astgen.Ident("any")))},
+				),
+				Cond: astgen.Ident("ok"),
+				Body: astgen.Block(
+					astgen.AssignStmt(
+						[]ast.Expr{astgen.Ident("arr")},
+						[]ast.Expr{astgen.Ident("a")},
+						token.ASSIGN,
+					),
+				),
+			},
+		),
+	}}
 }
 
 // stateSetStmt emits resp.Diagnostics.Append(resp.State.Set(ctx, &model)...).
@@ -1895,37 +2101,67 @@ func identityPathParamField(r ir.ResourceIR, idAttr ir.AttributeIR) string {
 // otherwise the body is JSON (modelToJSONMap + json.Marshal) or XML (mapToXML).
 // The paths are mutually exclusive: an operation declares either a JSON/XML
 // request body or formData parameters, never both.
-func requestBodyStmts(op crudOperationPlan, summary, modelVar string) ([]ast.Stmt, ast.Expr) {
+func requestBodyStmts(op crudOperationPlan, summary, modelVar string, bodyOmitKeys []string) ([]ast.Stmt, ast.Expr) {
 	switch op.bodyEncoding {
 	case bodyForm:
 		return formBodyStmts(op, modelVar)
 	case bodyMultipart:
 		return multipartBodyStmts(op, summary, modelVar)
 	case bodyXML:
-		return xmlBodyStmts(op, summary, modelVar)
+		return xmlBodyStmts(op, summary, modelVar, bodyOmitKeys)
 	default: // bodyJSON
-		return jsonBodyStmts(summary, modelVar)
+		return jsonBodyStmts(summary, modelVar, bodyOmitKeys)
 	}
 }
 
 // jsonBodyStmts builds a JSON request body from the model: modelToJSONMap
 // converts the typed model to a map, json.Marshal encodes it, and bytes.NewReader
-// wraps the encoded payload as the request body reader.
-func jsonBodyStmts(summary, modelVar string) ([]ast.Stmt, ast.Expr) {
-	stmts := []ast.Stmt{
+// wraps the encoded payload as the request body reader. bodyOmitKeys names JSON
+// keys deleted from the map before marshaling — attributes that live in the
+// model only to fill path/query parameters (e.g. a child resource's folded path
+// parameters) and must not be sent to the API as body properties.
+func jsonBodyStmts(summary, modelVar string, bodyOmitKeys []string) ([]ast.Stmt, ast.Expr) {
+	stmts := make([]ast.Stmt, 0, len(bodyOmitKeys)+4)
+	stmts = append(stmts,
 		astgen.Assign(
 			[]ast.Expr{astgen.Ident("body"), astgen.Ident("err")},
 			[]ast.Expr{astgen.Call(astgen.Ident("modelToJSONMap"), astgen.UnaryPtr(astgen.Ident(modelVar)))},
 		),
 		errCheckStmt(summary, "Could not build request body: %s"),
+	)
+	for _, key := range bodyOmitKeys {
+		stmts = append(stmts, astgen.ExprStmt(astgen.Call(astgen.Ident("delete"), astgen.Ident("body"), astgen.Lit(key))))
+	}
+	stmts = append(stmts,
 		astgen.Assign(
 			[]ast.Expr{astgen.Ident("payload"), astgen.Ident("err")},
 			[]ast.Expr{astgen.Call(astgen.QualExpr("json", "Marshal"), astgen.Ident("body"))},
 		),
 		errCheckStmt(summary, "Could not encode request body: %s"),
-	}
+	)
 	body := astgen.Call(astgen.QualExpr("bytes", "NewReader"), astgen.Ident("payload"))
 	return stmts, body
+}
+
+// pathParamBodyOmitKeys returns the wire names of attributes folded into the
+// schema from path parameters (child resources), sorted for deterministic
+// output. modelToJSONMap encodes the whole model, so a child resource's create/
+// update body would otherwise leak the URL path parameters (e.g. portId,
+// ruleType) as body properties the API never declared.
+func pathParamBodyOmitKeys(r ir.ResourceIR) []string {
+	keys := make([]string, 0, 2)
+	for _, attr := range r.Schema.Attributes {
+		if !attr.PathParam {
+			continue
+		}
+		key := attr.WireName
+		if key == "" {
+			key = attr.Name
+		}
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return keys
 }
 
 // formBodyStmts builds an application/x-www-form-urlencoded request body from
@@ -2067,19 +2303,25 @@ func multipartBodyStmts(op crudOperationPlan, summary, modelVar string) ([]ast.S
 // resource's XML root element with deterministic sorted child order. The
 // encoded payload is wrapped with bytes.NewReader as the request body reader
 // (A2).
-func xmlBodyStmts(op crudOperationPlan, summary, modelVar string) ([]ast.Stmt, ast.Expr) {
-	stmts := []ast.Stmt{
+func xmlBodyStmts(op crudOperationPlan, summary, modelVar string, bodyOmitKeys []string) ([]ast.Stmt, ast.Expr) {
+	stmts := make([]ast.Stmt, 0, len(bodyOmitKeys)+4)
+	stmts = append(stmts,
 		astgen.Assign(
 			[]ast.Expr{astgen.Ident("body"), astgen.Ident("err")},
 			[]ast.Expr{astgen.Call(astgen.Ident("modelToJSONMap"), astgen.UnaryPtr(astgen.Ident(modelVar)))},
 		),
 		errCheckStmt(summary, "Could not build request body: %s"),
+	)
+	for _, key := range bodyOmitKeys {
+		stmts = append(stmts, astgen.ExprStmt(astgen.Call(astgen.Ident("delete"), astgen.Ident("body"), astgen.Lit(key))))
+	}
+	stmts = append(stmts,
 		astgen.Assign(
 			[]ast.Expr{astgen.Ident("payload"), astgen.Ident("err")},
 			[]ast.Expr{astgen.Call(astgen.Ident("mapToXML"), astgen.Ident("body"), astgen.Lit(op.xmlRoot))},
 		),
 		errCheckStmt(summary, "Could not encode request body: %s"),
-	}
+	)
 	body := astgen.Call(astgen.QualExpr("bytes", "NewReader"), astgen.Ident("payload"))
 	return stmts, body
 }
@@ -2204,7 +2446,7 @@ func wiredCreateHelperBody(r ir.ResourceIR, plan resourceWiringPlan) []ast.Stmt 
 	var bodyStmts []ast.Stmt
 	var bodyExpr ast.Expr
 	if plan.create.hasBody {
-		bodyStmts, bodyExpr = requestBodyStmts(plan.create, summary, "plan")
+		bodyStmts, bodyExpr = requestBodyStmts(plan.create, summary, "plan", pathParamBodyOmitKeys(r))
 	}
 	stmts := make([]ast.Stmt, 0, 16)
 	stmts = append(stmts, clientGuardStmt("r"))
@@ -2366,14 +2608,19 @@ func wiredReadHelperBody(r ir.ResourceIR, plan resourceWiringPlan) []ast.Stmt {
 		),
 		astgen.Return(),
 	})...)
-	// A placeholder-free collection GET returns every instance: select the
-	// element whose identifier matches instead of blindly applying the first
-	// (G39). An instance read keeps the envelope unwrap (whose array branch
-	// applies the single wrapped element). Selection needs a scalar
+	// A child-resource read targets a parent GET whose response nests the
+	// collection under a dot-separated path: navigate the path, collect the
+	// array(s) it names, and select the element whose identifier matches state
+	// (G39). A placeholder-free collection GET returns every instance and selects
+	// the same way. An instance read keeps the envelope unwrap (whose array
+	// branch applies the single wrapped element). Selection needs a scalar
 	// identifier attribute; anything else keeps the first-element unwrap.
-	if plan.read.responseIsCollection && plan.read.responseEnvelope != "" && collectionReadSelectable(r) {
+	switch {
+	case plan.read.nestedCollectionPath != "" && collectionReadSelectable(r):
+		stmts = append(stmts, decodeAndApplyNestedCollectionReadStmts(r, summary, plan.read.responseEnvelope, plan.read.nestedCollectionPath)...)
+	case plan.read.responseIsCollection && plan.read.responseEnvelope != "" && collectionReadSelectable(r):
 		stmts = append(stmts, decodeAndApplyCollectionReadStmts(r, summary, plan.read.responseEnvelope)...)
-	} else {
+	default:
 		stmts = append(stmts, decodeAndApplyStmts(summary, "state", plan.read.responseEnvelope, "")...)
 	}
 	// Naked return yields removed=false on the happy path (the 404 branch above
@@ -2469,7 +2716,7 @@ func wiredUpdateHelperBody(r ir.ResourceIR, plan resourceWiringPlan) []ast.Stmt 
 	var bodyStmts []ast.Stmt
 	var bodyExpr ast.Expr
 	if plan.updateOp.hasBody {
-		bodyStmts, bodyExpr = requestBodyStmts(plan.updateOp, summary, "plan")
+		bodyStmts, bodyExpr = requestBodyStmts(plan.updateOp, summary, "plan", pathParamBodyOmitKeys(r))
 	}
 	stmts := make([]ast.Stmt, 0, 16)
 	stmts = append(stmts, clientGuardStmt("r"))

@@ -2229,7 +2229,7 @@ func buildGroupedResources(spec *parser.Spec, providerName string, pathOps map[s
 		// id_attribute: server_alias). The gate mirrors the one
 		// applyResourceCreationOverrides applies to override-created resources.
 		skipUserSettableID := resourceOverrideConfiguresID(overrides, res)
-		schema, idAttr := transformer.ManagedResourceSchemaWithDiagnostics(g, diags, skipUserSettableID)
+		schema, idAttr := transformer.ManagedResourceSchemaWithDiagnostics(g, diags, skipUserSettableID, false)
 		res.Schema = schema
 		res.IDAttribute = idAttr
 		// Fail loud when a managed resource ends up with no practitioner-writable
@@ -2467,7 +2467,7 @@ func applyResourceCreationOverride(preview *ir.ProviderIR, spec *parser.Spec, pr
 	// attribute the schema no longer carries (e.g. archive_server's
 	// id_attribute: server_alias).
 	skipUserSettableID := strings.TrimSpace(ro.IDAttribute) != "" || strings.TrimSpace(ro.ImportFormat) != ""
-	res := resourceFromOverrideCRUD(spec, providerName, g, diags, skipUserSettableID, ro.IncludeCreateResponseAttributes)
+	res := resourceFromOverrideCRUD(spec, providerName, g, diags, skipUserSettableID, ro.IncludeCreateResponseAttributes, ro.ReadCollectionPath)
 	if res == nil {
 		return
 	}
@@ -2522,7 +2522,30 @@ func resourceNameFromOverride(ro config.ResourceOverride, createPath string) str
 //
 // includeCreateResponse lists create-response-only properties to keep as
 // Computed attributes (config ResourceOverride.IncludeCreateResponseAttributes).
-func resourceFromOverrideCRUD(spec *parser.Spec, providerName string, g transformer.ResourceCRUD, diags *diagnostics.Diagnostics, skipUserSettableID bool, includeCreateResponse []string) *ir.ResourceIR {
+func resourceFromOverrideCRUD(spec *parser.Spec, providerName string, g transformer.ResourceCRUD, diags *diagnostics.Diagnostics, skipUserSettableID bool, includeCreateResponse []string, readCollectionPath string) *ir.ResourceIR {
+	// Validate the read_collection_path once, mirroring
+	// transformer.applyResourceReadCollectionPath: a malformed path (empty
+	// segment, wildcard mid-path) must never reach the generator, whose
+	// navigation would silently resolve to an empty array and report the
+	// resource removed on every read. Drop the override fail-loud instead —
+	// and with it the child-resource state shape, which is only honest when
+	// the nested read actually selects the element.
+	nestedPath := strings.TrimSpace(readCollectionPath)
+	childRead := nestedPath != ""
+	if childRead && !transformer.ValidReadCollectionPath(nestedPath) {
+		childRead = false
+		nestedPath = ""
+		if diags != nil {
+			*diags = append(*diags, diagnostics.Diagnostic{
+				Severity: diagnostics.Warning,
+				Summary:  "read_collection_path override cannot be applied",
+				Detail: fmt.Sprintf(
+					"Resource %q: read_collection_path %q must be a dot-separated path with a wildcard only in the final segment (e.g. \"rules.*\").",
+					transformer.ToSnakeCase(g.Name), strings.TrimSpace(readCollectionPath),
+				),
+			})
+		}
+	}
 	// Normalize the CRUD group name to snake_case for the Terraform type name
 	// (camelCase is a convention violation; hyphens make the resource handle
 	// unreferenceable in HCL expressions). See the inferred-group counterpart
@@ -2559,6 +2582,17 @@ func resourceFromOverrideCRUD(spec *parser.Spec, providerName string, g transfor
 		if isCollectionRead(g, g.Read.Path) {
 			res.CRUDMapping.Read.ResponseIsCollection = true
 		}
+		// A child resource's read is a parent GET whose response nests the
+		// collection under a path (e.g. a port filter rule read via
+		// GET /portFilters/{portId}, with the rules at "portFilter.rules.*").
+		// The read is a collection read by construction — the generated body
+		// selects the element whose identifier matches state — even though the
+		// parent path carries a placeholder, which isCollectionRead would
+		// reject. The override's read_collection_path supplies the nested path.
+		if childRead {
+			res.CRUDMapping.Read.NestedCollectionPath = nestedPath
+			res.CRUDMapping.Read.ResponseIsCollection = true
+		}
 	}
 	if g.Update != nil {
 		upd := resourceOperationMapping(spec, string(g.Update.Method), g.Update.Path, parserOp(spec, g.Update.Path, string(g.Update.Method)), envelopeOf(g.Update))
@@ -2572,7 +2606,7 @@ func resourceFromOverrideCRUD(spec *parser.Spec, providerName string, g transfor
 		res.CRUDMapping.Delete = resourceOperationMapping(spec, string(g.Delete.Method), g.Delete.Path, parserOp(spec, g.Delete.Path, string(g.Delete.Method)), envelopeOf(g.Delete))
 		res.CRUDMapping.Delete.MediaType = mediaTypeOf(g.Delete)
 	}
-	schema, idAttr := transformer.ManagedResourceSchemaWithDiagnostics(g, diags, skipUserSettableID)
+	schema, idAttr := transformer.ManagedResourceSchemaWithDiagnostics(g, diags, skipUserSettableID, childRead)
 	res.Schema = schema
 	res.IDAttribute = idAttr
 	// Create-response-only properties the override asked to keep (e.g. an

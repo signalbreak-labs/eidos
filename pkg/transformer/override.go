@@ -136,6 +136,7 @@ func applyResourceOverrides(provider *ir.ProviderIR, overrides []config.Resource
 			applyResourceStateUpgradeOverride(r, override)
 			applyResourceDescriptionOverride(r, override)
 			applyResourcePathParamOverride(r, override, diags)
+			applyResourceReadCollectionPath(r, override, diags)
 			if err := applyResourceAttributeOverrides(r, override, diags); err != nil {
 				return err
 			}
@@ -439,6 +440,85 @@ func warnPathParamOverride(r *ir.ResourceIR, op, placeholder, attr, detail strin
 	})
 }
 
+// applyResourceReadCollectionPath records the override's read_collection_path
+// on the resource's read mapping. A child resource's read is a parent GET whose
+// response (after the envelope unwrap) nests the collection under a path (e.g.
+// a port filter rule read via GET /portFilters/{portId}, whose response unwraps
+// to {port, rules: {passRules, dropRules}} with the rules at "rules.*"); the
+// generated read then selects the element whose identifier matches state (G39)
+// instead of applying the whole parent. The read is a collection read by
+// construction, so ResponseIsCollection is set alongside the path. A malformed
+// path (empty segments, a wildcard in a non-final position) is surfaced
+// fail-loud and the override is dropped so the generator never emits a
+// navigation it cannot satisfy.
+func applyResourceReadCollectionPath(r *ir.ResourceIR, override config.ResourceOverride, diags *diagnostics.Diagnostics) {
+	path := strings.TrimSpace(override.ReadCollectionPath)
+	if path == "" {
+		return
+	}
+	if !validCollectionPath(path) {
+		if diags != nil {
+			*diags = diags.Append(diagnostics.Diagnostic{
+				Severity: diagnostics.Warning,
+				Summary:  "read_collection_path override cannot be applied",
+				Detail: fmt.Sprintf(
+					"Resource %q: read_collection_path %q must be a dot-separated path with a wildcard only in the final segment (e.g. \"rules.*\").",
+					r.Name, path,
+				),
+			})
+		}
+		return
+	}
+	r.CRUDMapping.Read.NestedCollectionPath = path
+	r.CRUDMapping.Read.ResponseIsCollection = true
+	// The child-resource state shape (create-body attributes plus folded path
+	// parameters) is only derived for override-created resources, where the API
+	// layer receives the path before the schema is built. An inferred resource
+	// keeps its read-response-derived schema even though the generated read now
+	// applies a nested child element to it — a silent shape mismatch. Warn so
+	// the practitioner promotes the resource deliberately (generate_resource:
+	// true) instead of discovering the mismatch at plan time.
+	if !r.OverrideCreated && diags != nil {
+		*diags = diags.Append(diagnostics.Diagnostic{
+			Severity: diagnostics.Warning,
+			Summary:  "read_collection_path on an inferred resource keeps the read-response state shape",
+			Detail: fmt.Sprintf(
+				"Resource %q: read_collection_path %q selects a nested element whose shape comes from the create request body, but this resource was inferred, so its schema was derived from the parent read response. Recreate it with generate_resource: true (and its CRUD operations) so the schema, folded path parameters, and read stay consistent.",
+				r.Name, path,
+			),
+		})
+	}
+}
+
+// ValidReadCollectionPath reports whether a read_collection_path is well-formed:
+// a non-empty dot-separated path whose segments are non-empty and whose wildcard
+// ("*"), if any, appears only in the final segment. It is exported so the API
+// layer can validate the override at resource-creation time (the malformed path
+// must never reach the generator, which would silently emit a navigation that
+// always resolves to "removed").
+func ValidReadCollectionPath(path string) bool {
+	return validCollectionPath(path)
+}
+
+// validCollectionPath reports whether a read_collection_path is well-formed: a
+// non-empty dot-separated path whose segments are non-empty and whose wildcard
+// ("*"), if any, appears only in the final segment.
+func validCollectionPath(path string) bool {
+	segs := strings.Split(path, ".")
+	if len(segs) == 0 {
+		return false
+	}
+	for i, seg := range segs {
+		if seg == "" {
+			return false
+		}
+		if seg == "*" && i != len(segs)-1 {
+			return false
+		}
+	}
+	return true
+}
+
 // applyResourceImportFormatOverride stores the configured import format on the
 // resource whenever ImportFormat is non-empty. Importable is gated by the
 // presence of a Read operation, but ImportIDFormat is always recorded so the
@@ -706,7 +786,128 @@ func applyResourceAttributeOverrides(r *ir.ResourceIR, override config.ResourceO
 	if len(override.WriteOnlyAttributes) > 0 {
 		addWriteOnlyAttributes(&r.Schema, override.WriteOnlyAttributes)
 	}
+	if len(override.ExcludeAttributes) > 0 {
+		excludeAttributesAtPath(&r.Schema, override.ExcludeAttributes)
+		// Record the exclusion so the config generator can re-emit the override
+		// on round-trip; the attributes themselves are gone from Schema.
+		r.ExcludedAttributes = append([]string(nil), override.ExcludeAttributes...)
+	}
 	return nil
+}
+
+// excludeAttributesAtPath removes every attribute whose name matches one of the
+// supplied target names, at any nesting depth. Matching mirrors
+// setAttributeFlagAtPath: case-insensitive and underscore-insensitive, with an
+// exact-name match winning over the fuzzy match so an entry for "user_name"
+// does not also claim a distinct "username" attribute (G39). Removing an
+// attribute drops it from the generated model, so the create/update body omits
+// it and the read ignores it — the mechanism a child resource uses to stop the
+// parent from exposing a nested collection it manages separately (e.g.
+// port_filter's "rules" once port_filter_rule owns the rules).
+func excludeAttributesAtPath(obj *ir.ObjectSchemaIR, names []string) {
+	if obj == nil {
+		return
+	}
+	exactIndex := exactNameIndex(obj.Attributes, names)
+	kept := obj.Attributes[:0]
+	for i := range obj.Attributes {
+		excluded := false
+		for _, n := range names {
+			if !attributeNameMatches(obj.Attributes[i].Name, n) {
+				continue
+			}
+			if j, ok := exactIndex[n]; ok && j != i {
+				continue // a distinct exact match claims this entry
+			}
+			excluded = true
+			break
+		}
+		if excluded {
+			continue
+		}
+		kept = append(kept, obj.Attributes[i])
+	}
+	obj.Attributes = kept
+
+	// A block whose own name matches is dropped entirely, with the same
+	// exact-name-wins disambiguation as attributes — a nested collection
+	// rendered as a block (legacy nesting mode) must leave the parent's schema
+	// just as completely as one rendered as an attribute.
+	exactBlockIndex := exactBlockNameIndex(obj.Blocks, names)
+	keptBlocks := obj.Blocks[:0]
+	for i := range obj.Blocks {
+		excluded := false
+		for _, n := range names {
+			if !attributeNameMatches(obj.Blocks[i].Name, n) {
+				continue
+			}
+			if j, ok := exactBlockIndex[n]; ok && j != i {
+				continue // a distinct exact match claims this entry
+			}
+			excluded = true
+			break
+		}
+		if excluded {
+			continue
+		}
+		keptBlocks = append(keptBlocks, obj.Blocks[i])
+	}
+	obj.Blocks = keptBlocks
+
+	for j := range obj.Blocks {
+		excludeAttributesAtPath(&obj.Blocks[j].Schema, names)
+	}
+	for i := range obj.Attributes {
+		excludeAttributesRecursiveSchema(&obj.Attributes[i].Schema, names)
+	}
+}
+
+// excludeAttributesRecursiveSchema applies excludeAttributesAtPath to every
+// nested schema node reachable from schema, mirroring
+// setAttributeFlagRecursiveSchema's traversal so an exclusion reaches the same
+// nodes a computed/sensitive/force_new override does (N-20).
+func excludeAttributesRecursiveSchema(schema *ir.SchemaIR, names []string) {
+	if schema == nil {
+		return
+	}
+	if len(schema.Attributes) > 0 || len(schema.Blocks) > 0 {
+		obj := ir.ObjectSchemaIR{
+			Attributes:        schema.Attributes,
+			Blocks:            schema.Blocks,
+			DependentRequired: schema.DependentRequired,
+		}
+		excludeAttributesAtPath(&obj, names)
+		schema.Attributes = obj.Attributes
+		schema.Blocks = obj.Blocks
+	}
+
+	recurse := func(children ...*ir.SchemaIR) {
+		for _, c := range children {
+			if c == nil {
+				continue
+			}
+			excludeAttributesRecursiveSchema(c, names)
+		}
+	}
+
+	var children []*ir.SchemaIR
+	if schema.Collection != nil {
+		children = append(children, &schema.Collection.ElementType)
+	}
+	if schema.Union != nil {
+		for i := range schema.Union.Variants {
+			children = append(children, &schema.Union.Variants[i])
+		}
+	}
+	children = append(children, schema.Not, schema.IfSchema, schema.ThenSchema, schema.ElseSchema)
+	for _, dep := range schema.DependentSchemas {
+		children = append(children, dep)
+	}
+	for _, pp := range schema.PatternProperties {
+		children = append(children, pp)
+	}
+	children = append(children, schema.PropertyNames, schema.UnevaluatedProperties)
+	recurse(children...)
 }
 
 // setAttributeFlag recursively sets a boolean flag on attributes whose name
@@ -788,6 +989,26 @@ func exactNameIndex(attrs []ir.AttributeIR, names []string) map[string]int {
 		}
 		for i := range attrs {
 			if exactAttributeName(attrs[i].Name, n) {
+				exactIndex[n] = i
+				break
+			}
+		}
+	}
+	return exactIndex
+}
+
+// exactBlockNameIndex is exactNameIndex for blocks: for each target name, the
+// index of the block at this level that matches exactly (case-insensitive,
+// underscore-sensitive — mirroring exactAttributeName). A name matches at most
+// one block; the first exact match wins.
+func exactBlockNameIndex(blocks []ir.BlockIR, names []string) map[string]int {
+	exactIndex := make(map[string]int, len(names))
+	for _, n := range names {
+		if _, ok := exactIndex[n]; ok {
+			continue
+		}
+		for i := range blocks {
+			if exactAttributeName(blocks[i].Name, n) {
 				exactIndex[n] = i
 				break
 			}

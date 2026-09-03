@@ -216,15 +216,22 @@ type ServerVariableConfig struct {
 // Providing ResourceName overwrites the resource's Name, TypeName, and
 // FullName with toHumanName(ResourceName).
 type ResourceOverride struct {
-	Schema              string               `yaml:"schema,omitempty" json:"schema,omitempty"`
-	Operation           string               `yaml:"operation,omitempty" json:"operation,omitempty"`
-	ResourceName        string               `yaml:"resource_name,omitempty" json:"resource_name,omitempty"`
-	DatasourceName      string               `yaml:"datasource_name,omitempty" json:"datasource_name,omitempty"`
-	IDAttribute         string               `yaml:"id_attribute,omitempty" json:"id_attribute,omitempty"`
-	ImportFormat        string               `yaml:"import_format,omitempty" json:"import_format,omitempty"`
-	Timeouts            *TimeoutConfig       `yaml:"timeouts,omitempty" json:"timeouts,omitempty"`
-	ForceNew            []string             `yaml:"force_new,omitempty" json:"force_new,omitempty"`
-	ComputedAttributes  []string             `yaml:"computed_attributes,omitempty" json:"computed_attributes,omitempty"`
+	Schema             string         `yaml:"schema,omitempty" json:"schema,omitempty"`
+	Operation          string         `yaml:"operation,omitempty" json:"operation,omitempty"`
+	ResourceName       string         `yaml:"resource_name,omitempty" json:"resource_name,omitempty"`
+	DatasourceName     string         `yaml:"datasource_name,omitempty" json:"datasource_name,omitempty"`
+	IDAttribute        string         `yaml:"id_attribute,omitempty" json:"id_attribute,omitempty"`
+	ImportFormat       string         `yaml:"import_format,omitempty" json:"import_format,omitempty"`
+	Timeouts           *TimeoutConfig `yaml:"timeouts,omitempty" json:"timeouts,omitempty"`
+	ForceNew           []string       `yaml:"force_new,omitempty" json:"force_new,omitempty"`
+	ComputedAttributes []string       `yaml:"computed_attributes,omitempty" json:"computed_attributes,omitempty"`
+	// ExcludeAttributes names attributes to remove from the resource schema
+	// entirely. A child resource that manages a nested collection separately
+	// (e.g. port_filter_rule) needs the parent to stop exposing the collection
+	// (e.g. port_filter's "rules"), so the parent's schema drops the named
+	// attributes and the generated create body omits them. Names are matched
+	// case-insensitively and ignoring underscores, at any nesting depth.
+	ExcludeAttributes   []string             `yaml:"exclude_attributes,omitempty" json:"exclude_attributes,omitempty"`
 	SensitiveAttributes []string             `yaml:"sensitive_attributes,omitempty" json:"sensitive_attributes,omitempty"`
 	WriteOnlyAttributes []WriteOnlyAttribute `yaml:"write_only_attributes,omitempty" json:"write_only_attributes,omitempty"`
 	Skip                *bool                `yaml:"skip,omitempty" json:"skip,omitempty"`
@@ -255,10 +262,21 @@ type ResourceOverride struct {
 	// "entlItemId") to a schema attribute name (e.g. "eli_id"). This wires
 	// paths whose placeholder does not name-match any attribute and whose
 	// value is not the resource id (e.g. a read keyed by a create-body field).
-	PathParams    map[string]map[string]string `yaml:"path_params,omitempty" json:"path_params,omitempty"`
-	SchemaVersion int                          `yaml:"schema_version,omitempty" json:"schema_version,omitempty"`
-	StateUpgrades []StateUpgradeConfig         `yaml:"state_upgrades,omitempty" json:"state_upgrades,omitempty"`
-	Description   string                       `yaml:"description,omitempty" json:"description,omitempty"`
+	PathParams map[string]map[string]string `yaml:"path_params,omitempty" json:"path_params,omitempty"`
+	// ReadCollectionPath names a dot-separated path into the read response
+	// (after the envelope unwrap) that locates the collection array(s) for a
+	// child resource whose read is a parent GET (e.g. a port filter rule read
+	// via GET /portFilters/{portId}, whose response unwraps to
+	// {port, rules: {passRules, dropRules}} with the rules nested at
+	// "rules.passRules"). The last segment may be "*" to search every array
+	// value at that level, which sidesteps a collection split across sibling
+	// arrays (passRules/dropRules) since the child's identifier is unique
+	// across them. The generated read selects the element whose identifier
+	// matches state (G39) instead of applying the whole parent.
+	ReadCollectionPath string               `yaml:"read_collection_path,omitempty" json:"read_collection_path,omitempty"`
+	SchemaVersion      int                  `yaml:"schema_version,omitempty" json:"schema_version,omitempty"`
+	StateUpgrades      []StateUpgradeConfig `yaml:"state_upgrades,omitempty" json:"state_upgrades,omitempty"`
+	Description        string               `yaml:"description,omitempty" json:"description,omitempty"`
 }
 
 // StateUpgradeConfig describes a single state migration from a prior schema

@@ -312,7 +312,7 @@ func wiredActionInvokeHelperBody(a ir.ActionIR, plan crudOperationPlan) []ast.St
 	// a bodiless action passes nil (sendRequestStmts sets no Content-Type).
 	var body ast.Expr
 	if plan.hasBody {
-		bodyStmts, bodyExpr := requestBodyStmts(plan, summary, "config")
+		bodyStmts, bodyExpr := requestBodyStmts(plan, summary, "config", nil)
 		stmts = append(stmts, bodyStmts...)
 		body = bodyExpr
 	}

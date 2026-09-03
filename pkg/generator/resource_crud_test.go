@@ -1390,6 +1390,169 @@ func TestWiredBody_CollectionRead_Compiles(t *testing.T) {
 	}
 }
 
+// nestedCollectionReadResourceIR returns a child resource whose read is a
+// parent GET: the response unwraps to {port, rules: {passRules, dropRules}},
+// and the rules collection is located by the read_collection_path "rules.*"
+// (the wildcard searches both sibling arrays, since ruleId is unique across
+// them). The identifier is rule_id, whose wire name is the spec's ruleId.
+func nestedCollectionReadResourceIR() ir.ResourceIR {
+	r := sampleResourceIR()
+	r.Name = "port_filter_rule"
+	r.TypeName = "mycloud_port_filter_rule"
+	r.IDAttribute = "rule_id"
+	r.Schema.Attributes = []ir.AttributeIR{
+		{Name: "rule_id", Computed: true, WireName: "ruleId", Schema: ir.SchemaIR{Type: ir.TypeString}},
+		{Name: "port_id", Required: true, WireName: "portId", Schema: ir.SchemaIR{Type: ir.TypeString}},
+		{Name: "rule_type", Required: true, WireName: "ruleType", Schema: ir.SchemaIR{Type: ir.TypeString}},
+	}
+	r.CRUDMapping.Read = ir.OperationMappingIR{
+		Method:               "GET",
+		PathTemplate:         "/portFilters/{portId}",
+		SuccessCodes:         []int{200},
+		ResponseEnvelope:     "portFilter",
+		ResponseIsCollection: true,
+		NestedCollectionPath: "rules.*",
+	}
+	return r
+}
+
+// TestWiredReadBody_NestedCollectionReadSelectsByID asserts a child-resource
+// read (a parent GET whose response nests the collection under a
+// read_collection_path) unwraps the envelope, navigates the path, collects the
+// array(s) the wildcard names, and selects the element whose identifier
+// matches the state's identifier attribute — reporting the resource removed
+// when no element matches (G39).
+func TestWiredReadBody_NestedCollectionReadSelectsByID(t *testing.T) {
+	r := nestedCollectionReadResourceIR()
+
+	file := ResourceFile(r, testClientImport)
+	var buf bytes.Buffer
+	if err := file.Render(&buf); err != nil {
+		t.Fatalf("Render() error = %v", err)
+	}
+	got := buf.String()
+
+	for _, want := range []string{
+		`if v, ok := data["portFilter"]; ok {`,
+		`m, ok := v.(map[string]any)`,
+		`if v, ok := data["rules"]; ok {`,
+		`for _, val := range data {`,
+		`a, ok := val.([]any)`,
+		`arr = append(arr, a...)`,
+		`state.RuleId.IsNull()`,
+		`want := fmt.Sprint(state.RuleId.ValueString())`,
+		`for _, item := range arr {`,
+		`if idVal, ok := m["ruleId"]; ok && fmt.Sprint(idVal) == want {`,
+		`match = m`,
+		`if match == nil {`,
+		`removed = true`,
+		`m, ok := arr[0].(map[string]any)`,
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("nested collection read body missing %q\n--- body ---\n%s", want, got)
+		}
+	}
+}
+
+// TestWiredBody_NestedCollectionRead_Compiles generates a full provider module
+// with the nested-collection-read resource and compiles it, proving the
+// navigation and selection code is valid Go in the generated module.
+func TestWiredBody_NestedCollectionRead_Compiles(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping network-bound compile test in -short mode")
+	}
+
+	p := sampleProviderWithResourceIR()
+	p.Resources = []ir.ResourceIR{nestedCollectionReadResourceIR()}
+
+	tmp := generateResourceModule(t, p)
+
+	ctx, cancel := contextWithTimeout(t, 5*time.Minute)
+	defer cancel()
+
+	tidyCmd := exec.CommandContext(ctx, "go", "mod", "tidy")
+	tidyCmd.Dir = tmp
+	if out, err := tidyCmd.CombinedOutput(); err != nil {
+		t.Fatalf("go mod tidy failed: %v\n%s", err, out)
+	}
+
+	buildCmd := exec.CommandContext(ctx, "go", "build", "./...")
+	buildCmd.Dir = tmp
+	if out, err := buildCmd.CombinedOutput(); err != nil {
+		t.Fatalf("go build ./... failed for nested-collection-read resource: %v\n%s", err, out)
+	}
+}
+
+// TestWiredCreateBody_ChildResourcePathParams asserts a child resource's create
+// fills every path placeholder from the practitioner-supplied Required attribute
+// whose WireName matches the placeholder, not the resource-id fallback or a
+// static enum value. The port_filter_rule shape: create POSTs to
+// /portFilters/{portId}/rules/{ruleType} where port_id (wire portId) and
+// rule_type (wire ruleType) are path parameters folded into the schema as
+// Required attributes. Before the fix, {portId} fell back to the id attribute
+// (rule_id) and {ruleType} was pinned to the first enum member ("pass"), so a
+// drop rule would POST to the wrong URL.
+func TestWiredCreateBody_ChildResourcePathParams(t *testing.T) {
+	r := nestedCollectionReadResourceIR()
+	r.CRUDMapping.Create = ir.OperationMappingIR{
+		Method:       "POST",
+		PathTemplate: "/portFilters/{portId}/rules/{ruleType}",
+		SuccessCodes: []int{201},
+		PathParams: []ir.ParamIR{
+			{Name: "portId", In: "path", Schema: ir.SchemaIR{Type: ir.TypeString}},
+			{Name: "ruleType", In: "path", Schema: ir.SchemaIR{Type: ir.TypeString, EnumValues: []any{"pass", "drop"}}},
+		},
+	}
+	r.CRUDMapping.Update = &ir.OperationMappingIR{
+		Method:       "PUT",
+		PathTemplate: "/portFilters/{portId}/rules/{ruleType}/{ruleId}",
+		SuccessCodes: []int{200},
+		PathParams: []ir.ParamIR{
+			{Name: "portId", In: "path", Schema: ir.SchemaIR{Type: ir.TypeString}},
+			{Name: "ruleType", In: "path", Schema: ir.SchemaIR{Type: ir.TypeString, EnumValues: []any{"pass", "drop"}}},
+			{Name: "ruleId", In: "path", Schema: ir.SchemaIR{Type: ir.TypeString}},
+		},
+	}
+	r.CRUDMapping.Delete = ir.OperationMappingIR{
+		Method:       "DELETE",
+		PathTemplate: "/portFilters/{portId}/rules/{ruleId}",
+		SuccessCodes: []int{204},
+		PathParams: []ir.ParamIR{
+			{Name: "portId", In: "path", Schema: ir.SchemaIR{Type: ir.TypeString}},
+			{Name: "ruleId", In: "path", Schema: ir.SchemaIR{Type: ir.TypeString}},
+		},
+	}
+
+	plan := planResourceWiring(r)
+	if !plan.wired {
+		t.Fatalf("child resource should be wired, plan=%+v", plan)
+	}
+
+	file := ResourceFile(r, testClientImport)
+	var buf bytes.Buffer
+	if err := file.Render(&buf); err != nil {
+		t.Fatalf("Render() error = %v", err)
+	}
+	got := buf.String()
+
+	for _, want := range []string{
+		`reqPath := "/portFilters/{portId}/rules/{ruleType}"`,
+		`url.PathEscape(plan.PortId.ValueString())`,   // {portId} from port_id, not the id fallback
+		`url.PathEscape(plan.RuleType.ValueString())`, // {ruleType} from rule_type, not a static enum value
+		`url.PathEscape(plan.RuleId.ValueString())`,   // update {ruleId} from rule_id
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("child create body missing %q\n--- body ---\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, `strconv.FormatInt(plan.RuleId.ValueInt64(), 10)`) {
+		t.Errorf("child create body must not fill {portId} with the id attribute\n--- body ---\n%s", got)
+	}
+	if strings.Contains(got, `url.PathEscape("pass")`) {
+		t.Errorf("child create body must not pin {ruleType} to a static enum value\n--- body ---\n%s", got)
+	}
+}
+
 // TestPlanOperation_EnumEquivalentPathParam wires a composite resource whose
 // placeholder cannot name-match an attribute but whose path parameter enum
 // exactly equals a Required string attribute's enum set (the gigavuecore
