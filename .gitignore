@@ -41,3 +41,6 @@ go.work.sum
 
 # Local scratch / live-provider testing (never commit)
 .tmp/
+
+# Generated sample provider module sums (created by go mod tidy after make examples)
+examples/mycloud-provider/go.sum
