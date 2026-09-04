@@ -5,6 +5,26 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.0](https://github.com/signalbreak-labs/eidos/compare/v0.8.0...v0.9.0) (2026-09-04)
+
+
+### Features
+
+* **generator:** TLS skip-verify, provider docs rework, seconds-based timeouts ([0d6fe2f](https://github.com/signalbreak-labs/eidos/commit/0d6fe2f4192a283eed5ffe9012d4ae6e36952394))
+* **generator:** wire JSON-bodied ephemeral Opens + warn when an ephemeral stays unwired ([85ac737](https://github.com/signalbreak-labs/eidos/commit/85ac7375634d48dc16c3e4d58bd9ff5e6a100f22))
+
+
+### Bug Fixes
+
+* re-track examples/mycloud-provider/go.mod as the nested module boundary ([ed417a4](https://github.com/signalbreak-labs/eidos/commit/ed417a42c640cf5f752231fcc808bc1d004c3c17))
+
+
+### Miscellaneous Chores
+
+* **examples:** regenerate mycloud-provider sample with new provider schema/docs ([795f907](https://github.com/signalbreak-labs/eidos/commit/795f907a02ce8a11cbb1b097d2b94c28880ae5af))
+* ignore go.sum produced by go mod tidy in examples/mycloud-provider ([b4135c8](https://github.com/signalbreak-labs/eidos/commit/b4135c84013d86dcc7abe9345c072ed1617f6c25))
+* untrack examples/mycloud-provider/go.mod as well as go.sum ([bacd230](https://github.com/signalbreak-labs/eidos/commit/bacd2302d390bfbfc9325464b81239417766546d))
+
 ## [0.8.0](https://github.com/signalbreak-labs/eidos/compare/v0.7.4...v0.8.0) (2026-09-03)
 
 
