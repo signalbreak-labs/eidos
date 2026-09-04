@@ -721,8 +721,63 @@ func acceptanceImportSegment(r ir.ResourceIR, attr string) string {
 	case ir.TypeBool:
 		return "true"
 	default:
+		if v, ok := staticImportPathSegment(r, attr); ok {
+			return v
+		}
 		return "imported-" + attr
 	}
+}
+
+// staticImportPathSegment returns the static value the acceptance mock
+// registered for a path placeholder bound to the given import attribute, when
+// mockRoutePrefix substitutes that placeholder (const/default/first enum — the
+// same rule the mock applies). The generated ImportState fills the attribute
+// from the import ID segment and the import refresh's Read substitutes it back
+// into the request path; a segment that differs from the mock's static value
+// builds a path outside every registered route, so the import 404s with
+// "Cannot import non-existent remote object". gigavuecore's notif_meta_config
+// is the motivating case: {notifType} binds the enum attribute `type` (via the
+// enum-equivalence rule, not a name match), the mock registers only the
+// enum-first /notification/event/notifMetaConfig/instant prefix, so the import
+// ID must carry "instant" as its type segment rather than "imported-type".
+// True identity segments (e.g. {taskId}, no const/default/enum) have no static
+// value and keep the "imported-<attr>" form that exercises the mock's lastKey
+// fallback.
+func staticImportPathSegment(r ir.ResourceIR, attrName string) (string, bool) {
+	ops := []ir.OperationMappingIR{r.CRUDMapping.Create, r.CRUDMapping.Read, r.CRUDMapping.Delete}
+	if r.CRUDMapping.Update != nil {
+		ops = append(ops, *r.CRUDMapping.Update)
+	}
+	for _, op := range ops {
+		for _, ph := range pathPlaceholders(op.PathTemplate) {
+			if !placeholderBindsImportAttribute(r, op.PathParams, ph, attrName) {
+				continue
+			}
+			if v, ok := staticPathValue(op.PathParams, ph); ok {
+				return v, true
+			}
+		}
+	}
+	return "", false
+}
+
+// placeholderBindsImportAttribute reports whether a path placeholder resolves
+// to attrName under the same rules resolvePathSubstitution applies: a name or
+// WireName match, or the enum-equivalence binding for a placeholder whose
+// names differ (notifType ↔ type).
+func placeholderBindsImportAttribute(r ir.ResourceIR, pathParams []ir.ParamIR, placeholder, attrName string) bool {
+	for _, attr := range r.Schema.Attributes {
+		if attr.Name != attrName {
+			continue
+		}
+		if attr.Name == placeholder || attr.WireName == placeholder {
+			return true
+		}
+		if bound, ok := enumEquivalentAttribute(r, pathParams, placeholder); ok && bound.Name == attrName {
+			return true
+		}
+	}
+	return false
 }
 
 // acceptanceImportID builds a deterministic import identifier for the
@@ -1441,6 +1496,19 @@ func statefulMockRouteHandler(route mockRoute, index int, schemes []ir.SecurityS
 	// resource, which is the one an import against the mock should resolve to
 	// (G-22).
 	lastKeyVar := fmt.Sprintf("lastKey%d", index)
+	// The create/update branches record the just-written key into lastKey only
+	// when the route has a read branch: lastKey is declared (and read) solely
+	// for the read fallback, and Go does not count an assignment as use, so a
+	// create/update route without a read would leave the variable declared but
+	// unused — and the assignment would reference an undeclared variable.
+	var trackLastKey []ast.Stmt
+	if route.read {
+		trackLastKey = []ast.Stmt{astgen.AssignStmt(
+			[]ast.Expr{astgen.Ident(lastKeyVar)},
+			[]ast.Expr{astgen.Ident("id")},
+			token.ASSIGN,
+		)}
+	}
 
 	var cases []ast.Stmt
 
@@ -1531,11 +1599,6 @@ func statefulMockRouteHandler(route mockRoute, index int, schemes []ir.SecurityS
 				[]ast.Expr{astgen.Ident("body")},
 				token.ASSIGN,
 			),
-			astgen.AssignStmt(
-				[]ast.Expr{astgen.Ident(lastKeyVar)},
-				[]ast.Expr{astgen.Ident("id")},
-				token.ASSIGN,
-			),
 			astgen.ExprStmt(astgen.Call(astgen.Selector(astgen.Call(astgen.Selector(astgen.Ident("w"), "Header")), "Set"), astgen.Lit("Content-Type"), astgen.Lit("application/json"))),
 			astgen.ExprStmt(astgen.Call(astgen.Selector(astgen.Ident("w"), "WriteHeader"), astgen.IntLit(route.createStatus))),
 			astgen.AssignStmt(
@@ -1543,8 +1606,9 @@ func statefulMockRouteHandler(route mockRoute, index int, schemes []ir.SecurityS
 				[]ast.Expr{astgen.Call(astgen.Selector(astgen.Call(astgen.QualExpr("json", "NewEncoder"), astgen.Ident("w")), "Encode"), astgen.Ident("body"))},
 				token.ASSIGN,
 			),
-			astgen.Return(),
 		)
+		createBody = append(createBody, trackLastKey...)
+		createBody = append(createBody, astgen.Return())
 		cases = append(cases, caseWithBody([]ast.Expr{httpMethodExpr(createMethod)}, createBody...))
 	}
 
@@ -1592,7 +1656,9 @@ func statefulMockRouteHandler(route mockRoute, index int, schemes []ir.SecurityS
 	}
 
 	if route.update {
-		updateBody := []ast.Stmt{
+		// trackLastKey and the trailing Return are appended in the declaration
+		// rather than as separate statements (prealloc).
+		updateBody := append(append([]ast.Stmt{
 			astgen.AssignSingle(astgen.Ident("body"), astgen.Call(astgen.Ident("make"), astgen.MapType(astgen.Ident("string"), astgen.Ident("interface{}")))),
 			&ast.IfStmt{
 				Init: astgen.AssignSingle(astgen.Ident("err"), astgen.Call(
@@ -1650,11 +1716,6 @@ func statefulMockRouteHandler(route mockRoute, index int, schemes []ir.SecurityS
 				[]ast.Expr{astgen.Ident("body")},
 				token.ASSIGN,
 			),
-			astgen.AssignStmt(
-				[]ast.Expr{astgen.Ident(lastKeyVar)},
-				[]ast.Expr{astgen.Ident("id")},
-				token.ASSIGN,
-			),
 			astgen.ExprStmt(astgen.Call(astgen.Selector(astgen.Call(astgen.Selector(astgen.Ident("w"), "Header")), "Set"), astgen.Lit("Content-Type"), astgen.Lit("application/json"))),
 			astgen.ExprStmt(astgen.Call(astgen.Selector(astgen.Ident("w"), "WriteHeader"), astgen.IntLit(route.updateStatus))),
 			astgen.AssignStmt(
@@ -1662,8 +1723,7 @@ func statefulMockRouteHandler(route mockRoute, index int, schemes []ir.SecurityS
 				[]ast.Expr{astgen.Call(astgen.Selector(astgen.Call(astgen.QualExpr("json", "NewEncoder"), astgen.Ident("w")), "Encode"), astgen.Ident("body"))},
 				token.ASSIGN,
 			),
-			astgen.Return(),
-		}
+		}, trackLastKey...), astgen.Return())
 		// The update branch dispatches on PUT and PATCH. Drop any method the
 		// create branch already matches — PUT-as-create issues Create as the
 		// instance PUT, the same op Update uses — so the two never emit
@@ -1720,10 +1780,20 @@ func statefulMockRouteHandler(route mockRoute, index int, schemes []ir.SecurityS
 		astgen.SwitchStmt(astgen.Selector(astgen.Ident("r"), "Method"), astgen.Block(cases...)),
 	)
 
-	return []ast.Stmt{
+	// lastKey is read only by the read branch's fallback. Declare it only when
+	// route.read holds: a delete-only route (e.g. a dedicated reclaim path)
+	// never references it, and a create/update-only route would assign it but
+	// never read it — Go counts neither assignment as use, so either shape
+	// without a read branch trips "declared and not used". The create/update
+	// assignments to lastKey are gated on the same condition.
+	stmts := []ast.Stmt{
 		astgen.AssignSingle(astgen.Ident(stateVar), astgen.Call(astgen.Ident("make"), astgen.MapType(astgen.Ident("string"), astgen.MapType(astgen.Ident("string"), astgen.Ident("interface{}"))))),
 		astgen.DeclStmt(astgen.VarDeclGen(astgen.VarSpec(muVar, astgen.QualExpr("sync", "Mutex"), nil))),
-		astgen.AssignSingle(astgen.Ident(lastKeyVar), astgen.Lit("")),
+	}
+	if route.read {
+		stmts = append(stmts, astgen.AssignSingle(astgen.Ident(lastKeyVar), astgen.Lit("")))
+	}
+	return append(stmts,
 		// The handler is bound to a variable so it can be registered on both the
 		// exact collection path and its subtree: net/http's ServeMux pattern
 		// "/pets" matches only that exact path, so instance URLs like
@@ -1749,5 +1819,5 @@ func statefulMockRouteHandler(route mockRoute, index int, schemes []ir.SecurityS
 			astgen.Lit(route.path+"/"),
 			astgen.Ident(handlerVar),
 		)),
-	}
+	)
 }

@@ -1221,6 +1221,34 @@ func TestResourceNoTimeouts_OmitsBlock(t *testing.T) {
 	}
 }
 
+// TestResourceTimeouts_EmptySchemaImportsTypes covers the types-import gating:
+// a resource with an empty schema but configured timeouts still emits a
+// <Name>TimeoutsModel struct that references types.Int64, so the file must
+// import types even though the schema itself has no attributes or blocks.
+func TestResourceTimeouts_EmptySchemaImportsTypes(t *testing.T) {
+	create := time.Minute
+	r := ir.ResourceIR{
+		Name:     "pet",
+		Timeouts: &ir.TimeoutConfigIR{Create: &create},
+	}
+
+	file := ResourceFile(r, testClientImport)
+	var buf bytes.Buffer
+	if err := file.Render(&buf); err != nil {
+		t.Fatalf("Render() error = %v", err)
+	}
+	got := buf.String()
+
+	for _, want := range []string{
+		`"github.com/hashicorp/terraform-plugin-framework/types"`,
+		`Create types.Int64`,
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("empty-schema resource with timeouts missing %q\n--- body ---\n%s", want, got)
+		}
+	}
+}
+
 // TestResourceTimeoutWiringNeedsTime covers the time-import gating: a wired
 // resource with any configured op needs time, a scaffolded resource never does,
 // and a wired resource whose only configured op is an unwired update does not.

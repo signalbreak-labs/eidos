@@ -50,10 +50,10 @@ func newStackResourceMockServer() *httptest.Server {
 			}
 			id = fmt.Sprintf("%v", body["id"])
 			state0[id] = body
-			lastKey0 = id
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(201)
 			_ = json.NewEncoder(w).Encode(body)
+			lastKey0 = id
 			return
 		case http.MethodGet:
 			body, ok := state0[id]
@@ -79,10 +79,10 @@ func newStackResourceMockServer() *httptest.Server {
 			}
 			id = fmt.Sprintf("%v", body["id"])
 			state0[id] = body
-			lastKey0 = id
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(200)
 			_ = json.NewEncoder(w).Encode(body)
+			lastKey0 = id
 			return
 		case http.MethodDelete:
 			delete(state0, id)
