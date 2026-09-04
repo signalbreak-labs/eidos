@@ -108,7 +108,7 @@
     {
       "path": "internal/provider/resource_widget_acceptance_test.go",
       "reason": "acceptance tests for resource widget",
-      "body_hash": "7e6e0fe7ae57a6d5"
+      "body_hash": "5ca5fecc8e90d38d"
     },
     {
       "path": "internal/provider/resource_widget_remote_test.go",

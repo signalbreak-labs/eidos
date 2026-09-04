@@ -108,7 +108,7 @@
     {
       "path": "internal/provider/resource_pet_acceptance_test.go",
       "reason": "acceptance tests for resource pet",
-      "body_hash": "8e3c9c8e06287387"
+      "body_hash": "b304ddc9b23524e7"
     },
     {
       "path": "internal/provider/resource_pet_remote_test.go",

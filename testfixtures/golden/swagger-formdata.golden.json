@@ -118,7 +118,7 @@
     {
       "path": "internal/provider/resource_note_acceptance_test.go",
       "reason": "acceptance tests for resource note",
-      "body_hash": "239b7599be046a75"
+      "body_hash": "f586f2aa9a3d8b35"
     },
     {
       "path": "internal/provider/resource_note_remote_test.go",

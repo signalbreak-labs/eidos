@@ -335,6 +335,99 @@ func TestResourceAcceptanceTestFile_CompositeIdentityImport(t *testing.T) {
 	}
 }
 
+// TestResourceAcceptanceTestFile_DeleteOnlyRouteOmitsLastKey covers a resource
+// whose delete lives on its own path (gigavuecore's activation: DELETE
+// /licensing/ems/reclaim vs create on /licensing/ems/activations). The
+// delete-only route emits no create/read/update branch, so lastKey is neither
+// read nor assigned there; declaring it would trip "declared and not used" and
+// the generated provider's test files would not compile (go vet). The
+// create/read route keeps its lastKey0.
+func TestResourceAcceptanceTestFile_DeleteOnlyRouteOmitsLastKey(t *testing.T) {
+	r := sampleResourceIR()
+	r.Importable = true
+	r.CRUDMapping = ir.CRUDMappingIR{
+		Create: ir.OperationMappingIR{Method: "POST", PathTemplate: "/pets"},
+		Read:   ir.OperationMappingIR{Method: "GET", PathTemplate: "/pets/{id}"},
+		Delete: ir.OperationMappingIR{Method: "DELETE", PathTemplate: "/pets/reclaim"},
+	}
+	pir := sampleProviderWithResourceIR()
+	pir.Resources = []ir.ResourceIR{r}
+	cfg := BuildConfig{ProviderName: pir.Name, Namespace: pir.Name}
+
+	file := ResourceAcceptanceTestFile(pir, r, cfg)
+	var buf bytes.Buffer
+	if err := file.Render(&buf); err != nil {
+		t.Fatalf("Render() error = %v", err)
+	}
+	got := buf.String()
+
+	if n := strings.Count(got, `lastKey0 := ""`); n != 1 {
+		t.Errorf("create/read route should declare lastKey0 exactly once; got %d:\n%s", n, got)
+	}
+	if strings.Contains(got, "lastKey1") {
+		t.Errorf("delete-only route must not reference lastKey1 (declared and not used); got:\n%s", got)
+	}
+}
+
+// TestResourceAcceptanceTestFile_StaticImportPathSegment covers the import ID
+// for an identity attribute bound to a path placeholder the mock substitutes
+// statically (const/default/enum-first): gigavuecore's notif_meta_config
+// imports as {type}/{task_id} where {notifType} enum-binds the `type`
+// attribute and the mock registers only the enum-first .../instant prefix.
+// The import ID must carry "instant" for that segment or the import refresh's
+// GET falls outside every registered route and the mock 404s ("Cannot import
+// non-existent remote object"). The unbound identity segment keeps the
+// "imported-<attr>" form that exercises the lastKey fallback.
+func TestResourceAcceptanceTestFile_StaticImportPathSegment(t *testing.T) {
+	typeEnum := []any{"instant", "batch", "trap"}
+	r := ir.ResourceIR{
+		Name:           "notif_meta_config",
+		TypeName:       "mycloud_notif_meta_config",
+		IDAttribute:    "task_id",
+		Importable:     true,
+		ImportIDFormat: "{type}/{task_id}",
+		Schema: ir.ObjectSchemaIR{Attributes: []ir.AttributeIR{
+			{Name: "type", Required: true, Schema: ir.SchemaIR{Type: ir.TypeString, EnumValues: typeEnum}},
+			{Name: "task_id", Required: true, Schema: ir.SchemaIR{Type: ir.TypeString}, WireName: "taskId"},
+			{Name: "comment", Optional: true, Schema: ir.SchemaIR{Type: ir.TypeString}},
+		}},
+		CRUDMapping: ir.CRUDMappingIR{
+			Create: ir.OperationMappingIR{Method: "POST", PathTemplate: "/notification/event/notifMetaConfig/{notifType}"},
+			Read:   ir.OperationMappingIR{Method: "GET", PathTemplate: "/notification/event/notifMetaConfig/{notifType}/{taskId}"},
+			Delete: ir.OperationMappingIR{Method: "DELETE", PathTemplate: "/notification/event/notifMetaConfig/{notifType}/{taskId}"},
+		},
+	}
+	// The path parameter schemas carry the enum the mock substitutes.
+	setPathParams := func(op ir.OperationMappingIR) ir.OperationMappingIR {
+		op.PathParams = []ir.ParamIR{
+			{Name: "notifType", In: "path", Schema: ir.SchemaIR{Type: ir.TypeString, EnumValues: typeEnum}},
+			{Name: "taskId", In: "path", Schema: ir.SchemaIR{Type: ir.TypeString}},
+		}
+		return op
+	}
+	r.CRUDMapping.Create = setPathParams(r.CRUDMapping.Create)
+	r.CRUDMapping.Read = setPathParams(r.CRUDMapping.Read)
+	r.CRUDMapping.Delete = setPathParams(r.CRUDMapping.Delete)
+
+	pir := sampleProviderWithResourceIR()
+	pir.Resources = []ir.ResourceIR{r}
+	cfg := BuildConfig{ProviderName: pir.Name, Namespace: pir.Name}
+
+	file := ResourceAcceptanceTestFile(pir, r, cfg)
+	var buf bytes.Buffer
+	if err := file.Render(&buf); err != nil {
+		t.Fatalf("Render() error = %v", err)
+	}
+	got := buf.String()
+
+	if !strings.Contains(got, `ImportStateId: "instant/imported-task_id"`) {
+		t.Errorf("import ID should carry the mock's static path segment for type; got:\n%s", got)
+	}
+	if !strings.Contains(got, `"/notification/event/notifMetaConfig/instant"`) {
+		t.Errorf("mock should register the enum-first path prefix; got:\n%s", got)
+	}
+}
+
 // TestResourceAcceptanceTestFile_MockDeleteClearsState verifies that the generated
 // mock server tracks resources by ID, deletes the entry on DELETE, and returns a
 // 404 on a subsequent GET for the same ID.

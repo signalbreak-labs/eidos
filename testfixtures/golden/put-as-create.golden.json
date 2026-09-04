@@ -108,7 +108,7 @@
     {
       "path": "internal/provider/resource_alarm_acceptance_test.go",
       "reason": "acceptance tests for resource alarm",
-      "body_hash": "3bc64af98806afa4"
+      "body_hash": "7df4f968ae3dd65c"
     },
     {
       "path": "internal/provider/resource_alarm_remote_test.go",

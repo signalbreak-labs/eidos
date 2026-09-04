@@ -366,8 +366,10 @@ func registerResourceImports(f *astgen.File, r ir.ResourceIR, wiring resourceWir
 	// The model struct references types.* for every attribute and block field.
 	// Auto-inferred resources with an empty schema (no attributes or blocks)
 	// produce an empty model and must not import types, or the import is unused
-	// and the generated provider does not compile.
-	if len(r.Schema.Attributes) > 0 || len(r.Schema.Blocks) > 0 {
+	// and the generated provider does not compile. A resource with configured
+	// timeouts is the exception: its schema may be empty, but the synthesized
+	// <Name>TimeoutsModel struct still references types.Int64.
+	if len(r.Schema.Attributes) > 0 || len(r.Schema.Blocks) > 0 || resourceHasTimeouts(r) {
 		f.AddImport("github.com/hashicorp/terraform-plugin-framework/types", "types")
 	}
 	if wiring.wired {
