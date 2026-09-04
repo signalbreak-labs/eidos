@@ -916,6 +916,12 @@ func buildIRPreview(spec *parser.Spec, version parser.Version, cfg *config.Confi
 	pairListResourceRegistrations(preview, &previewDiags)
 	pairListResourceIdentities(preview)
 
+	// An ephemeral resource whose Open cannot be wired keeps its honest
+	// scaffold, which tells practitioners to consult the generation warnings
+	// for the exact cause — so the cause must be emitted here as a fail-loud
+	// Warning, or that pointer leads nowhere.
+	previewDiags = append(previewDiags, generator.UnwiredEphemeralDiagnostics(preview.EphemeralResources)...)
+
 	// Two operations that normalize to the same construct name (e.g. duplicate
 	// operationIds) would make the generator emit two files at one path. Fail
 	// loud here with a diagnostic naming both source operations instead of

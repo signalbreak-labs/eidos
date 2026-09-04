@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/signalbreak-labs/eidos/pkg/diagnostics"
 	"github.com/signalbreak-labs/eidos/pkg/ir"
 )
 
@@ -240,10 +241,96 @@ func TestWiredEphemeralOpen_Path_Compiles(t *testing.T) {
 	}
 }
 
+// wiredEphemeralIRWithBody returns a wired ephemeral resource whose Open is a
+// body-bearing POST /tokens/create with a JSON media type. It exercises the
+// body-wiring path: the merged config model is encoded as the JSON request body
+// (modelToJSONMap + json.Marshal + bytes.NewReader), mirroring body-bearing
+// action Invokes, so token-style create openings send their payloads.
+func wiredEphemeralIRWithBody() ir.EphemeralResourceIR {
+	er := wiredEphemeralIR()
+	er.OpenMapping = ir.OperationMappingIR{
+		Method:       "POST",
+		PathTemplate: "/tokens/create",
+		SuccessCodes: []int{200},
+		MediaType:    "application/json",
+		BodySchema:   &ir.SchemaIR{},
+	}
+	// A required config attribute that no parameter references: the body-bearing
+	// open sends the whole model, so the required-attribute gate does not apply.
+	er.ConfigSchema.Attributes = append(er.ConfigSchema.Attributes,
+		ir.AttributeIR{Name: "ttl", Required: true, Schema: ir.SchemaIR{Type: ir.TypeInt}},
+	)
+	return er
+}
+
+// TestWiredEphemeralOpen_Body_Render asserts the generated openRemote helper
+// encodes the merged config model as the JSON request body, decodes the
+// response, and imports bytes — and carries no scaffold marker.
+func TestWiredEphemeralOpen_Body_Render(t *testing.T) {
+	er := wiredEphemeralIRWithBody()
+
+	file := EphemeralFile(er, testClientImport)
+	var buf bytes.Buffer
+	if err := file.Render(&buf); err != nil {
+		t.Fatalf("Render() error = %v", err)
+	}
+	got := buf.String()
+
+	for _, want := range []string{
+		// The merged config model is encoded as the JSON request body.
+		`body, err := modelToJSONMap(&config)`,
+		`json.Marshal(body)`,
+		`bytes.NewReader(payload)`,
+		// The body travels through the generated client request.
+		`e.client.NewRequest(ctx, http.MethodPost, reqPath, bytes.NewReader(payload))`,
+		// A JSON body sets the default media type.
+		`httpReq.Header.Set("Content-Type", "application/json")`,
+		// Decode the response and store the result.
+		`applyJSONToModel(&config, data)`,
+		`resp.Result.Set(ctx, &config)`,
+		// bytes is imported for the body reader.
+		`"bytes"`,
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("generated wired Open (body) body missing %q\n--- body ---\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "Open is not wired to a remote API endpoint") {
+		t.Errorf("wired ephemeral Open (body) must not carry scaffold marker\n--- body ---\n%s", got)
+	}
+}
+
+// TestWiredEphemeralOpen_Body_Compiles generates a full provider module with a
+// body-bearing wired ephemeral resource and compiles it, proving the JSON body
+// encoding + bytes import are syntactically valid.
+func TestWiredEphemeralOpen_Body_Compiles(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping network-bound compile test in -short mode")
+	}
+	p := sampleProviderWithEphemeralIR(wiredEphemeralIRWithBody())
+	tmp := generateWiredEphemeralModule(t, p)
+
+	ctx, cancel := contextWithTimeout(t, 5*time.Minute)
+	defer cancel()
+
+	tidyCmd := exec.CommandContext(ctx, "go", "mod", "tidy")
+	tidyCmd.Dir = tmp
+	if out, err := tidyCmd.CombinedOutput(); err != nil {
+		t.Fatalf("go mod tidy failed: %v\n%s", err, out)
+	}
+	buildCmd := exec.CommandContext(ctx, "go", "build", "./...")
+	buildCmd.Dir = tmp
+	if out, err := buildCmd.CombinedOutput(); err != nil {
+		t.Fatalf("go build ./... failed for wired ephemeral (body): %v\n%s", err, out)
+	}
+}
+
 // TestPlanEphemeralWiring verifies the wiring plan for an ephemeral resource:
 // a bodiless open with a resolvable config attribute is wired; an open with a
-// request body or formData stays unwired; and the strings import is needed only
-// when the path carries a placeholder.
+// JSON request body is wired too (the merged config model is encoded as the
+// body, mirroring body-bearing actions); an open with a non-JSON body media
+// type or formData stays unwired; and the strings import is needed only when
+// the path carries a placeholder.
 func TestPlanEphemeralWiring(t *testing.T) {
 	t.Run("bodiless query param wired", func(t *testing.T) {
 		plan := planEphemeralWiring(wiredEphemeralIR())
@@ -270,11 +357,27 @@ func TestPlanEphemeralWiring(t *testing.T) {
 		}
 	})
 
-	t.Run("request body not wired", func(t *testing.T) {
+	t.Run("JSON request body wired", func(t *testing.T) {
 		er := wiredEphemeralIR()
 		er.OpenMapping.BodySchema = &ir.SchemaIR{}
+		plan := planEphemeralWiring(er)
+		if !plan.wired {
+			t.Fatalf("Open with a JSON request body must be wired")
+		}
+		if !plan.open.hasBody {
+			t.Fatalf("plan.open.hasBody = false, want true")
+		}
+		if !plan.needsJSONBody {
+			t.Fatalf("plan.needsJSONBody = false, want true")
+		}
+	})
+
+	t.Run("non-JSON request body not wired", func(t *testing.T) {
+		er := wiredEphemeralIR()
+		er.OpenMapping.BodySchema = &ir.SchemaIR{}
+		er.OpenMapping.MediaType = "application/xml"
 		if planEphemeralWiring(er).wired {
-			t.Fatalf("Open with a request body must not be wired (bodiless only)")
+			t.Fatalf("Open with a non-JSON request body must not be wired")
 		}
 	})
 
@@ -295,6 +398,90 @@ func TestPlanEphemeralWiring(t *testing.T) {
 	})
 }
 
+// TestUnwiredEphemeralDiagnostics verifies the generation-time fail-loud
+// warning: wired ephemerals stay silent, and each unwired condition produces a
+// Warning naming the ephemeral resource and the rejected condition.
+func TestUnwiredEphemeralDiagnostics(t *testing.T) {
+	if diags := UnwiredEphemeralDiagnostics([]ir.EphemeralResourceIR{wiredEphemeralIR()}); len(diags) != 0 {
+		t.Fatalf("wired ephemeral emitted %d diagnostics, want none: %v", len(diags), diags)
+	}
+	if diags := UnwiredEphemeralDiagnostics([]ir.EphemeralResourceIR{wiredEphemeralIRWithBody()}); len(diags) != 0 {
+		t.Fatalf("body-wired ephemeral emitted %d diagnostics, want none: %v", len(diags), diags)
+	}
+
+	cases := []struct {
+		name   string
+		mutate func(*ir.EphemeralResourceIR)
+		detail string
+	}{
+		{
+			name:   "no result attributes",
+			mutate: func(er *ir.EphemeralResourceIR) { er.ResultSchema = ir.ObjectSchemaIR{} },
+			detail: "no attributes",
+		},
+		{
+			name:   "no open mapping",
+			mutate: func(er *ir.EphemeralResourceIR) { er.OpenMapping = ir.OperationMappingIR{} },
+			detail: "no resolvable Open operation mapping",
+		},
+		{
+			name: "formData body",
+			mutate: func(er *ir.EphemeralResourceIR) {
+				er.OpenMapping.FormDataParams = []ir.ParamIR{{Name: "grant_type", In: "formData", Required: true, Schema: ir.SchemaIR{Type: ir.TypeString}}}
+			},
+			detail: "formData",
+		},
+		{
+			name: "non-JSON body media type",
+			mutate: func(er *ir.EphemeralResourceIR) {
+				er.OpenMapping.BodySchema = &ir.SchemaIR{}
+				er.OpenMapping.MediaType = "application/xml"
+			},
+			detail: `media type "application/xml" is not JSON`,
+		},
+		{
+			name: "unresolvable path placeholder",
+			mutate: func(er *ir.EphemeralResourceIR) {
+				er.OpenMapping.PathTemplate = "/tokens/{account}/create"
+			},
+			detail: "path placeholder {account}",
+		},
+		{
+			name: "unresolvable required query parameter",
+			mutate: func(er *ir.EphemeralResourceIR) {
+				er.OpenMapping.QueryParams = append(er.OpenMapping.QueryParams, ir.ParamIR{Name: "region", In: "query", Required: true, Schema: ir.SchemaIR{Type: ir.TypeString}})
+			},
+			detail: `required query parameter "region"`,
+		},
+		{
+			name: "unreferenced required config attribute",
+			mutate: func(er *ir.EphemeralResourceIR) {
+				er.ConfigSchema.Attributes = append(er.ConfigSchema.Attributes, ir.AttributeIR{Name: "tenant", Required: true, Schema: ir.SchemaIR{Type: ir.TypeString}})
+			},
+			detail: `required config attribute "tenant"`,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			er := wiredEphemeralIR()
+			tc.mutate(&er)
+			diags := UnwiredEphemeralDiagnostics([]ir.EphemeralResourceIR{er})
+			if len(diags) != 1 {
+				t.Fatalf("unwired ephemeral emitted %d diagnostics, want 1: %v", len(diags), diags)
+			}
+			if !strings.Contains(diags[0].Summary, "mycloud_token") {
+				t.Errorf("diagnostic summary must name the ephemeral resource, got %q", diags[0].Summary)
+			}
+			if !strings.Contains(diags[0].Detail, tc.detail) {
+				t.Errorf("diagnostic detail missing %q, got %q", tc.detail, diags[0].Detail)
+			}
+			if diags[0].Severity != diagnostics.Warning {
+				t.Errorf("diagnostic severity = %v, want Warning", diags[0].Severity)
+			}
+		})
+	}
+}
+
 // TestAnyEphemeralWired verifies the gate reports true when at least one
 // ephemeral resource is wired and false otherwise, so the provider Configure
 // client construction and JSON helpers are only emitted when needed.
@@ -303,7 +490,7 @@ func TestAnyEphemeralWired(t *testing.T) {
 		t.Fatalf("AnyEphemeralWired = false for a wired ephemeral, want true")
 	}
 	er := wiredEphemeralIR()
-	er.OpenMapping.BodySchema = &ir.SchemaIR{}
+	er.OpenMapping.FormDataParams = []ir.ParamIR{{Name: "grant_type", In: "formData", Required: true, Schema: ir.SchemaIR{Type: ir.TypeString}}}
 	if AnyEphemeralWired([]ir.EphemeralResourceIR{er}) {
 		t.Fatalf("AnyEphemeralWired = true for an unwired ephemeral, want false")
 	}

@@ -2,7 +2,7 @@ openapi: "3.0.3"
 info:
   title: Token API
   version: "1.0.0"
-  description: Reference spec exercising ephemeral-resource inference and wiring: the credentials collection POST is an ephemeral Open, and the sibling /renew and /close lifecycle operations become its Renew/Close mappings (PROJECT_DESIGN §23).
+  description: Reference spec exercising ephemeral-resource inference and wiring: the credentials collection POST is an ephemeral Open, and the sibling /renew and /close lifecycle operations become its Renew/Close mappings (PROJECT_DESIGN §23). The /tokens/create POST carries a JSON request body, exercising the body-bearing Open wiring (the merged config model is encoded as the request body, mirroring body-bearing action Invokes).
 servers:
   - url: https://token.example.com
 security:
@@ -37,6 +37,23 @@ paths:
       responses:
         "204":
           description: Closed
+  /tokens/create:
+    post:
+      operationId: createToken
+      summary: Create a temporary API token
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TokenRequest"
+      responses:
+        "200":
+          description: Token
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Token"
 components:
   schemas:
     Credentials:
@@ -55,6 +72,25 @@ components:
         expires_at:
           type: string
           format: date-time
+    TokenRequest:
+      type: object
+      required:
+        - name
+      properties:
+        name:
+          type: string
+        ttl_seconds:
+          type: integer
+    Token:
+      type: object
+      required:
+        - token
+      properties:
+        token:
+          type: string
+          format: password
+        expires_in:
+          type: integer
   securitySchemes:
     bearerAuth:
       type: http
