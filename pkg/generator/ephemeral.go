@@ -184,11 +184,12 @@ func generateEphemeralFile(er ir.EphemeralResourceIR, clientImport string) *ast.
 		)),
 	))
 
-	// Open method. Wired ephemeral resources call the open endpoint and store the
-	// API response as the ephemeral result; ephemeral resources without a
-	// resolvable bodiless open mapping keep the honest scaffold Open body. The
-	// extracted openRemote helper is emitted alongside Open so the request/
-	// response logic is unit-testable without a tfsdk.Config.
+	// Open method. Wired ephemeral resources call the open endpoint (sending the
+	// JSON request body when the mapping declares one) and store the API response
+	// as the ephemeral result; ephemeral resources without a resolvable open
+	// mapping keep the honest scaffold Open body. The extracted openRemote helper
+	// is emitted alongside Open so the request/response logic is unit-testable
+	// without a tfsdk.Config.
 	f.AddComment("Open generates a new ephemeral resource value.")
 	openBody, openHelperComment, openHelperDecl := ephemeralOpenPlan(er, wiring, modelName, structName)
 	f.AddDecl(astgen.MethodDecl(
@@ -243,20 +244,7 @@ func generateEphemeralFile(er ir.EphemeralResourceIR, clientImport string) *ast.
 		f.AddImport("github.com/hashicorp/terraform-plugin-framework/types", "types")
 	}
 	if wiring.wired {
-		// Wired Open bodies build and send HTTP requests through the generated
-		// client and decode JSON responses. Ephemeral opens are bodiless, so
-		// bytes is not imported.
-		f.AddImport(clientImport, "client")
-		f.AddImports("encoding/json", "fmt", "io", "net/http")
-		if wiring.needsStrings {
-			f.AddImport("strings", "")
-		}
-		if wiring.needsStrconv {
-			f.AddImport("strconv", "")
-		}
-		if wiring.needsURL {
-			f.AddImport("net/url", "")
-		}
+		addWiredEphemeralImports(f, wiring, clientImport)
 	}
 	// The schema/validator package is only referenced by ephemeralBlockExpr when a
 	// List/Set block emits a validator.List/validator.Set composite, which in turn
@@ -275,6 +263,28 @@ func generateEphemeralFile(er ir.EphemeralResourceIR, clientImport string) *ast.
 	}
 
 	return f.AST()
+}
+
+// addWiredEphemeralImports registers the imports a wired ephemeral resource's
+// generated code references. Wired Open bodies build and send HTTP requests
+// through the generated client and decode JSON responses; bytes is imported
+// only when the open sends a JSON request body (bytes.NewReader wrapping the
+// marshaled payload), a bodiless open never references bytes.
+func addWiredEphemeralImports(f *astgen.File, wiring ephemeralWiringPlan, clientImport string) {
+	f.AddImport(clientImport, "client")
+	f.AddImports("encoding/json", "fmt", "io", "net/http")
+	if wiring.needsJSONBody {
+		f.AddImport("bytes", "")
+	}
+	if wiring.needsStrings {
+		f.AddImport("strings", "")
+	}
+	if wiring.needsStrconv {
+		f.AddImport("strconv", "")
+	}
+	if wiring.needsURL {
+		f.AddImport("net/url", "")
+	}
 }
 
 // ephemeralOpenPlan selects the Open body and the extracted openRemote helper

@@ -21,6 +21,11 @@
       "body_hash": "87fccd3612cf2143"
     },
     {
+      "path": "docs/ephemeral-resources/create_token.md",
+      "reason": "documentation for ephemeral resource create_token",
+      "body_hash": "6fc75ab38eca8d8c"
+    },
+    {
       "path": "docs/ephemeral-resources/issue_credentials.md",
       "reason": "documentation for ephemeral resource issue_credentials",
       "body_hash": "06eeb603ab6eeef5"
@@ -28,7 +33,12 @@
     {
       "path": "docs/index.md",
       "reason": "provider overview and authentication guide",
-      "body_hash": "731403e5893e63fb"
+      "body_hash": "d217159bd6b84624"
+    },
+    {
+      "path": "examples/ephemeral-resources/create_token/ephemeral-resource.tf",
+      "reason": "example for ephemeral resource create_token",
+      "body_hash": "fa46b6a3945ddce4"
     },
     {
       "path": "examples/ephemeral-resources/issue_credentials/ephemeral-resource.tf",
@@ -38,7 +48,7 @@
     {
       "path": "generator.yaml",
       "reason": "generated generator configuration",
-      "body_hash": "803d3485b4068f31"
+      "body_hash": "a74c7fe86f87ba4b"
     },
     {
       "path": "go.mod",
@@ -96,6 +106,16 @@
       "body_hash": "bf53c919903fb008"
     },
     {
+      "path": "internal/provider/ephemeral_create_token.go",
+      "reason": "ephemeral resource token-api_create_token",
+      "body_hash": "cf85a41f2cb4a888"
+    },
+    {
+      "path": "internal/provider/ephemeral_create_token_remote_test.go",
+      "reason": "coverage tests for ephemeral resource create_token remote helper",
+      "body_hash": "b51b629113a4bcda"
+    },
+    {
       "path": "internal/provider/ephemeral_issue_credentials.go",
       "reason": "ephemeral resource token-api_issue_credentials",
       "body_hash": "14bc4e7ae209528d"
@@ -113,7 +133,7 @@
     {
       "path": "internal/provider/provider.go",
       "reason": "provider schema and registration",
-      "body_hash": "3a5dce9d2dcbba64"
+      "body_hash": "f8c8cc94fd3b3a8f"
     },
     {
       "path": "internal/provider/provider_test.go",
