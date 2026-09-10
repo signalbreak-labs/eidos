@@ -831,6 +831,34 @@ func TestWiredReadBody_IdentitySet(t *testing.T) {
 	}
 }
 
+// TestWiredReadBody_IdentitySetOnRemovedPath asserts the removed (404) branch
+// of a wired Read populates the identity before removing state. The framework
+// rejects a fully-null identity after a no-error Read of an identity-carrying
+// resource with no removed-state exemption, which would turn an import of a
+// non-existent object into "Missing Resource Identity After Read" instead of
+// Terraform core's "Cannot import non-existent remote object".
+func TestWiredReadBody_IdentitySetOnRemovedPath(t *testing.T) {
+	r := identityResourceIR()
+
+	file := ResourceFile(r, testClientImport)
+	var buf bytes.Buffer
+	if err := file.Render(&buf); err != nil {
+		t.Fatalf("Render() error = %v", err)
+	}
+	got := buf.String()
+
+	readRemote := strings.Index(got, "if r.readRemote(")
+	identitySet := strings.Index(got, `resp.Identity.SetAttribute(ctx, path.Root("ship_symbol"), state.Symbol)`)
+	remove := strings.Index(got, "resp.State.RemoveResource(ctx)")
+	if readRemote < 0 || identitySet < 0 || remove < 0 {
+		t.Fatalf("generated read body missing removed-path statements\n--- body ---\n%s", got)
+	}
+	if readRemote >= identitySet || identitySet >= remove {
+		t.Errorf("removed branch must set identity between readRemote and RemoveResource; got readRemote=%d identitySet=%d remove=%d\n--- body ---\n%s",
+			readRemote, identitySet, remove, got)
+	}
+}
+
 // TestWiredBody_NoIdentityOmitsIdentitySet asserts a resource without an
 // identity schema (the common inferred-resource case) never emits identity
 // SetAttribute statements, so non-paired resources are unaffected.

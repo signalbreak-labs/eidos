@@ -2547,12 +2547,12 @@ func createIDFallbackStmts(r ir.ResourceIR, modelVar, summary string) []ast.Stmt
 // wiredReadBody returns the framework Read body: it reads the state, delegates
 // the HTTP exchange to readRemote (which reports whether the remote resource is
 // gone so the framework can drop it from state), and on success renews the
-// identity and stores state.
+// identity and stores state. The removed path renews the identity too before
+// removing state, so the framework never sees a no-error Read that leaves an
+// identity-carrying resource's identity fully null.
 func wiredReadBody(r ir.ResourceIR, modelName string) []ast.Stmt {
 	summary := fmt.Sprintf("Error reading %s", resourceTypeName(r))
 	stmts := make([]ast.Stmt, 0, 12)
-	// readRemote returns removed=true when the API reports 404, so the framework
-	// removes the resource from state rather than treating "gone" as an error.
 	stmts = append(stmts,
 		astgen.VarDecl("state", modelName, nil),
 		astgen.ExprStmt(astgen.Call(
@@ -2572,6 +2572,15 @@ func wiredReadBody(r ir.ResourceIR, modelName string) []ast.Stmt {
 	if r.Timeouts != nil && r.Timeouts.Read != nil {
 		stmts = append(stmts, resourceTimeoutWiringStmts("state", "Read", *r.Timeouts.Read)...)
 	}
+	// A 404 means the remote resource is gone, so the framework removes it from
+	// state rather than treating "gone" as an error. The identity must still be
+	// populated before returning: the framework rejects a fully-null identity
+	// after a no-error Read of an identity-carrying resource ("Missing Resource
+	// Identity After Read") with no removed-state exemption, which would turn a
+	// routine "object was deleted out-of-band" refresh — and, worse, an import
+	// of a non-existent object, which should surface as Terraform core's
+	// "Cannot import non-existent remote object" — into an opaque provider bug
+	// report. identitySetStmts is a no-op for resources without identity.
 	stmts = append(stmts,
 		astgen.If(
 			astgen.Call(
@@ -2580,13 +2589,13 @@ func wiredReadBody(r ir.ResourceIR, modelName string) []ast.Stmt {
 				astgen.UnaryPtr(astgen.Ident("state")),
 				astgen.Ident("resp"),
 			),
-			astgen.Block(
+			astgen.Block(append(identitySetStmts(r, summary, "state"),
 				astgen.ExprStmt(astgen.Call(
 					astgen.Selector(astgen.Selector(astgen.Ident("resp"), "State"), "RemoveResource"),
 					astgen.Ident("ctx"),
 				)),
 				astgen.Return(),
-			),
+			)...),
 		),
 		astgen.If(
 			astgen.Call(astgen.Selector(astgen.Selector(astgen.Ident("resp"), "Diagnostics"), "HasError")),
