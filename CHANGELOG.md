@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.0](https://github.com/signalbreak-labs/eidos/compare/v0.9.1...v0.10.0) (2026-09-10)
+
+
+### Features
+
+* **generator:** path_param_transforms resource override for path value rewrites ([c4a0bdf](https://github.com/signalbreak-labs/eidos/commit/c4a0bdfb169955f694421261a63d9a30743c2762))
+
+
+### Bug Fixes
+
+* **generator:** populate resource identity on the removed read path ([3fec68f](https://github.com/signalbreak-labs/eidos/commit/3fec68faa78d6e92b77a6d2c4ecc578f25bc3257))
+* **generator:** refresh mycloud sample provider for identity-on-removed-path ([37b0765](https://github.com/signalbreak-labs/eidos/commit/37b07651b1062c9e298c8622eb13fdba7076a29c))
+
 ## [0.9.1](https://github.com/signalbreak-labs/eidos/compare/v0.9.0...v0.9.1) (2026-09-04)
 
 
