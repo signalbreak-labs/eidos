@@ -141,6 +141,8 @@ func (r *ProjectResource) Read(ctx context.Context, req resource.ReadRequest, re
 		return
 	}
 	if r.readRemote(ctx, &state, resp) {
+		resp.Diagnostics.Append(resp.Identity.SetAttribute(ctx, path.Root("organization"), state.Organization)...)
+		resp.Diagnostics.Append(resp.Identity.SetAttribute(ctx, path.Root("project"), state.Project)...)
 		resp.State.RemoveResource(ctx)
 		return
 	}

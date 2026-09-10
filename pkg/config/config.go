@@ -263,6 +263,16 @@ type ResourceOverride struct {
 	// paths whose placeholder does not name-match any attribute and whose
 	// value is not the resource id (e.g. a read keyed by a create-body field).
 	PathParams map[string]map[string]string `yaml:"path_params,omitempty" json:"path_params,omitempty"`
+	// PathParamTransforms rewrites an attribute value before it is substituted
+	// into a request path, keyed by placeholder (e.g. "portId"). Some APIs
+	// document path segments in a different form than body values — GigaVUE-FM
+	// identifies ports as "1/1/c4" in bodies but requires the path segment to
+	// replace "/" with "_": "1_1_c4". The only supported transform is
+	// "slash_to_underscore", which replaces every "/" in the value with "_"
+	// before URL escaping. A transform applies to every CRUD operation of the
+	// resource whose path contains the placeholder; placeholders that appear in
+	// no operation path are surfaced with a Warning at transform time.
+	PathParamTransforms map[string]string `yaml:"path_param_transforms,omitempty" json:"path_param_transforms,omitempty"`
 	// ReadCollectionPath names a dot-separated path into the read response
 	// (after the envelope unwrap) that locates the collection array(s) for a
 	// child resource whose read is a parent GET (e.g. a port filter rule read
@@ -901,6 +911,16 @@ func Validate(cfg *Config) error {
 				if strings.TrimSpace(attr) == "" {
 					errs = append(errs, fmt.Errorf("resource_overrides[%d].path_params.%s.%s: attribute name is required", i, op, placeholder))
 				}
+			}
+		}
+		for placeholder, transform := range ro.PathParamTransforms {
+			if strings.TrimSpace(placeholder) == "" {
+				errs = append(errs, fmt.Errorf("resource_overrides[%d].path_param_transforms: placeholder name is required", i))
+			}
+			switch transform {
+			case "slash_to_underscore":
+			default:
+				errs = append(errs, fmt.Errorf("resource_overrides[%d].path_param_transforms.%s: unknown transform %q (want slash_to_underscore)", i, placeholder, transform))
 			}
 		}
 		if err := validateStateUpgrades(ro.SchemaVersion, ro.StateUpgrades, i); err != nil {

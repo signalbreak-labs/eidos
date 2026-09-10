@@ -831,6 +831,66 @@ func TestWiredReadBody_IdentitySet(t *testing.T) {
 	}
 }
 
+// TestWiredReadBody_IdentitySetOnRemovedPath asserts the removed (404) branch
+// of a wired Read populates the identity before removing state. The framework
+// rejects a fully-null identity after a no-error Read of an identity-carrying
+// resource with no removed-state exemption, which would turn an import of a
+// non-existent object into "Missing Resource Identity After Read" instead of
+// Terraform core's "Cannot import non-existent remote object".
+func TestWiredReadBody_IdentitySetOnRemovedPath(t *testing.T) {
+	r := identityResourceIR()
+
+	file := ResourceFile(r, testClientImport)
+	var buf bytes.Buffer
+	if err := file.Render(&buf); err != nil {
+		t.Fatalf("Render() error = %v", err)
+	}
+	got := buf.String()
+
+	readRemote := strings.Index(got, "if r.readRemote(")
+	identitySet := strings.Index(got, `resp.Identity.SetAttribute(ctx, path.Root("ship_symbol"), state.Symbol)`)
+	remove := strings.Index(got, "resp.State.RemoveResource(ctx)")
+	if readRemote < 0 || identitySet < 0 || remove < 0 {
+		t.Fatalf("generated read body missing removed-path statements\n--- body ---\n%s", got)
+	}
+	if readRemote >= identitySet || identitySet >= remove {
+		t.Errorf("removed branch must set identity between readRemote and RemoveResource; got readRemote=%d identitySet=%d remove=%d\n--- body ---\n%s",
+			readRemote, identitySet, remove, got)
+	}
+}
+
+// TestWiredBody_PathParamTransform_Render asserts a placeholder carrying a
+// path_param_transforms override rewrites the attribute value before URL-path
+// escaping — innermost, so the escape encodes the rewritten form. GigaVUE-FM is
+// the motivating API: bodies carry ports as "1/1/c4" while its documented path
+// segments replace "/" with "_" ("1_1_c4").
+func TestWiredBody_PathParamTransform_Render(t *testing.T) {
+	r := sampleResourceIR()
+	r.PathParamTransforms = map[string]string{"id": "slash_to_underscore"}
+
+	file := ResourceFile(r, testClientImport)
+	var buf bytes.Buffer
+	if err := file.Render(&buf); err != nil {
+		t.Fatalf("Render() error = %v", err)
+	}
+	got := buf.String()
+
+	if !strings.Contains(got, `url.PathEscape(strings.ReplaceAll(state.Id.ValueString(), "/", "_"))`) {
+		t.Errorf("generated body missing transform-wrapped path substitution\n--- body ---\n%s", got)
+	}
+	// A static literal substitution must not be wrapped; and a resource without
+	// transforms keeps the bare escape.
+	r2 := sampleResourceIR()
+	file2 := ResourceFile(r2, testClientImport)
+	var buf2 bytes.Buffer
+	if err := file2.Render(&buf2); err != nil {
+		t.Fatalf("Render() error = %v", err)
+	}
+	if !strings.Contains(buf2.String(), `url.PathEscape(state.Id.ValueString())`) {
+		t.Errorf("untransformed body must keep the bare PathEscape substitution\n--- body ---\n%s", buf2.String())
+	}
+}
+
 // TestWiredBody_NoIdentityOmitsIdentitySet asserts a resource without an
 // identity schema (the common inferred-resource case) never emits identity
 // SetAttribute statements, so non-paired resources are unaffected.

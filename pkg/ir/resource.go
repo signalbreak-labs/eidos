@@ -61,6 +61,14 @@ type ResourceIR struct {
 	// placeholder does not name-match any attribute and whose value is not the
 	// resource id.
 	PathParamOverrides map[string]map[string]string `json:"path_param_overrides,omitempty"`
+	// PathParamTransforms maps a path placeholder to a named value rewrite the
+	// generator applies before substituting the attribute into a request path
+	// (config ResourceOverride.PathParamTransforms). The motivating API is
+	// GigaVUE-FM, whose bodies carry ports in slash form ("1/1/c4") while its
+	// documented path segments replace "/" with "_" ("1_1_c4"); "slash_to_underscore"
+	// is the only transform. A transform applies to every CRUD operation of the
+	// resource whose path contains the placeholder.
+	PathParamTransforms map[string]string `json:"path_param_transforms,omitempty"`
 	// ExcludedAttributes lists attributes the override asked to remove from the
 	// schema (config ResourceOverride.ExcludeAttributes). Carried so the config
 	// generator can re-emit the override on round-trip; the attributes

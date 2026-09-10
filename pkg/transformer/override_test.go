@@ -3071,3 +3071,91 @@ func TestApplyOverrides_PathParamsValidation(t *testing.T) {
 		t.Errorf("expected 3 warnings, got %d: %v", warnings, *diags)
 	}
 }
+
+func TestApplyOverrides_PathParamTransforms(t *testing.T) {
+	provider := &ir.ProviderIR{
+		Resources: []ir.ResourceIR{{
+			Name:            "port_filter",
+			TypeName:        "port_filter",
+			SourceOperation: "createPortFilter",
+			Schema: ir.ObjectSchemaIR{Attributes: []ir.AttributeIR{
+				{Name: "port", Optional: true, Schema: ir.SchemaIR{Type: ir.TypeString}},
+			}},
+			CRUDMapping: ir.CRUDMappingIR{
+				Create: ir.OperationMappingIR{Method: "POST", PathTemplate: "/portConfig/portFilters"},
+				Read:   ir.OperationMappingIR{Method: "GET", PathTemplate: "/portConfig/portFilters/{portId}"},
+				Delete: ir.OperationMappingIR{Method: "DELETE", PathTemplate: "/portConfig/portFilters/{portId}"},
+			},
+		}},
+	}
+	cfg := &config.Config{
+		Provider: config.ProviderConfig{Name: "test", Version: "0.0.1"},
+		ResourceOverrides: []config.ResourceOverride{{
+			Operation: "createPortFilter",
+			PathParamTransforms: map[string]string{
+				// Braced and bare keys are equivalent.
+				"{portId}": "slash_to_underscore",
+			},
+		}},
+	}
+
+	diags := &diagnostics.Diagnostics{}
+	if err := ApplyOverridesWithDiagnostics(provider, cfg, diags); err != nil {
+		t.Fatalf("ApplyOverridesWithDiagnostics() error = %v", err)
+	}
+
+	r := provider.Resources[0]
+	if got := r.PathParamTransforms["portId"]; got != "slash_to_underscore" {
+		t.Errorf("PathParamTransforms[portId] = %q, want %q", got, "slash_to_underscore")
+	}
+	if diags.HasErrors() {
+		t.Errorf("expected no errors, got %v", *diags)
+	}
+}
+
+func TestApplyOverrides_PathParamTransformsValidation(t *testing.T) {
+	provider := &ir.ProviderIR{
+		Resources: []ir.ResourceIR{{
+			Name:            "port_filter",
+			TypeName:        "port_filter",
+			SourceOperation: "createPortFilter",
+			Schema: ir.ObjectSchemaIR{Attributes: []ir.AttributeIR{
+				{Name: "port", Optional: true, Schema: ir.SchemaIR{Type: ir.TypeString}},
+			}},
+			CRUDMapping: ir.CRUDMappingIR{
+				Read: ir.OperationMappingIR{Method: "GET", PathTemplate: "/portConfig/portFilters/{portId}"},
+			},
+		}},
+	}
+	cfg := &config.Config{
+		Provider: config.ProviderConfig{Name: "test", Version: "0.0.1"},
+		ResourceOverrides: []config.ResourceOverride{{
+			Operation: "createPortFilter",
+			PathParamTransforms: map[string]string{
+				// Unknown transform name.
+				"portId": "underscore_slash",
+				// Placeholder in no CRUD path template.
+				"otherId": "slash_to_underscore",
+			},
+		}},
+	}
+
+	diags := &diagnostics.Diagnostics{}
+	if err := ApplyOverridesWithDiagnostics(provider, cfg, diags); err != nil {
+		t.Fatalf("ApplyOverridesWithDiagnostics() error = %v", err)
+	}
+
+	r := provider.Resources[0]
+	if len(r.PathParamTransforms) != 0 {
+		t.Errorf("PathParamTransforms = %v, want empty (every entry failed validation)", r.PathParamTransforms)
+	}
+	warnings := 0
+	for _, d := range *diags {
+		if d.Severity == diagnostics.Warning {
+			warnings++
+		}
+	}
+	if warnings != 2 {
+		t.Errorf("expected 2 warnings, got %d: %v", warnings, *diags)
+	}
+}

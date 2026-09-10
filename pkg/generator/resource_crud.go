@@ -38,6 +38,12 @@ type pathSubstitution struct {
 	// derived and deterministic, so wiring the operation with it is strictly
 	// better than leaving it an honest scaffold.
 	literal string
+	// transform, when non-empty, names a rewrite applied to the attribute value
+	// before URL-path escaping (config PathParamTransforms, e.g.
+	// "slash_to_underscore" for GigaVUE-FM port IDs, whose body form "1/1/c4"
+	// must become the underscore path form "1_1_c4"). Only attribute-sourced
+	// substitutions carry a transform; static literals are emitted verbatim.
+	transform string
 }
 
 // bodyKind identifies the request body encoding a wired operation emits.
@@ -430,6 +436,12 @@ func planOperation(r ir.ResourceIR, op ir.OperationMappingIR, pathOverrides map[
 		sub, ok := resolvePathSubstitution(r, placeholder, multiPlaceholder, op.PathParams, pathOverrides)
 		if !ok {
 			return crudOperationPlan{}, false
+		}
+		// The override's transform describes the substituted value, not one
+		// operation, so it applies wherever the placeholder appears. A static
+		// literal substitution is spec-derived and needs no rewrite.
+		if sub.field != "" {
+			sub.transform = r.PathParamTransforms[sub.placeholder]
 		}
 		planned.subs = append(planned.subs, sub)
 	}
@@ -1020,7 +1032,11 @@ func clientGuardStmt(receiver string) ast.Stmt {
 // substituting each {placeholder} with the URL-path-escaped value of the planned
 // model field. PathEscape ensures a value containing reserved characters
 // (e.g. a name with a space or "/") is encoded as a single path segment rather
-// than producing a malformed URL or spurious extra segments.
+// than producing a malformed URL or spurious extra segments. A placeholder with
+// a transform rewrites the attribute value before escaping — innermost, so the
+// rewrite applies to the raw value ("1/1/c4" → "1_1_c4") and the escape then
+// encodes the rewritten form rather than percent-encoding the characters the
+// transform was about to remove.
 func requestPathStmts(op crudOperationPlan, modelVar string) []ast.Stmt {
 	stmts := make([]ast.Stmt, 0, 1+len(op.subs))
 	stmts = append(stmts, astgen.AssignSingle(astgen.Ident("reqPath"), astgen.Lit(op.template)))
@@ -1031,12 +1047,28 @@ func requestPathStmts(op crudOperationPlan, modelVar string) []ast.Stmt {
 				astgen.QualExpr("strings", "ReplaceAll"),
 				astgen.Ident("reqPath"),
 				astgen.Lit("{"+sub.placeholder+"}"),
-				astgen.Call(astgen.QualExpr("url", "PathEscape"), pathValueExpr(modelVar, sub)),
+				astgen.Call(astgen.QualExpr("url", "PathEscape"), pathTransformExpr(pathValueExpr(modelVar, sub), sub.transform)),
 			)},
 			token.ASSIGN,
 		))
 	}
 	return stmts
+}
+
+// pathTransformExpr wraps a path-substitution value expression with the named
+// transform, or returns it unchanged when no transform is configured.
+func pathTransformExpr(value ast.Expr, transform string) ast.Expr {
+	switch transform {
+	case "slash_to_underscore":
+		return astgen.Call(
+			astgen.QualExpr("strings", "ReplaceAll"),
+			value,
+			astgen.Lit("/"),
+			astgen.Lit("_"),
+		)
+	default:
+		return value
+	}
 }
 
 // requestQueryStmts emits the statements that encode the operation's query
@@ -2547,12 +2579,12 @@ func createIDFallbackStmts(r ir.ResourceIR, modelVar, summary string) []ast.Stmt
 // wiredReadBody returns the framework Read body: it reads the state, delegates
 // the HTTP exchange to readRemote (which reports whether the remote resource is
 // gone so the framework can drop it from state), and on success renews the
-// identity and stores state.
+// identity and stores state. The removed path renews the identity too before
+// removing state, so the framework never sees a no-error Read that leaves an
+// identity-carrying resource's identity fully null.
 func wiredReadBody(r ir.ResourceIR, modelName string) []ast.Stmt {
 	summary := fmt.Sprintf("Error reading %s", resourceTypeName(r))
 	stmts := make([]ast.Stmt, 0, 12)
-	// readRemote returns removed=true when the API reports 404, so the framework
-	// removes the resource from state rather than treating "gone" as an error.
 	stmts = append(stmts,
 		astgen.VarDecl("state", modelName, nil),
 		astgen.ExprStmt(astgen.Call(
@@ -2572,6 +2604,15 @@ func wiredReadBody(r ir.ResourceIR, modelName string) []ast.Stmt {
 	if r.Timeouts != nil && r.Timeouts.Read != nil {
 		stmts = append(stmts, resourceTimeoutWiringStmts("state", "Read", *r.Timeouts.Read)...)
 	}
+	// A 404 means the remote resource is gone, so the framework removes it from
+	// state rather than treating "gone" as an error. The identity must still be
+	// populated before returning: the framework rejects a fully-null identity
+	// after a no-error Read of an identity-carrying resource ("Missing Resource
+	// Identity After Read") with no removed-state exemption, which would turn a
+	// routine "object was deleted out-of-band" refresh — and, worse, an import
+	// of a non-existent object, which should surface as Terraform core's
+	// "Cannot import non-existent remote object" — into an opaque provider bug
+	// report. identitySetStmts is a no-op for resources without identity.
 	stmts = append(stmts,
 		astgen.If(
 			astgen.Call(
@@ -2580,13 +2621,13 @@ func wiredReadBody(r ir.ResourceIR, modelName string) []ast.Stmt {
 				astgen.UnaryPtr(astgen.Ident("state")),
 				astgen.Ident("resp"),
 			),
-			astgen.Block(
+			astgen.Block(append(identitySetStmts(r, summary, "state"),
 				astgen.ExprStmt(astgen.Call(
 					astgen.Selector(astgen.Selector(astgen.Ident("resp"), "State"), "RemoveResource"),
 					astgen.Ident("ctx"),
 				)),
 				astgen.Return(),
-			),
+			)...),
 		),
 		astgen.If(
 			astgen.Call(astgen.Selector(astgen.Selector(astgen.Ident("resp"), "Diagnostics"), "HasError")),

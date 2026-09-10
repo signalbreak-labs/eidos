@@ -136,6 +136,7 @@ func applyResourceOverrides(provider *ir.ProviderIR, overrides []config.Resource
 			applyResourceStateUpgradeOverride(r, override)
 			applyResourceDescriptionOverride(r, override)
 			applyResourcePathParamOverride(r, override, diags)
+			applyResourcePathParamTransforms(r, override, diags)
 			applyResourceReadCollectionPath(r, override, diags)
 			if err := applyResourceAttributeOverrides(r, override, diags); err != nil {
 				return err
@@ -425,6 +426,65 @@ func applyResourcePathParamOverride(r *ir.ResourceIR, override config.ResourceOv
 	if len(out) > 0 {
 		r.PathParamOverrides = out
 	}
+}
+
+// applyResourcePathParamTransforms records the override's path_param_transforms
+// mapping on the resource and validates it fail-loud: each transform name must
+// be known, and each placeholder must appear in at least one of the resource's
+// CRUD path templates. An entry that fails validation is dropped (never applied)
+// and surfaced with a Warning, never silent. Placeholder keys tolerate
+// surrounding braces ("{portId}" and "portId" are equivalent). Transforms are
+// per-placeholder rather than per-operation because they describe a property of
+// the substituted value, not of one request: a GigaVUE-FM port is written
+// underscore-form in every path it names.
+func applyResourcePathParamTransforms(r *ir.ResourceIR, override config.ResourceOverride, diags *diagnostics.Diagnostics) {
+	if len(override.PathParamTransforms) == 0 {
+		return
+	}
+	templates := map[string]bool{
+		strings.TrimSpace(r.CRUDMapping.Create.PathTemplate): true,
+		strings.TrimSpace(r.CRUDMapping.Read.PathTemplate):   true,
+		strings.TrimSpace(r.CRUDMapping.Delete.PathTemplate): true,
+	}
+	if r.CRUDMapping.Update != nil {
+		templates[strings.TrimSpace(r.CRUDMapping.Update.PathTemplate)] = true
+	}
+	out := make(map[string]string, len(override.PathParamTransforms))
+	for placeholder, transform := range override.PathParamTransforms {
+		ph := strings.Trim(strings.TrimSpace(placeholder), "{}")
+		if transform != "slash_to_underscore" {
+			warnPathParamTransform(r, placeholder, fmt.Sprintf("unknown transform %q (want slash_to_underscore)", transform), diags)
+			continue
+		}
+		found := false
+		for template := range templates {
+			if template != "" && strings.Contains(template, "{"+ph+"}") {
+				found = true
+				break
+			}
+		}
+		if !found {
+			warnPathParamTransform(r, placeholder, fmt.Sprintf("placeholder %q appears in no CRUD path template of this resource", ph), diags)
+			continue
+		}
+		out[ph] = transform
+	}
+	if len(out) > 0 {
+		r.PathParamTransforms = out
+	}
+}
+
+// warnPathParamTransform emits a fail-loud Warning for a path_param_transforms
+// entry that cannot be applied.
+func warnPathParamTransform(r *ir.ResourceIR, placeholder, detail string, diags *diagnostics.Diagnostics) {
+	if diags == nil {
+		return
+	}
+	*diags = diags.Append(diagnostics.Diagnostic{
+		Severity: diagnostics.Warning,
+		Summary:  "path_param_transforms override cannot be applied",
+		Detail:   fmt.Sprintf("Resource %q: path_param_transforms %q: %s", r.Name, placeholder, detail),
+	})
 }
 
 // warnPathParamOverride emits a fail-loud Warning for a path_params mapping
