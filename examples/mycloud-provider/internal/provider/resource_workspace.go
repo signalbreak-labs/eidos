@@ -145,6 +145,7 @@ func (r *WorkspaceResource) Read(ctx context.Context, req resource.ReadRequest, 
 		return
 	}
 	if r.readRemote(ctx, &state, resp) {
+		resp.Diagnostics.Append(resp.Identity.SetAttribute(ctx, path.Root("name"), state.Name)...)
 		resp.State.RemoveResource(ctx)
 		return
 	}
