@@ -473,6 +473,26 @@ func TestValidate_InvalidNamingTransform(t *testing.T) {
 	}
 }
 
+func TestValidate_UnknownPathParamTransform(t *testing.T) {
+	cfg := Config{
+		Provider: ProviderConfig{Name: "test", Version: "1.0.0"},
+		ResourceOverrides: []ResourceOverride{{
+			Operation: "createThing",
+			// The only supported transform is slash_to_underscore; anything
+			// else must fail loud rather than silently pass through.
+			PathParamTransforms: map[string]string{"thingId": "underscore_slash"},
+		}},
+	}
+	if err := Validate(&cfg); err == nil {
+		t.Fatal("expected validation error for unknown path_param_transforms transform")
+	}
+
+	cfg.ResourceOverrides[0].PathParamTransforms = map[string]string{"{thingId}": "slash_to_underscore"}
+	if err := Validate(&cfg); err != nil {
+		t.Fatalf("expected slash_to_underscore to validate, got %v", err)
+	}
+}
+
 func TestValidate_UnimplementedNamingTransformRejected(t *testing.T) {
 	// N-46: camelCase/PascalCase were validated and documented but never
 	// implemented (applyNamingOverrides treats transform as a no-op). They must

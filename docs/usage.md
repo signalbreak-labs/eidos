@@ -451,6 +451,12 @@ resource_overrides:
     path_params:
       read:
         entlItemId: eli_id
+    # Rewrite an attribute value before it is substituted into a request path
+    # (applies to every CRUD operation whose path contains the placeholder).
+    # Supported transform: slash_to_underscore — for APIs whose path segments
+    # document "/" as "_", e.g. GigaVUE-FM port "1/1/c4" → path "1_1_c4".
+    path_param_transforms:
+      portId: slash_to_underscore
     read_collection_path: "rules.*"
     write_only_attributes:
       - name: password
@@ -497,6 +503,7 @@ resource_overrides:
 | `delete_operation` | string | OpenAPI operationId for Delete. |
 | `include_create_response_attributes` | []string | Create-response-only properties to include as `Computed` attributes (e.g. an activation id returned by POST but absent from the read). Each name must be a create response property; a missing property is surfaced fail-loud. |
 | `path_params` | map | Per-CRUD-operation mapping of path placeholders to the schema attributes that supply their values (`read: { entlItemId: eli_id }`), overriding name-match and id-attribute fallbacks. |
+| `path_param_transforms` | map | Placeholder → named rewrite applied to an attribute value before it is substituted into a request path, across every CRUD operation whose path contains the placeholder. Supported transform: `slash_to_underscore` (`"1/1/c4"` → `"1_1_c4"`) — for APIs, such as GigaVUE-FM, whose documented path segments replace `/` with `_` while bodies keep the slash form. Unknown transform names or placeholders that appear in no CRUD path are surfaced fail-loud. |
 | `read_collection_path` | string | Dot-separated path into the read response (after envelope unwrap) locating the nested collection for a child resource whose read is a parent GET. A trailing `*` segment searches every array value at that level. Pairs with `generate_resource: true`; on an inferred resource it changes only the read selection (the state keeps the read-response shape) and emits a `Warning`. A malformed path (empty segment, wildcard mid-path) is dropped fail-loud. Child resources get no generated import step. |
 | `schema_version` | int | Schema version for state upgrades. |
 | `state_upgrades` | []StateUpgradeConfig | State migrations. |

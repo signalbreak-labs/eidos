@@ -242,7 +242,11 @@ func convertResources(provider ir.ProviderIR) []config.ResourceOverride {
 			// the recorded names for every resource that carries them (inferred or
 			// override-created) so a normalized generator.yaml round-trips.
 			ExcludeAttributes: r.ExcludedAttributes,
-			Description:       r.Description,
+			// Path-param transforms are a property of the substituted value and
+			// apply to inferred resources too, so re-emit them for every resource
+			// that carries them.
+			PathParamTransforms: r.PathParamTransforms,
+			Description:         r.Description,
 		}
 		// Emit exactly one match key. Operation is the authoritative key (it
 		// takes precedence when both are set), so emitting Schema alongside it

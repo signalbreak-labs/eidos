@@ -859,6 +859,38 @@ func TestWiredReadBody_IdentitySetOnRemovedPath(t *testing.T) {
 	}
 }
 
+// TestWiredBody_PathParamTransform_Render asserts a placeholder carrying a
+// path_param_transforms override rewrites the attribute value before URL-path
+// escaping — innermost, so the escape encodes the rewritten form. GigaVUE-FM is
+// the motivating API: bodies carry ports as "1/1/c4" while its documented path
+// segments replace "/" with "_" ("1_1_c4").
+func TestWiredBody_PathParamTransform_Render(t *testing.T) {
+	r := sampleResourceIR()
+	r.PathParamTransforms = map[string]string{"id": "slash_to_underscore"}
+
+	file := ResourceFile(r, testClientImport)
+	var buf bytes.Buffer
+	if err := file.Render(&buf); err != nil {
+		t.Fatalf("Render() error = %v", err)
+	}
+	got := buf.String()
+
+	if !strings.Contains(got, `url.PathEscape(strings.ReplaceAll(state.Id.ValueString(), "/", "_"))`) {
+		t.Errorf("generated body missing transform-wrapped path substitution\n--- body ---\n%s", got)
+	}
+	// A static literal substitution must not be wrapped; and a resource without
+	// transforms keeps the bare escape.
+	r2 := sampleResourceIR()
+	file2 := ResourceFile(r2, testClientImport)
+	var buf2 bytes.Buffer
+	if err := file2.Render(&buf2); err != nil {
+		t.Fatalf("Render() error = %v", err)
+	}
+	if !strings.Contains(buf2.String(), `url.PathEscape(state.Id.ValueString())`) {
+		t.Errorf("untransformed body must keep the bare PathEscape substitution\n--- body ---\n%s", buf2.String())
+	}
+}
+
 // TestWiredBody_NoIdentityOmitsIdentitySet asserts a resource without an
 // identity schema (the common inferred-resource case) never emits identity
 // SetAttribute statements, so non-paired resources are unaffected.
