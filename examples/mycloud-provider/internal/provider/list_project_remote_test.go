@@ -21,6 +21,15 @@ func TestProjectListResource_List_NilClient(t *testing.T) {
 	hasErrorContaining(t, diags, "Client Not Configured")
 }
 
+// TestProjectListResource_List_APIError exercises ProjectListResource.listRemote against an httptest mock: non-success status surfaces Could not read list response carrying the API error status and body.
+func TestProjectListResource_List_APIError(t *testing.T) {
+	r := &ProjectListResource{client: newMockClientStatus(t, 500, "{\"message\":\"boom\"}")}
+	m := ProjectListResourceModel{}
+	_, diags := r.listRemote(context.Background(), &m)
+	hasErrorContaining(t, diags, "Could not read list response")
+	hasErrorContaining(t, diags, "{\"message\":\"boom\"}")
+}
+
 // TestProjectListResource_List_BuildError exercises ProjectListResource.listRemote against an httptest mock: malformed base URL surfaces Could not read list response.
 func TestProjectListResource_List_BuildError(t *testing.T) {
 	r := &ProjectListResource{client: newMalformedBaseURLClient(t)}

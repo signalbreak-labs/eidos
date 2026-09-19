@@ -624,6 +624,54 @@ func TestListAllPages_BodyReadError(t *testing.T) {
 	}
 }
 
+// TestListAllPages_NonSuccessStatus verifies that a non-2xx response is never
+// appended as a page: it is returned as an *APIError carrying the status code
+// and the server's error body, so callers surface the API's error payload
+// instead of failing to decode the error body as a list page.
+func TestListAllPages_NonSuccessStatus(t *testing.T) {
+	fetch := func(context.Context, url.Values) (*http.Response, error) {
+		return &http.Response{StatusCode: 400, Body: io.NopCloser(bytes.NewReader([]byte("{\"errors\":[{\"code\":\"0x800f0012\"}]}")))}, nil
+	}
+	pages, err := ListAllPages(context.Background(), nil, fetch, nil)
+	if err == nil {
+		t.Fatal("expected API error, got nil")
+	}
+	if pages != nil {
+		t.Fatalf("pages = %v, want nil", pages)
+	}
+	var apiErr *APIError
+	if !errors.As(err, &apiErr) {
+		t.Fatalf("error is %T, want *APIError", err)
+	}
+	if apiErr.StatusCode != 400 {
+		t.Fatalf("status = %d, want 400", apiErr.StatusCode)
+	}
+	if !bytes.Contains(apiErr.Body, []byte("\"code\":\"0x800f0012\"")) {
+		t.Fatalf("body = %q, want the server error payload", apiErr.Body)
+	}
+}
+
+// TestListAllPages_NonSuccessStatusNotPaged verifies that a non-2xx response
+// stops pagination: the next callback must not be consulted for further pages
+// once an error response arrives.
+func TestListAllPages_NonSuccessStatusNotPaged(t *testing.T) {
+	fetches := 0
+	fetch := func(context.Context, url.Values) (*http.Response, error) {
+		fetches++
+		return &http.Response{StatusCode: 404, Body: io.NopCloser(bytes.NewReader([]byte("{\"message\":\"missing\"}")))}, nil
+	}
+	next := func(*http.Response, []byte, url.Values) bool {
+		t.Fatal("next must not be consulted after an error response")
+		return false
+	}
+	if _, err := ListAllPages(context.Background(), nil, fetch, next); err == nil {
+		t.Fatal("expected API error, got nil")
+	}
+	if fetches != 1 {
+		t.Fatalf("fetch calls = %d, want 1", fetches)
+	}
+}
+
 // TestListAllPages_LoopBackDetection verifies that a next callback which returns
 // true without advancing the pagination parameters (a server echoing the same
 // cursor) stops the loop instead of issuing an identical request forever (M-9).

@@ -823,9 +823,10 @@ func generateDataSourceCoverageTestFile(ds ir.DataSourceIR, _ string) (*ast.File
 
 // buildDataSourceCoverageCases assembles the happy + unhappy taxonomy for a
 // wired data source. A single-object data source exercises readRemote (404 is
-// an error, not a removal); a list data source exercises readListRemote (no
-// status handling — non-2xx/empty bodies surface as decode errors). The
-// taxonomy maps 1:1 to the reachable AddError branches in the generated helper.
+// an error, not a removal); a list data source exercises readListRemote
+// (non-2xx responses surface as Could not read list response errors carrying
+// the API error body; empty or non-array 2xx bodies surface as decode errors).
+// The taxonomy maps 1:1 to the reachable AddError branches in the generated helper.
 func buildDataSourceCoverageCases(ds ir.DataSourceIR, plan dataSourceWiringPlan) []coverageCase {
 	summary := fmt.Sprintf("Error reading %s", dataSourceTypeName(ds))
 	if plan.list {
@@ -848,6 +849,11 @@ func buildDataSourceCoverageCases(ds ir.DataSourceIR, plan dataSourceWiringPlan)
 				intent:  "nil client surfaces the Client Not Configured diagnostic",
 				client:  nil,
 				asserts: []ast.Stmt{hasErrorContainingStmt("Client Not Configured")},
+			},
+			{suffix: "Read_APIError", method: "readListRemote", resp: "ReadResponse",
+				intent:  "non-success status surfaces Could not read list response carrying the API error status and body",
+				client:  astgen.Call(astgen.Ident("newMockClientStatus"), astgen.Ident("t"), astgen.IntLit(coverageErrorStatus(plan.read)), astgen.Lit(`{"message":"boom"}`)),
+				asserts: []ast.Stmt{hasErrorContainingStmt("Could not read list response"), hasErrorContainingStmt(`{"message":"boom"}`)},
 			},
 			{suffix: "Read_BuildError", method: "readListRemote", resp: "ReadResponse",
 				intent:  "malformed base URL surfaces Could not read list response",
@@ -1172,10 +1178,10 @@ func generateListCoverageTestFile(lr ir.ListResourceIR, _ string) (*ast.File, er
 // buildListCoverageCases assembles the happy + unhappy taxonomy for a wired
 // list resource's listRemote helper. The taxonomy mirrors the list data source
 // readListRemote: ListAllPages surfaces both request-build and transport
-// failures as "Could not read list response" (the fetch closure's NewRequest/Do
-// errors propagate through ListAllPages), and a malformed page surfaces "Could
-// not decode list page". The taxonomy maps 1:1 to the reachable AddError
-// branches in listRemote.
+// failures and non-2xx responses (as *APIError) as "Could not read list
+// response" (the fetch closure's NewRequest/Do errors propagate through
+// ListAllPages), and a malformed page surfaces "Could not decode list page".
+// The taxonomy maps 1:1 to the reachable AddError branches in listRemote.
 func buildListCoverageCases(plan listResourceWiringPlan) []coverageCase {
 	// A list resource decodes each page into a bare []json.RawMessage when the
 	// response is a top-level array, or into a map[string]json.RawMessage and
@@ -1196,6 +1202,11 @@ func buildListCoverageCases(plan listResourceWiringPlan) []coverageCase {
 			intent:  "nil client surfaces the Client Not Configured diagnostic",
 			client:  nil,
 			asserts: []ast.Stmt{hasErrorContainingDiagsStmt("Client Not Configured")},
+		},
+		{suffix: "List_APIError", method: "listRemote", resp: "",
+			intent:  "non-success status surfaces Could not read list response carrying the API error status and body",
+			client:  astgen.Call(astgen.Ident("newMockClientStatus"), astgen.Ident("t"), astgen.IntLit(coverageErrorStatus(plan.read)), astgen.Lit(`{"message":"boom"}`)),
+			asserts: []ast.Stmt{hasErrorContainingDiagsStmt("Could not read list response"), hasErrorContainingDiagsStmt(`{"message":"boom"}`)},
 		},
 		{suffix: "List_BuildError", method: "listRemote", resp: "",
 			intent:  "malformed base URL surfaces Could not read list response",
