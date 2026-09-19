@@ -24,6 +24,16 @@ func TestListTasksDataSource_Read_NilClient(t *testing.T) {
 	hasErrorContaining(t, resp.Diagnostics, "Client Not Configured")
 }
 
+// TestListTasksDataSource_Read_APIError exercises ListTasksDataSource.readListRemote against an httptest mock: non-success status surfaces Could not read list response carrying the API error status and body.
+func TestListTasksDataSource_Read_APIError(t *testing.T) {
+	r := &ListTasksDataSource{client: newMockClientStatus(t, 500, "{\"message\":\"boom\"}")}
+	m := ListTasksDataSourceModel{}
+	resp := &datasource.ReadResponse{}
+	r.readListRemote(context.Background(), &m, resp)
+	hasErrorContaining(t, resp.Diagnostics, "Could not read list response")
+	hasErrorContaining(t, resp.Diagnostics, "{\"message\":\"boom\"}")
+}
+
 // TestListTasksDataSource_Read_BuildError exercises ListTasksDataSource.readListRemote against an httptest mock: malformed base URL surfaces Could not read list response.
 func TestListTasksDataSource_Read_BuildError(t *testing.T) {
 	r := &ListTasksDataSource{client: newMalformedBaseURLClient(t)}

@@ -24,6 +24,16 @@ func TestListWorkspacesDataSource_Read_NilClient(t *testing.T) {
 	hasErrorContaining(t, resp.Diagnostics, "Client Not Configured")
 }
 
+// TestListWorkspacesDataSource_Read_APIError exercises ListWorkspacesDataSource.readListRemote against an httptest mock: non-success status surfaces Could not read list response carrying the API error status and body.
+func TestListWorkspacesDataSource_Read_APIError(t *testing.T) {
+	r := &ListWorkspacesDataSource{client: newMockClientStatus(t, 500, "{\"message\":\"boom\"}")}
+	m := ListWorkspacesDataSourceModel{}
+	resp := &datasource.ReadResponse{}
+	r.readListRemote(context.Background(), &m, resp)
+	hasErrorContaining(t, resp.Diagnostics, "Could not read list response")
+	hasErrorContaining(t, resp.Diagnostics, "{\"message\":\"boom\"}")
+}
+
 // TestListWorkspacesDataSource_Read_BuildError exercises ListWorkspacesDataSource.readListRemote against an httptest mock: malformed base URL surfaces Could not read list response.
 func TestListWorkspacesDataSource_Read_BuildError(t *testing.T) {
 	r := &ListWorkspacesDataSource{client: newMalformedBaseURLClient(t)}

@@ -1373,22 +1373,16 @@ func successCondition(op crudOperationPlan) ast.Expr {
 }
 
 // nonSuccessBlock returns the statements emitted in the non-success branch: a
-// per-status-code switch surfaced from the operation's ErrorMappings (so a 401
-// reports "Unauthorized" rather than a generic client error), with a default
-// arm that falls through to the generic client.NewAPIError path. When no error
-// mappings are declared the switch is omitted and the generic path runs
-// directly. Codes are emitted in ascending order so generation stays
-// deterministic.
+// per-status-code switch surfaced from the operation's ErrorMappings, where
+// each mapped arm reports the spec-authored error description followed by the
+// server's actual response payload (read via client.NewAPIError, so the
+// practitioner sees e.g. the API's structured error codes rather than a bare
+// "Invalid request. See errors payload for details"). The default arm falls
+// through to the generic client.NewAPIError path. When no error mappings are
+// declared the switch is omitted and the generic path runs directly. Codes are
+// emitted in ascending order so generation stays deterministic.
 func nonSuccessBlock(op crudOperationPlan, summary string) []ast.Stmt {
-	generic := []ast.Stmt{
-		astgen.Assign(
-			[]ast.Expr{astgen.Ident("apiErr"), astgen.Ident("err")},
-			[]ast.Expr{astgen.Call(astgen.QualExpr("client", "NewAPIError"), astgen.Ident("httpResp"))},
-		),
-		errCheckStmt(summary, "Could not read error response: %s"),
-		addErrorStmt(summary, astgen.Call(astgen.Selector(astgen.Ident("apiErr"), "Error"))),
-		astgen.Return(),
-	}
+	generic := append(apiErrorDetailStmts(summary, ""), astgen.Return())
 	codes := sortedErrorCodes(op.errorMappings)
 	if len(codes) == 0 {
 		return generic
@@ -1396,10 +1390,10 @@ func nonSuccessBlock(op crudOperationPlan, summary string) []ast.Stmt {
 	clauses := make([]ast.Stmt, 0, len(codes)+1)
 	for _, code := range codes {
 		cc := astgen.CaseClause(astgen.IntLit(code))
-		cc.Body = []ast.Stmt{
-			addErrorStmt(summary, astgen.Lit(op.errorMappings[code])),
+		cc.Body = append(
+			apiErrorDetailStmts(summary, op.errorMappings[code]),
 			astgen.Return(),
-		}
+		)
 		clauses = append(clauses, cc)
 	}
 	defaultClause := &ast.CaseClause{List: nil, Body: generic}
@@ -1408,6 +1402,33 @@ func nonSuccessBlock(op crudOperationPlan, summary string) []ast.Stmt {
 		astgen.Selector(astgen.Ident("httpResp"), "StatusCode"),
 		astgen.Block(clauses...),
 	)}
+}
+
+// apiErrorDetailStmts emits the statements reading an error response body via
+// client.NewAPIError and surfacing it as an AddError diagnostic. A non-empty
+// description (typically the operation's mapped error description, e.g.
+// "Invalid request. See errors payload for details") is prefixed to the
+// rendered body, so the practitioner sees both the spec-authored meaning and
+// the server's actual error payload; an empty description renders the
+// APIError alone. Emitted as a helper because every mapped status-code arm
+// and the unmapped default arm share this shape.
+func apiErrorDetailStmts(summary, description string) []ast.Stmt {
+	detail := ast.Expr(astgen.Call(astgen.Selector(astgen.Ident("apiErr"), "Error")))
+	if description != "" {
+		detail = astgen.Call(
+			astgen.QualExpr("fmt", "Sprintf"),
+			astgen.Lit(description+": %s"),
+			astgen.Call(astgen.Selector(astgen.Ident("apiErr"), "Error")),
+		)
+	}
+	return []ast.Stmt{
+		astgen.Assign(
+			[]ast.Expr{astgen.Ident("apiErr"), astgen.Ident("err")},
+			[]ast.Expr{astgen.Call(astgen.QualExpr("client", "NewAPIError"), astgen.Ident("httpResp"))},
+		),
+		errCheckStmt(summary, "Could not read error response: %s"),
+		addErrorStmt(summary, detail),
+	}
 }
 
 // sortedErrorCodes returns the keys of an error-mappings map in ascending

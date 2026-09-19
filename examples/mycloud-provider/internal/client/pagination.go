@@ -133,9 +133,12 @@ const maxPages = 1000
 
 // ListAllPages repeatedly calls fetch with pagination parameters and collects all page bodies.
 // The next callback is invoked after each page; it may update params and should return false
-// when there are no more pages. The loop is bounded by maxPages and stops early when a next
-// callback returns true without advancing the pagination parameters (loop-back detection), so
-// a server that echoes the same cursor cannot drive an infinite identical-request loop (M-9).
+// when there are no more pages. A non-2xx response is never a page: it is returned as an
+// *APIError carrying the status and (capped) response body, so callers surface the server's
+// error payload instead of failing to decode an error body as a list page. The loop is
+// bounded by maxPages and stops early when a next callback returns true without advancing
+// the pagination parameters (loop-back detection), so a server that echoes the same cursor
+// cannot drive an infinite identical-request loop (M-9).
 func ListAllPages(ctx context.Context, params url.Values, fetch func(context.Context, url.Values) (*http.Response, error), next func(*http.Response, []byte, url.Values) bool) ([][]byte, error) {
 	var pages [][]byte
 	current := cloneValues(params)
@@ -150,6 +153,12 @@ func ListAllPages(ctx context.Context, params url.Values, fetch func(context.Con
 		resp.Body.Close()
 		if err != nil {
 			return nil, err
+		}
+		if resp.StatusCode < 200 || resp.StatusCode > 299 {
+			if len(body) > maxAPIErrorBodyBytes {
+				body = append(body[:maxAPIErrorBodyBytes], []byte("\n... truncated ...")...)
+			}
+			return nil, &APIError{StatusCode: resp.StatusCode, Header: resp.Header.Clone(), Body: body}
 		}
 		pages = append(pages, body)
 		if next == nil || !next(resp, body, current) {

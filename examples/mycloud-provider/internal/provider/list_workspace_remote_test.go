@@ -19,6 +19,14 @@ func TestWorkspaceListResource_List_NilClient(t *testing.T) {
 	hasErrorContaining(t, diags, "Client Not Configured")
 }
 
+// TestWorkspaceListResource_List_APIError exercises WorkspaceListResource.listRemote against an httptest mock: non-success status surfaces Could not read list response carrying the API error status and body.
+func TestWorkspaceListResource_List_APIError(t *testing.T) {
+	r := &WorkspaceListResource{client: newMockClientStatus(t, 500, "{\"message\":\"boom\"}")}
+	_, diags := r.listRemote(context.Background())
+	hasErrorContaining(t, diags, "Could not read list response")
+	hasErrorContaining(t, diags, "{\"message\":\"boom\"}")
+}
+
 // TestWorkspaceListResource_List_BuildError exercises WorkspaceListResource.listRemote against an httptest mock: malformed base URL surfaces Could not read list response.
 func TestWorkspaceListResource_List_BuildError(t *testing.T) {
 	r := &WorkspaceListResource{client: newMalformedBaseURLClient(t)}

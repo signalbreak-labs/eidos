@@ -53,7 +53,7 @@
     {
       "path": "internal/client/client_test.go",
       "reason": "generated HTTP client unit tests",
-      "body_hash": "e8168118061c5566"
+      "body_hash": "372412de17d6c8a1"
     },
     {
       "path": "internal/client/errors.go",
@@ -78,7 +78,7 @@
     {
       "path": "internal/client/pagination.go",
       "reason": "pagination helpers",
-      "body_hash": "7a1a499684b413ec"
+      "body_hash": "6c9d24e71e7e339c"
     },
     {
       "path": "internal/client/retry.go",

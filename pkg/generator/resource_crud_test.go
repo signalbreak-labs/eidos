@@ -59,12 +59,13 @@ func TestWiredBody_MappingDepth_Render(t *testing.T) {
 	for _, want := range []string{
 		// SuccessCodes: the wired body accepts exactly the declared code.
 		`httpResp.StatusCode == 200`,
-		// ErrorMappings surface as a per-code switch with the spec descriptions.
+		// ErrorMappings surface as a per-code switch with the spec descriptions
+		// prefixed to the API error body read via NewAPIError.
 		`switch httpResp.StatusCode {`,
 		`case 401:`,
-		`"Unauthorized"`,
+		`"Unauthorized: %s"`,
 		`case 403:`,
-		`"Forbidden"`,
+		`"Forbidden: %s"`,
 		// The default arm falls through to the generic client error path.
 		`client.NewAPIError(httpResp)`,
 		// Query parameter is encoded onto the request URL from state.
