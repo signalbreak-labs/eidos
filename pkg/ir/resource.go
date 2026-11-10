@@ -74,7 +74,34 @@ type ResourceIR struct {
 	// generator can re-emit the override on round-trip; the attributes
 	// themselves are dropped from Schema at build time.
 	ExcludedAttributes []string `json:"excluded_attributes,omitempty"`
+	// ConditionalDelete controls when the generated Delete sends If-Match
+	// (config ResourceOverride.ConditionalDelete): empty or
+	// ConditionalDeleteWhenRequired sends it only when the spec marks the
+	// DELETE operation's If-Match header required; ConditionalDeleteAlways
+	// also sends it when the header is optional. Optional conditional deletes
+	// are off by default because a stale ETag would make terraform destroy
+	// fail on a resource the practitioner asked to remove.
+	ConditionalDelete string `json:"conditional_delete,omitempty"`
+	// ETagTrackingDisabled turns off ETag tracking for the resource (config
+	// ResourceOverride.ETagTracking: false). The provider then never stores
+	// an ETag; a required If-Match header is sent as "*" and an optional one
+	// is omitted. It is the escape hatch for APIs whose ETags never satisfy
+	// their own If-Match comparison (e.g. weak ETags under strong comparison).
+	ETagTrackingDisabled bool `json:"etag_tracking_disabled,omitempty"`
 }
+
+// Conditional request header presence values for
+// OperationMappingIR.IfMatch / IfNoneMatch.
+const (
+	ConditionalHeaderRequired = "required"
+	ConditionalHeaderOptional = "optional"
+)
+
+// ResourceIR.ConditionalDelete values.
+const (
+	ConditionalDeleteWhenRequired = "when_required"
+	ConditionalDeleteAlways       = "always"
+)
 
 // StateUpgradeIR describes a single migration from a prior schema version to the
 // current resource schema. FromVersion is the stored state version being
@@ -184,6 +211,20 @@ type OperationMappingIR struct {
 	NestedCollectionPath string                 `json:"nested_collection_path,omitempty"`
 	SuccessCodes         []int                  `json:"success_codes,omitempty"`
 	ErrorMappings        map[int]ErrorMappingIR `json:"error_mappings,omitempty"`
+	// IfMatch and IfNoneMatch record whether the operation declares the
+	// If-Match / If-None-Match conditional request headers: one of
+	// ConditionalHeaderRequired, ConditionalHeaderOptional, or empty when the
+	// header is not declared. These headers carry ETags managed by the
+	// generated provider (stored in private state and sent automatically), so
+	// they are kept out of HeaderParams and never become practitioner-facing
+	// schema attributes. Only managed-resource CRUD mappings set them.
+	IfMatch     string `json:"if_match,omitempty"`
+	IfNoneMatch string `json:"if_none_match,omitempty"`
+	// ResponseETag is true when the operation's success response declares an
+	// ETag response header. It is informational: the generated provider reads
+	// the ETag header whenever it tracks ETags, declared or not, because many
+	// specs that accept If-Match never document the ETag response header.
+	ResponseETag bool `json:"response_etag,omitempty"`
 	// SecurityRequirements carries the operation's declared security
 	// requirements (a list of alternatives; each alternative is a map of
 	// security scheme name to scopes). OpenAPI security is OR across

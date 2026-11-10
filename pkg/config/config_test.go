@@ -493,6 +493,41 @@ func TestValidate_UnknownPathParamTransform(t *testing.T) {
 	}
 }
 
+func TestValidate_ConditionalDelete(t *testing.T) {
+	cfg := Config{
+		Provider:          ProviderConfig{Name: "test", Version: "1.0.0"},
+		ResourceOverrides: []ResourceOverride{{Operation: "createThing", ConditionalDelete: "sometimes"}},
+	}
+	if err := Validate(&cfg); err == nil || !strings.Contains(err.Error(), "conditional_delete") {
+		t.Fatalf("expected a conditional_delete validation error, got %v", err)
+	}
+	for _, v := range []string{"", "when_required", "always"} {
+		cfg.ResourceOverrides[0].ConditionalDelete = v
+		if err := Validate(&cfg); err != nil {
+			t.Fatalf("conditional_delete %q: unexpected error %v", v, err)
+		}
+	}
+}
+
+func TestLoadBytes_ConditionalRequestOverrides(t *testing.T) {
+	cfg, err := LoadBytes([]byte(`
+provider:
+  name: test
+  version: 1.0.0
+resource_overrides:
+  - operation: createThing
+    conditional_delete: always
+    etag_tracking: false
+`))
+	if err != nil {
+		t.Fatalf("LoadBytes: %v", err)
+	}
+	ro := cfg.ResourceOverrides[0]
+	if ro.ConditionalDelete != "always" || ro.ETagTracking == nil || *ro.ETagTracking {
+		t.Fatalf("override = %+v; want conditional_delete always and etag_tracking false", ro)
+	}
+}
+
 func TestValidate_UnimplementedNamingTransformRejected(t *testing.T) {
 	// N-46: camelCase/PascalCase were validated and documented but never
 	// implemented (applyNamingOverrides treats transform as a no-op). They must

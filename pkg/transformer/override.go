@@ -137,6 +137,7 @@ func applyResourceOverrides(provider *ir.ProviderIR, overrides []config.Resource
 			applyResourceDescriptionOverride(r, override)
 			applyResourcePathParamOverride(r, override, diags)
 			applyResourcePathParamTransforms(r, override, diags)
+			applyResourceConditionalOverrides(r, override, diags)
 			applyResourceReadCollectionPath(r, override, diags)
 			if err := applyResourceAttributeOverrides(r, override, diags); err != nil {
 				return err
@@ -471,6 +472,53 @@ func applyResourcePathParamTransforms(r *ir.ResourceIR, override config.Resource
 	}
 	if len(out) > 0 {
 		r.PathParamTransforms = out
+	}
+}
+
+// applyResourceConditionalOverrides records the conditional_delete and
+// etag_tracking overrides on the resource. An override that cannot take effect
+// because the spec declares no matching conditional header is surfaced with a
+// Warning instead of being silently ignored.
+func applyResourceConditionalOverrides(r *ir.ResourceIR, override config.ResourceOverride, diags *diagnostics.Diagnostics) {
+	switch override.ConditionalDelete {
+	case "":
+	case ir.ConditionalDeleteWhenRequired, ir.ConditionalDeleteAlways:
+		r.ConditionalDelete = override.ConditionalDelete
+		if r.CRUDMapping.Delete.IfMatch == "" && diags != nil {
+			*diags = append(*diags, diagnostics.Diagnostic{
+				Severity: diagnostics.Warning,
+				Summary:  "conditional_delete override has no effect",
+				Detail: fmt.Sprintf(
+					"resource_overrides for %q sets conditional_delete: %s, but the resource's delete operation declares no If-Match header, so no conditional delete can be sent.",
+					r.Name, override.ConditionalDelete,
+				),
+			})
+		}
+	default:
+		if diags != nil {
+			*diags = append(*diags, diagnostics.Diagnostic{
+				Severity: diagnostics.Warning,
+				Summary:  "unknown conditional_delete value",
+				Detail: fmt.Sprintf(
+					"resource_overrides for %q sets conditional_delete: %q; want when_required or always. The override is ignored.",
+					r.Name, override.ConditionalDelete,
+				),
+			})
+		}
+	}
+	if override.ETagTracking != nil {
+		r.ETagTrackingDisabled = !*override.ETagTracking
+		declared := r.CRUDMapping.Delete.IfMatch != "" || (r.CRUDMapping.Update != nil && r.CRUDMapping.Update.IfMatch != "")
+		if !declared && diags != nil {
+			*diags = append(*diags, diagnostics.Diagnostic{
+				Severity: diagnostics.Warning,
+				Summary:  "etag_tracking override has no effect",
+				Detail: fmt.Sprintf(
+					"resource_overrides for %q sets etag_tracking: %t, but neither the resource's update nor its delete operation declares an If-Match header, so the resource has no ETag to track.",
+					r.Name, *override.ETagTracking,
+				),
+			})
+		}
 	}
 }
 

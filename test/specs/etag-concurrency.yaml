@@ -1,0 +1,212 @@
+openapi: 3.0.3
+info:
+  title: Inventory API
+  version: 1.0.0
+  description: >-
+    A reference spec exercising ETag conditional requests: If-Match on update
+    and delete (required, optional, and via $ref), If-None-Match on create,
+    an ETag response header, and an ETag carried in the response body.
+servers:
+  - url: https://inventory.example.com/v1
+paths:
+  /widgets:
+    post:
+      operationId: createWidget
+      parameters:
+        - $ref: '#/components/parameters/IfNoneMatch'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WidgetInput'
+      responses:
+        '201':
+          description: The created widget.
+          headers:
+            ETag:
+              $ref: '#/components/headers/ETag'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Widget'
+        '412':
+          description: A widget with this name already exists.
+  /widgets/{widgetId}:
+    parameters:
+      - name: widgetId
+        in: path
+        required: true
+        schema:
+          type: string
+    get:
+      operationId: getWidget
+      responses:
+        '200':
+          description: The widget.
+          headers:
+            ETag:
+              $ref: '#/components/headers/ETag'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Widget'
+    put:
+      operationId: updateWidget
+      parameters:
+        - $ref: '#/components/parameters/IfMatch'
+        - name: X-Trace-Id
+          in: header
+          required: false
+          description: Correlation id echoed in server logs.
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WidgetInput'
+      responses:
+        '200':
+          description: The updated widget.
+          headers:
+            ETag:
+              $ref: '#/components/headers/ETag'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Widget'
+        '412':
+          description: The widget was modified by another client.
+        '428':
+          description: An If-Match header is required.
+    delete:
+      operationId: deleteWidget
+      parameters:
+        - name: If-Match
+          in: header
+          required: false
+          schema:
+            type: string
+      responses:
+        '204':
+          description: Deleted.
+  /gadgets:
+    post:
+      operationId: createGadget
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/GadgetInput'
+      responses:
+        '201':
+          description: The created gadget.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Gadget'
+  /gadgets/{gadgetId}:
+    parameters:
+      - name: gadgetId
+        in: path
+        required: true
+        schema:
+          type: string
+    get:
+      operationId: getGadget
+      responses:
+        '200':
+          description: The gadget.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Gadget'
+    patch:
+      operationId: updateGadget
+      parameters:
+        - name: if-match
+          in: header
+          required: false
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/GadgetInput'
+      responses:
+        '200':
+          description: The updated gadget.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Gadget'
+    delete:
+      operationId: deleteGadget
+      parameters:
+        - $ref: '#/components/parameters/IfMatch'
+      responses:
+        '204':
+          description: Deleted.
+components:
+  headers:
+    ETag:
+      description: The entity tag of the returned representation.
+      schema:
+        type: string
+  parameters:
+    IfMatch:
+      name: If-Match
+      in: header
+      required: true
+      description: The ETag of the representation being modified.
+      schema:
+        type: string
+    IfNoneMatch:
+      name: If-None-Match
+      in: header
+      required: false
+      description: Send * to create only when no widget exists.
+      schema:
+        type: string
+  schemas:
+    WidgetInput:
+      type: object
+      required: [name]
+      properties:
+        name:
+          type: string
+        color:
+          type: string
+    Widget:
+      type: object
+      properties:
+        id:
+          type: string
+          readOnly: true
+        name:
+          type: string
+        color:
+          type: string
+    GadgetInput:
+      type: object
+      required: [label]
+      properties:
+        label:
+          type: string
+    Gadget:
+      type: object
+      properties:
+        id:
+          type: string
+          readOnly: true
+        label:
+          type: string
+        etag:
+          type: string
+          readOnly: true
+          description: Version tag; send it back as If-Match.

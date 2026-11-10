@@ -273,6 +273,18 @@ type ResourceOverride struct {
 	// resource whose path contains the placeholder; placeholders that appear in
 	// no operation path are surfaced with a Warning at transform time.
 	PathParamTransforms map[string]string `yaml:"path_param_transforms,omitempty" json:"path_param_transforms,omitempty"`
+	// ConditionalDelete controls when the generated Delete sends the stored
+	// ETag as If-Match: "when_required" (the default) only when the spec marks
+	// the DELETE operation's If-Match header required; "always" also when the
+	// header is optional. Optional conditional deletes are off by default so a
+	// stale ETag cannot block terraform destroy.
+	ConditionalDelete string `yaml:"conditional_delete,omitempty" json:"conditional_delete,omitempty"`
+	// ETagTracking turns ETag tracking off when false: the provider stores no
+	// ETag, a required If-Match header is sent as "*", and an optional one is
+	// omitted. Use it for APIs whose ETags never satisfy their own If-Match
+	// comparison (e.g. weak ETags under strong comparison). Unset or true keeps
+	// tracking on wherever the spec declares If-Match.
+	ETagTracking *bool `yaml:"etag_tracking,omitempty" json:"etag_tracking,omitempty"`
 	// ReadCollectionPath names a dot-separated path into the read response
 	// (after the envelope unwrap) that locates the collection array(s) for a
 	// child resource whose read is a parent GET (e.g. a port filter rule read
@@ -922,6 +934,11 @@ func Validate(cfg *Config) error {
 			default:
 				errs = append(errs, fmt.Errorf("resource_overrides[%d].path_param_transforms.%s: unknown transform %q (want slash_to_underscore)", i, placeholder, transform))
 			}
+		}
+		switch ro.ConditionalDelete {
+		case "", "when_required", "always":
+		default:
+			errs = append(errs, fmt.Errorf("resource_overrides[%d].conditional_delete: unknown value %q (want when_required or always)", i, ro.ConditionalDelete))
 		}
 		if err := validateStateUpgrades(ro.SchemaVersion, ro.StateUpgrades, i); err != nil {
 			errs = append(errs, err)

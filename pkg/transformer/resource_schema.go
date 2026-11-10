@@ -1233,6 +1233,12 @@ func collectOperationParameters(c ResourceCRUD, childRead bool) map[string]*oper
 			if in != "query" && in != "header" && (!childRead || in != "path") {
 				continue
 			}
+			// If-Match / If-None-Match carry ETags the generated provider
+			// manages itself (private state), so they never become schema
+			// attributes the practitioner would have to fill by hand.
+			if isConditionalHeaderParam(p.In, p.Name) {
+				continue
+			}
 			snake := SanitizeAttributeName(p.Name)
 			existing, ok := merged[snake]
 			if !ok {

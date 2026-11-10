@@ -246,7 +246,11 @@ func convertResources(provider ir.ProviderIR) []config.ResourceOverride {
 			// apply to inferred resources too, so re-emit them for every resource
 			// that carries them.
 			PathParamTransforms: r.PathParamTransforms,
-			Description:         r.Description,
+			// Conditional-request overrides tune spec-declared ETag headers and
+			// apply to inferred resources too, so re-emit them whenever set.
+			ConditionalDelete: r.ConditionalDelete,
+			ETagTracking:      etagTrackingOverride(r),
+			Description:       r.Description,
 		}
 		// Emit exactly one match key. Operation is the authoritative key (it
 		// takes precedence when both are set), so emitting Schema alongside it
@@ -1094,4 +1098,15 @@ func boolPtr(b bool) *bool {
 
 func durationPtr(d config.Duration) *config.Duration {
 	return &d
+}
+
+// etagTrackingOverride re-emits etag_tracking: false for a resource whose ETag
+// tracking an override disabled; tracking is on by default, so nothing is
+// emitted otherwise.
+func etagTrackingOverride(r ir.ResourceIR) *bool {
+	if !r.ETagTrackingDisabled {
+		return nil
+	}
+	off := false
+	return &off
 }
