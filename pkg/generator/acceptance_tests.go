@@ -811,6 +811,15 @@ type mockRoute struct {
 	read   bool
 	update bool
 	delete bool
+	// etag makes the stub behave like an ETag-versioned API for a resource
+	// that tracks ETags: create and update mint a new ETag ("v<n>") and every
+	// create/read/update response carries it. updateIfMatch / deleteIfMatch
+	// reject (412) an update / delete whose If-Match is not the current ETag,
+	// so the lifecycle test proves the provider stores the ETag in private
+	// state and sends it back.
+	etag          bool
+	updateIfMatch bool
+	deleteIfMatch bool
 	// createMethod is the HTTP method of the create operation. It is "POST" for
 	// a conventional collection create and "PUT" for a PUT-as-create (upsert)
 	// resource whose Create is the instance-path PUT. The generated handler
@@ -896,6 +905,7 @@ func generateMockServerFunction(f *astgen.File, r ir.ResourceIR, funcName string
 	if idKey == "" {
 		idKey = "id"
 	}
+	enableMockETags(r, routes)
 	for i, route := range routes {
 		body = append(body, statefulMockRouteHandler(route, i, schemes, idPrimitive, idKey)...)
 	}
@@ -1523,6 +1533,8 @@ func statefulMockRouteHandler(route mockRoute, index int, schemes []ir.SecurityS
 		createMethod = "POST"
 	}
 
+	etagVar := fmt.Sprintf("etag%d", index)
+
 	if route.create {
 		createBody := []ast.Stmt{}
 		// A non-DELETE delete on a nested path (e.g. POST /pets/{id}/scrap)
@@ -1537,6 +1549,9 @@ func statefulMockRouteHandler(route mockRoute, index int, schemes []ir.SecurityS
 				astgen.ExprStmt(astgen.Call(astgen.Selector(astgen.Ident("w"), "WriteHeader"), astgen.IntLit(route.deleteStatus))),
 				astgen.Return(),
 			))
+		}
+		if route.etag {
+			createBody = append(createBody, mockETagMintStmts(etagVar)...)
 		}
 		createBody = append(createBody,
 			astgen.AssignSingle(astgen.Ident("body"), astgen.Call(astgen.Ident("make"), astgen.MapType(astgen.Ident("string"), astgen.Ident("interface{}")))),
@@ -1652,6 +1667,9 @@ func statefulMockRouteHandler(route mockRoute, index int, schemes []ir.SecurityS
 			),
 			astgen.Return(),
 		}
+		if route.etag {
+			readBody = append([]ast.Stmt{mockETagHeaderStmt(etagVar)}, readBody...)
+		}
 		cases = append(cases, caseWithBody([]ast.Expr{astgen.QualExpr("http", "MethodGet")}, readBody...))
 	}
 
@@ -1724,6 +1742,13 @@ func statefulMockRouteHandler(route mockRoute, index int, schemes []ir.SecurityS
 				token.ASSIGN,
 			),
 		}, trackLastKey...), astgen.Return())
+		if route.etag {
+			var prefix []ast.Stmt
+			if route.updateIfMatch {
+				prefix = append(prefix, mockIfMatchCheckStmt(etagVar))
+			}
+			updateBody = append(append(prefix, mockETagMintStmts(etagVar)...), updateBody...)
+		}
 		// The update branch dispatches on PUT and PATCH. Drop any method the
 		// create branch already matches — PUT-as-create issues Create as the
 		// instance PUT, the same op Update uses — so the two never emit
@@ -1745,6 +1770,9 @@ func statefulMockRouteHandler(route mockRoute, index int, schemes []ir.SecurityS
 			astgen.ExprStmt(astgen.Call(astgen.Ident("delete"), astgen.Ident(stateVar), astgen.Ident("id"))),
 			astgen.ExprStmt(astgen.Call(astgen.Selector(astgen.Ident("w"), "WriteHeader"), astgen.IntLit(route.deleteStatus))),
 			astgen.Return(),
+		}
+		if route.etag && route.deleteIfMatch {
+			deleteBody = append([]ast.Stmt{mockIfMatchCheckStmt(etagVar)}, deleteBody...)
 		}
 		cases = append(cases, caseWithBody([]ast.Expr{astgen.QualExpr("http", "MethodDelete")}, deleteBody...))
 	}
@@ -1793,6 +1821,9 @@ func statefulMockRouteHandler(route mockRoute, index int, schemes []ir.SecurityS
 	if route.read {
 		stmts = append(stmts, astgen.AssignSingle(astgen.Ident(lastKeyVar), astgen.Lit("")))
 	}
+	if route.etag {
+		stmts = append(stmts, astgen.AssignSingle(astgen.Ident(etagVar), astgen.IntLit(0)))
+	}
 	return append(stmts,
 		// The handler is bound to a variable so it can be registered on both the
 		// exact collection path and its subtree: net/http's ServeMux pattern
@@ -1819,5 +1850,57 @@ func statefulMockRouteHandler(route mockRoute, index int, schemes []ir.SecurityS
 			astgen.Lit(route.path+"/"),
 			astgen.Ident(handlerVar),
 		)),
+	)
+}
+
+// enableMockETags turns on ETag versioning in the stub for a resource that
+// tracks ETags. It is limited to the common shape where every CRUD operation
+// is served by one route (one ETag counter) and Create is a POST, so the
+// counter always describes the object the lifecycle test manages.
+func enableMockETags(r ir.ResourceIR, routes []mockRoute) {
+	wiring := planResourceWiring(r)
+	if !wiring.wired || !wiring.trackETag || len(routes) != 1 {
+		return
+	}
+	route := &routes[0]
+	if !route.create || !route.read || !route.delete || (route.createMethod != "" && route.createMethod != "POST") {
+		return
+	}
+	route.etag = true
+	route.updateIfMatch = route.update && wiring.updateOp.ifMatchParam
+	route.deleteIfMatch = route.deleteMethod == "DELETE" && wiring.delete.ifMatchParam
+}
+
+// mockETagValueExpr renders the stub's current ETag: fmt.Sprintf("\"v%d\"", etagN).
+func mockETagValueExpr(etagVar string) ast.Expr {
+	return astgen.Call(astgen.QualExpr("fmt", "Sprintf"), astgen.Lit(`"v%d"`), astgen.Ident(etagVar))
+}
+
+// mockETagHeaderStmt sets the ETag response header to the current version.
+func mockETagHeaderStmt(etagVar string) ast.Stmt {
+	return astgen.ExprStmt(astgen.Call(
+		astgen.Selector(astgen.Call(astgen.Selector(astgen.Ident("w"), "Header")), "Set"),
+		astgen.Lit("ETag"), mockETagValueExpr(etagVar),
+	))
+}
+
+// mockETagMintStmts advances the version and sets the new ETag header.
+func mockETagMintStmts(etagVar string) []ast.Stmt {
+	return []ast.Stmt{astgen.Inc(astgen.Ident(etagVar)), mockETagHeaderStmt(etagVar)}
+}
+
+// mockIfMatchCheckStmt rejects a request whose If-Match is not the current
+// ETag with 412 Precondition Failed. The lifecycle never needs "*": Create
+// returns an ETag, so a provider that stores and resends it always matches.
+func mockIfMatchCheckStmt(etagVar string) ast.Stmt {
+	return astgen.If(
+		astgen.NotEqual(
+			astgen.Call(astgen.Selector(astgen.Selector(astgen.Ident("r"), "Header"), "Get"), astgen.Lit("If-Match")),
+			mockETagValueExpr(etagVar),
+		),
+		astgen.ExprStmt(astgen.Call(astgen.QualExpr("http", "Error"), astgen.Ident("w"),
+			astgen.Lit(`{"message":"If-Match does not match the current ETag"}`),
+			astgen.QualExpr("http", "StatusPreconditionFailed"))),
+		astgen.Return(),
 	)
 }

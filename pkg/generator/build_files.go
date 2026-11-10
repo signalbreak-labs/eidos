@@ -802,6 +802,11 @@ func FilesForProviderIR(provider *ir.ProviderIR, cfg BuildConfig, opts CollectOp
 		// Invoke bodies wired to the generated API client.
 		files = append(files, JSONConvertFile(provider))
 	}
+	if AnyResourceTracksETag(provider.Resources) {
+		// Private-state ETag helpers for resources using If-Match
+		// optimistic concurrency.
+		files = append(files, ETagHelpersFile())
+	}
 	files = append(files, ValidatorsFile(*provider))
 
 	if opts.IncludeTests {

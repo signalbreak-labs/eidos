@@ -73,10 +73,13 @@ func TestPlanConditionalRequests(t *testing.T) {
 			want:   ConditionalRequestPlan{DeleteIfMatch: true, DeleteIfMatchRequired: true},
 		},
 		{
-			name:   "tracking disabled drops optional delete even with always",
-			r:      conditionalResource("", "", opt),
-			mutate: func(r *ir.ResourceIR) { r.ETagTrackingDisabled = true; r.ConditionalDelete = ir.ConditionalDeleteAlways },
-			want:   ConditionalRequestPlan{},
+			name: "tracking disabled drops optional delete even with always",
+			r:    conditionalResource("", "", opt),
+			mutate: func(r *ir.ResourceIR) {
+				r.ETagTrackingDisabled = true
+				r.ConditionalDelete = ir.ConditionalDeleteAlways
+			},
+			want: ConditionalRequestPlan{},
 		},
 		{
 			name:   "no update mapping",

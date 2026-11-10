@@ -409,5 +409,8 @@ func TestFiles(pir ir.ProviderIR, cfg BuildConfig) []File {
 		files = append(files, ephCoverage...)
 		files = append(files, listCoverage...)
 	}
+	if AnyResourceTracksETag(pir.Resources) {
+		files = append(files, ETagHelpersTestFile())
+	}
 	return files
 }

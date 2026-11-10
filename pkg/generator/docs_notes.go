@@ -48,10 +48,42 @@ func resourceDocsNotes(r ir.ResourceIR) []string {
 	if !plan.wired {
 		return []string{docsNotWired("resource")}
 	}
+	var notes []string
 	if !plan.update {
-		return []string{docsUpdateNotWiredNote}
+		notes = append(notes, docsUpdateNotWiredNote)
 	}
-	return nil
+	if note := docsConditionalRequestsNote(plan); note != "" {
+		notes = append(notes, note)
+	}
+	return notes
+}
+
+// docsConditionalRequestsNote explains a wired resource's ETag conditional
+// requests (resource_etag.go): what is sent, and how to recover from the 412
+// a conflicting change produces. Empty when the resource sends none.
+func docsConditionalRequestsNote(plan resourceWiringPlan) string {
+	var ops []string
+	if plan.updateOp.ifMatch {
+		ops = append(ops, "updates")
+	}
+	if plan.delete.ifMatch {
+		ops = append(ops, "deletes")
+	}
+	var parts []string
+	if len(ops) > 0 {
+		if plan.trackETag {
+			parts = append(parts, fmt.Sprintf("This resource uses optimistic concurrency: the provider records the ETag the API returns (in private state, not in the schema) and sends it as `If-Match` on %s, so a change made outside Terraform since the last refresh fails with `412 Precondition Failed` instead of being overwritten. Run `terraform apply -refresh-only` to accept the remote changes, then apply again.", strings.Join(ops, " and ")))
+		} else {
+			parts = append(parts, fmt.Sprintf("The API requires `If-Match` on %s; ETag tracking is disabled for this resource, so the provider sends `If-Match: *`.", strings.Join(ops, " and ")))
+		}
+	}
+	if plan.create.ifNoneMatch {
+		parts = append(parts, "Creates send `If-None-Match: *`, so creating an object that already exists fails with `412 Precondition Failed`; import the existing object instead.")
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return "-> **Note:** " + strings.Join(parts, " ")
 }
 
 // dataSourceDocsNotes returns the admonitions to render on a data source's doc
