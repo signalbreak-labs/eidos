@@ -1,0 +1,188 @@
+{
+  "files": [
+    {
+      "path": ".github/workflows/release.yml",
+      "reason": "GitHub Actions release workflow",
+      "body_hash": "6eb8df23695bfa5d"
+    },
+    {
+      "path": ".goreleaser.yml",
+      "reason": "GoReleaser release configuration",
+      "body_hash": "464c4c54ba2033ca"
+    },
+    {
+      "path": "GNUmakefile",
+      "reason": "build and test automation",
+      "body_hash": "771e0e9e2aefba94"
+    },
+    {
+      "path": "README.md",
+      "reason": "provider overview and usage guide",
+      "body_hash": "90a86e90a5f1cb39"
+    },
+    {
+      "path": "docs/index.md",
+      "reason": "provider overview and authentication guide",
+      "body_hash": "b6c518cec518affd"
+    },
+    {
+      "path": "docs/resources/gadget.md",
+      "reason": "documentation for resource gadget",
+      "body_hash": "a450d67fbcd7011a"
+    },
+    {
+      "path": "docs/resources/widget.md",
+      "reason": "documentation for resource widget",
+      "body_hash": "2d083c6c68da2d42"
+    },
+    {
+      "path": "examples/resources/gadget/resource.tf",
+      "reason": "example for resource gadget",
+      "body_hash": "ad9214a8692d0130"
+    },
+    {
+      "path": "examples/resources/widget/resource.tf",
+      "reason": "example for resource widget",
+      "body_hash": "c952fa5596115eb2"
+    },
+    {
+      "path": "generator.yaml",
+      "reason": "generated generator configuration",
+      "body_hash": "3b61d58d0c1b4fac"
+    },
+    {
+      "path": "go.mod",
+      "reason": "Go module definition",
+      "body_hash": "b2d7d970237b9078"
+    },
+    {
+      "path": "internal/client/client.go",
+      "reason": "generated HTTP client",
+      "body_hash": "bf0db232aa1becff"
+    },
+    {
+      "path": "internal/client/client_test.go",
+      "reason": "generated HTTP client unit tests",
+      "body_hash": "b53e0b6ef04246a1"
+    },
+    {
+      "path": "internal/client/errors.go",
+      "reason": "typed API error helpers",
+      "body_hash": "7b69b0dda148a6d5"
+    },
+    {
+      "path": "internal/client/logging.go",
+      "reason": "request/response trace logging",
+      "body_hash": "9defaf534cc08195"
+    },
+    {
+      "path": "internal/client/logging_test.go",
+      "reason": "trace logging unit tests",
+      "body_hash": "3d1b897c8a09d762"
+    },
+    {
+      "path": "internal/client/models.go",
+      "reason": "request/response model structs",
+      "body_hash": "1efd23827e83c14f"
+    },
+    {
+      "path": "internal/client/pagination.go",
+      "reason": "pagination helpers",
+      "body_hash": "6c9d24e71e7e339c"
+    },
+    {
+      "path": "internal/client/retry.go",
+      "reason": "retry logic with exponential backoff",
+      "body_hash": "bf53c919903fb008"
+    },
+    {
+      "path": "internal/provider/etag.go",
+      "reason": "ETag private-state helpers for conditional requests",
+      "body_hash": "915bcf7b31473b31"
+    },
+    {
+      "path": "internal/provider/etag_test.go",
+      "reason": "unit tests for the ETag helpers",
+      "body_hash": "01e68b5fb6220d07"
+    },
+    {
+      "path": "internal/provider/json_convert.go",
+      "reason": "JSON/model conversion helpers for wired CRUD bodies",
+      "body_hash": "ddc79817ea693fd2"
+    },
+    {
+      "path": "internal/provider/provider.go",
+      "reason": "provider schema and registration",
+      "body_hash": "aa9f7591b1722bbd"
+    },
+    {
+      "path": "internal/provider/provider_test.go",
+      "reason": "provider-level unit tests",
+      "body_hash": "39de0db6a675f8e5"
+    },
+    {
+      "path": "internal/provider/resource_gadget.go",
+      "reason": "resource inventory-api_gadget",
+      "body_hash": "66fb3a29c6e35541"
+    },
+    {
+      "path": "internal/provider/resource_gadget_acceptance_test.go",
+      "reason": "acceptance tests for resource gadget",
+      "body_hash": "54fc5e328ee140fa"
+    },
+    {
+      "path": "internal/provider/resource_gadget_remote_test.go",
+      "reason": "coverage tests for resource gadget remote helpers",
+      "body_hash": "ffd0425b05bb276c"
+    },
+    {
+      "path": "internal/provider/resource_gadget_test.go",
+      "reason": "unit tests for resource gadget",
+      "body_hash": "9f0297fb65fe3815"
+    },
+    {
+      "path": "internal/provider/resource_widget.go",
+      "reason": "resource inventory-api_widget",
+      "body_hash": "6dee18307c7881e8"
+    },
+    {
+      "path": "internal/provider/resource_widget_acceptance_test.go",
+      "reason": "acceptance tests for resource widget",
+      "body_hash": "b02821df8a04b1b3"
+    },
+    {
+      "path": "internal/provider/resource_widget_remote_test.go",
+      "reason": "coverage tests for resource widget remote helpers",
+      "body_hash": "2fd5d33093b15fb6"
+    },
+    {
+      "path": "internal/provider/resource_widget_test.go",
+      "reason": "unit tests for resource widget",
+      "body_hash": "f2929cd05b5ed3e5"
+    },
+    {
+      "path": "internal/provider/testing_helpers_test.go",
+      "reason": "shared httptest helpers for coverage tests",
+      "body_hash": "ea6dba0dbda20a64"
+    },
+    {
+      "path": "internal/provider/validators.go",
+      "reason": "custom schema validators",
+      "body_hash": "94a192299dab9088"
+    },
+    {
+      "path": "main.go",
+      "reason": "provider server entrypoint",
+      "body_hash": "09734e5488fc571c"
+    },
+    {
+      "path": "terraform-registry-manifest.json",
+      "reason": "Terraform Registry manifest",
+      "body_hash": "76ac85aa7f3a523b"
+    }
+  ],
+  "warnings": [
+    "import suppressed: import target is computed-only",
+    "import suppressed: import target is computed-only"
+  ]
+}

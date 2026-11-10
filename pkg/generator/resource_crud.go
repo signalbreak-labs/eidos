@@ -152,6 +152,18 @@ type crudOperationPlan struct {
 	// unwrapping "data" the ship is still nested under "ship"). Empty when the
 	// response applies directly after the envelope unwrap.
 	responseInnerPath string
+	// Conditional requests (ETag optimistic concurrency, see resource_etag.go).
+	// ifMatch sends If-Match: from the ifMatch helper parameter when
+	// ifMatchParam (a tracked ETag), with a "*" fallback when ifMatchRequired.
+	// ifNoneMatch sends "If-None-Match: *". captureETag makes the helper
+	// return the response ETag; etagFromHeader reads it from the ETag header
+	// (false for collection reads, whose header describes the collection).
+	ifMatch         bool
+	ifMatchParam    bool
+	ifMatchRequired bool
+	ifNoneMatch     bool
+	captureETag     bool
+	etagFromHeader  bool
 }
 
 // paramSubstitution describes one query, header, or cookie parameter and the
@@ -216,6 +228,13 @@ type resourceWiringPlan struct {
 	needsMultipartBody bool
 	needsMultipartFile bool
 	needsXMLBody       bool
+
+	// trackETag is true when the resource stores ETags in private state
+	// (resource_etag.go). etagBodyField names the model field of a response
+	// body ETag attribute used when a response carries no ETag header.
+	trackETag     bool
+	etagBodyField string
+	etagBodyWire  string
 }
 
 // AnyResourceWired reports whether at least one resource has a complete enough
@@ -285,6 +304,8 @@ func planResourceWiring(r ir.ResourceIR) resourceWiringPlan {
 			plan.updateOp = upd
 		}
 	}
+
+	applyConditionalPlan(r, &plan)
 
 	for _, op := range []crudOperationPlan{plan.create, plan.read, plan.updateOp, plan.delete} {
 		plan.noteOpImportNeeds(op)
@@ -1270,6 +1291,7 @@ func sendRequestStmts(op crudOperationPlan, receiver, summary, modelVar string, 
 	}
 	stmts = append(stmts, requestQueryStmts(op, modelVar)...)
 	stmts = append(stmts, requestHeaderStmts(op, modelVar)...)
+	stmts = append(stmts, conditionalHeaderStmts(op)...)
 	stmts = append(stmts, requestCookieStmts(op, modelVar)...)
 	if body != nil {
 		// The request body media type. Gated on body != nil so bodiless requests
@@ -2480,13 +2502,9 @@ func wiredCreateBody(r ir.ResourceIR, modelName string) []ast.Stmt {
 	if r.Timeouts != nil && r.Timeouts.Create != nil {
 		stmts = append(stmts, resourceTimeoutWiringStmts("plan", "Create", *r.Timeouts.Create)...)
 	}
+	wiring := planResourceWiring(r)
 	stmts = append(stmts,
-		astgen.ExprStmt(astgen.Call(
-			astgen.Selector(astgen.Ident("r"), "createRemote"),
-			astgen.Ident("ctx"),
-			astgen.UnaryPtr(astgen.Ident("plan")),
-			astgen.Ident("resp"),
-		)),
+		remoteCallStmt(wiring.create, "createRemote", "plan", nil),
 		astgen.If(
 			astgen.Call(astgen.Selector(astgen.Selector(astgen.Ident("resp"), "Diagnostics"), "HasError")),
 			astgen.Return(),
@@ -2494,6 +2512,9 @@ func wiredCreateBody(r ir.ResourceIR, modelName string) []ast.Stmt {
 	)
 	stmts = append(stmts, identitySetStmts(r, summary, "plan")...)
 	stmts = append(stmts, stateSetStmt("plan"))
+	if wiring.create.captureETag {
+		stmts = append(stmts, privateETagWriteStmts()...)
+	}
 	return stmts
 }
 
@@ -2515,6 +2536,10 @@ func wiredCreateHelperBody(r ir.ResourceIR, plan resourceWiringPlan) []ast.Stmt 
 	stmts = append(stmts, sendRequestStmts(plan.create, "r", summary, "plan", bodyExpr, nil)...)
 	stmts = append(stmts, decodeAndApplyStmts(summary, "plan", plan.create.responseEnvelope, plan.create.responseInnerPath)...)
 	stmts = append(stmts, createIDFallbackStmts(r, "plan", summary)...)
+	stmts = append(stmts, etagCaptureStmts(plan.create, "plan", plan.etagBodyField)...)
+	if plan.create.captureETag {
+		stmts = append(stmts, astgen.Return())
+	}
 	return stmts
 }
 
@@ -2523,12 +2548,8 @@ func wiredCreateHelperBody(r ir.ResourceIR, plan resourceWiringPlan) []ast.Stmt 
 func wiredCreateHelperDecl(r ir.ResourceIR, plan resourceWiringPlan, modelName, structName string) *ast.FuncDecl {
 	return astgen.MethodDecl(
 		"createRemote", "r", astgen.StarExpr(astgen.Ident(structName)),
-		astgen.Params(
-			astgen.Field("ctx", astgen.QualExpr("context", "Context"), ""),
-			astgen.Field("plan", astgen.StarExpr(astgen.Ident(modelName)), ""),
-			astgen.Field("resp", astgen.StarExpr(astgen.QualExpr("resource", "CreateResponse")), ""),
-		),
-		astgen.Results(),
+		remoteHelperParams(plan.create, "plan", astgen.StarExpr(astgen.Ident(modelName)), astgen.StarExpr(astgen.QualExpr("resource", "CreateResponse"))),
+		remoteHelperResults(plan.create),
 		astgen.Block(wiredCreateHelperBody(r, plan)...),
 	)
 }
@@ -2634,14 +2655,17 @@ func wiredReadBody(r ir.ResourceIR, modelName string) []ast.Stmt {
 	// of a non-existent object, which should surface as Terraform core's
 	// "Cannot import non-existent remote object" — into an opaque provider bug
 	// report. identitySetStmts is a no-op for resources without identity.
+	// A resource tracking ETags also receives the read's ETag, so the removed
+	// flag is captured into a variable; otherwise the call is the condition.
+	wiring := planResourceWiring(r)
+	removedCond := ast.Expr(astgen.Call(astgen.Selector(astgen.Ident("r"), "readRemote"), remoteHelperArgs(wiring.read, "state")...))
+	if wiring.read.captureETag {
+		stmts = append(stmts, remoteCallStmt(wiring.read, "readRemote", "state", []string{"removed"}))
+		removedCond = astgen.Ident("removed")
+	}
 	stmts = append(stmts,
 		astgen.If(
-			astgen.Call(
-				astgen.Selector(astgen.Ident("r"), "readRemote"),
-				astgen.Ident("ctx"),
-				astgen.UnaryPtr(astgen.Ident("state")),
-				astgen.Ident("resp"),
-			),
+			removedCond,
 			astgen.Block(append(identitySetStmts(r, summary, "state"),
 				astgen.ExprStmt(astgen.Call(
 					astgen.Selector(astgen.Selector(astgen.Ident("resp"), "State"), "RemoveResource"),
@@ -2657,6 +2681,9 @@ func wiredReadBody(r ir.ResourceIR, modelName string) []ast.Stmt {
 	)
 	stmts = append(stmts, identitySetStmts(r, summary, "state")...)
 	stmts = append(stmts, stateSetStmt("state"))
+	if wiring.read.captureETag {
+		stmts = append(stmts, privateETagWriteStmts()...)
+	}
 	return stmts
 }
 
@@ -2692,6 +2719,7 @@ func wiredReadHelperBody(r ir.ResourceIR, plan resourceWiringPlan) []ast.Stmt {
 	default:
 		stmts = append(stmts, decodeAndApplyStmts(summary, "state", plan.read.responseEnvelope, "")...)
 	}
+	stmts = append(stmts, etagCaptureStmts(plan.read, "state", plan.etagBodyField)...)
 	// Naked return yields removed=false on the happy path (the 404 branch above
 	// sets removed=true and returns early). Required because readRemote declares
 	// a named bool result.
@@ -2704,12 +2732,8 @@ func wiredReadHelperBody(r ir.ResourceIR, plan resourceWiringPlan) []ast.Stmt {
 func wiredReadHelperDecl(r ir.ResourceIR, plan resourceWiringPlan, modelName, structName string) *ast.FuncDecl {
 	return astgen.MethodDecl(
 		"readRemote", "r", astgen.StarExpr(astgen.Ident(structName)),
-		astgen.Params(
-			astgen.Field("ctx", astgen.QualExpr("context", "Context"), ""),
-			astgen.Field("state", astgen.StarExpr(astgen.Ident(modelName)), ""),
-			astgen.Field("resp", astgen.StarExpr(astgen.QualExpr("resource", "ReadResponse")), ""),
-		),
-		astgen.Results(astgen.Field("removed", astgen.Ident("bool"), "")),
+		remoteHelperParams(plan.read, "state", astgen.StarExpr(astgen.Ident(modelName)), astgen.StarExpr(astgen.QualExpr("resource", "ReadResponse"))),
+		remoteHelperResults(plan.read, astgen.Field("removed", astgen.Ident("bool"), "")),
 		astgen.Block(wiredReadHelperBody(r, plan)...),
 	)
 }
@@ -2754,18 +2778,17 @@ func wiredUpdateBody(r ir.ResourceIR, modelName string) []ast.Stmt {
 	// Preserve computed state values (e.g. an optimistic-concurrency version)
 	// that the plan leaves unknown so the Update request body carries them (G20),
 	// then delegate the HTTP exchange to updateRemote and on success store state.
+	wiring := planResourceWiring(r)
+	stmts = append(stmts, astgen.ExprStmt(astgen.Call(
+		astgen.Ident("preserveStateIntoPlan"),
+		astgen.UnaryPtr(astgen.Ident("plan")),
+		astgen.UnaryPtr(astgen.Ident("state")),
+	)))
+	if wiring.updateOp.ifMatchParam {
+		stmts = append(stmts, privateETagReadStmts()...)
+	}
 	stmts = append(stmts,
-		astgen.ExprStmt(astgen.Call(
-			astgen.Ident("preserveStateIntoPlan"),
-			astgen.UnaryPtr(astgen.Ident("plan")),
-			astgen.UnaryPtr(astgen.Ident("state")),
-		)),
-		astgen.ExprStmt(astgen.Call(
-			astgen.Selector(astgen.Ident("r"), "updateRemote"),
-			astgen.Ident("ctx"),
-			astgen.UnaryPtr(astgen.Ident("plan")),
-			astgen.Ident("resp"),
-		)),
+		remoteCallStmt(wiring.updateOp, "updateRemote", "plan", nil),
 		astgen.If(
 			astgen.Call(astgen.Selector(astgen.Selector(astgen.Ident("resp"), "Diagnostics"), "HasError")),
 			astgen.Return(),
@@ -2773,6 +2796,9 @@ func wiredUpdateBody(r ir.ResourceIR, modelName string) []ast.Stmt {
 	)
 	stmts = append(stmts, identitySetStmts(r, summary, "plan")...)
 	stmts = append(stmts, stateSetStmt("plan"))
+	if wiring.updateOp.captureETag {
+		stmts = append(stmts, privateETagWriteStmts()...)
+	}
 	return stmts
 }
 
@@ -2793,6 +2819,10 @@ func wiredUpdateHelperBody(r ir.ResourceIR, plan resourceWiringPlan) []ast.Stmt 
 	stmts = append(stmts, requestPathStmts(plan.updateOp, "plan")...)
 	stmts = append(stmts, sendRequestStmts(plan.updateOp, "r", summary, "plan", bodyExpr, nil)...)
 	stmts = append(stmts, decodeAndApplyStmts(summary, "plan", plan.updateOp.responseEnvelope, plan.updateOp.responseInnerPath)...)
+	stmts = append(stmts, etagCaptureStmts(plan.updateOp, "plan", plan.etagBodyField)...)
+	if plan.updateOp.captureETag {
+		stmts = append(stmts, astgen.Return())
+	}
 	return stmts
 }
 
@@ -2801,12 +2831,8 @@ func wiredUpdateHelperBody(r ir.ResourceIR, plan resourceWiringPlan) []ast.Stmt 
 func wiredUpdateHelperDecl(r ir.ResourceIR, plan resourceWiringPlan, modelName, structName string) *ast.FuncDecl {
 	return astgen.MethodDecl(
 		"updateRemote", "r", astgen.StarExpr(astgen.Ident(structName)),
-		astgen.Params(
-			astgen.Field("ctx", astgen.QualExpr("context", "Context"), ""),
-			astgen.Field("plan", astgen.StarExpr(astgen.Ident(modelName)), ""),
-			astgen.Field("resp", astgen.StarExpr(astgen.QualExpr("resource", "UpdateResponse")), ""),
-		),
-		astgen.Results(),
+		remoteHelperParams(plan.updateOp, "plan", astgen.StarExpr(astgen.Ident(modelName)), astgen.StarExpr(astgen.QualExpr("resource", "UpdateResponse"))),
+		remoteHelperResults(plan.updateOp),
 		astgen.Block(wiredUpdateHelperBody(r, plan)...),
 	)
 }
@@ -2835,14 +2861,11 @@ func wiredDeleteBody(r ir.ResourceIR, modelName string) []ast.Stmt {
 	if r.Timeouts != nil && r.Timeouts.Delete != nil {
 		stmts = append(stmts, resourceTimeoutWiringStmts("state", "Delete", *r.Timeouts.Delete)...)
 	}
-	stmts = append(stmts,
-		astgen.ExprStmt(astgen.Call(
-			astgen.Selector(astgen.Ident("r"), "deleteRemote"),
-			astgen.Ident("ctx"),
-			astgen.UnaryPtr(astgen.Ident("state")),
-			astgen.Ident("resp"),
-		)),
-	)
+	wiring := planResourceWiring(r)
+	if wiring.delete.ifMatchParam {
+		stmts = append(stmts, privateETagReadStmts()...)
+	}
+	stmts = append(stmts, remoteCallStmt(wiring.delete, "deleteRemote", "state", nil))
 	return stmts
 }
 
@@ -2865,12 +2888,8 @@ func wiredDeleteHelperBody(r ir.ResourceIR, plan resourceWiringPlan) []ast.Stmt 
 func wiredDeleteHelperDecl(r ir.ResourceIR, plan resourceWiringPlan, modelName, structName string) *ast.FuncDecl {
 	return astgen.MethodDecl(
 		"deleteRemote", "r", astgen.StarExpr(astgen.Ident(structName)),
-		astgen.Params(
-			astgen.Field("ctx", astgen.QualExpr("context", "Context"), ""),
-			astgen.Field("state", astgen.StarExpr(astgen.Ident(modelName)), ""),
-			astgen.Field("resp", astgen.StarExpr(astgen.QualExpr("resource", "DeleteResponse")), ""),
-		),
-		astgen.Results(),
+		remoteHelperParams(plan.delete, "state", astgen.StarExpr(astgen.Ident(modelName)), astgen.StarExpr(astgen.QualExpr("resource", "DeleteResponse"))),
+		remoteHelperResults(plan.delete),
 		astgen.Block(wiredDeleteHelperBody(r, plan)...),
 	)
 }

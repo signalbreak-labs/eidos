@@ -147,7 +147,7 @@ eidos generate --spec ./mycloud.yaml --config ./mycloud-generator.yaml --output 
 
 Toolchain, lint, formatting, and testing conventions live in
 [`docs/standards.md`](docs/standards.md). The project uses Go 1.26.0 with
-`toolchain go1.26.6` (CI reads the version from `go.mod`), golangci-lint v2
+`toolchain go1.26.10` (CI reads the version from `go.mod`), golangci-lint v2
 pinned to Go 1.26, and `goimports` with local prefix
 `github.com/signalbreak-labs/eidos`. Releases are versioned with release-please and
 shipped as cross-compiled GitHub Release binaries by GoReleaser, which also

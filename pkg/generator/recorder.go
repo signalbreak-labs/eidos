@@ -372,6 +372,12 @@ func CollectFromProviderIR(provider *ir.ProviderIR, opts CollectOptions) []FileE
 		if AnyResourceWired(provider.Resources) || AnyDataSourceWired(provider.DataSources) || AnyEphemeralWired(provider.EphemeralResources) || AnyActionSendsBody(provider.Actions) {
 			rec.Record("internal/provider/json_convert.go", "JSON/model conversion helpers for wired CRUD bodies")
 		}
+		if AnyResourceTracksETag(provider.Resources) {
+			rec.Record("internal/provider/etag.go", "ETag private-state helpers for conditional requests")
+			if opts.IncludeTests {
+				rec.Record("internal/provider/etag_test.go", "unit tests for the ETag helpers")
+			}
+		}
 	}
 
 	collectClientFiles(rec, provider, opts)

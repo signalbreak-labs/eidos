@@ -895,6 +895,11 @@ func buildIRPreview(spec *parser.Spec, version parser.Version, cfg *config.Confi
 	// inferred PUT-as-create groups qualify (inferredPutCreates); an explicit
 	// create_operation override that happens to use a PUT is not an inference.
 	emitPutAsCreateInfoDiagnostics(preview, inferredPutCreates, &previewDiags)
+	// Report how each resource honors the spec's ETag conditional request
+	// headers (If-Match / If-None-Match). Runs after config overrides so the
+	// conditional_delete and etag_tracking overrides and skip: true opt-outs
+	// are reflected.
+	transformer.ConditionalRequestDiagnostics(preview, &previewDiags)
 	// Write-only and secret (Sensitive) inference are spec-driven passes, not
 	// generator.yaml preferences, so they run unconditionally (even when cfg is
 	// nil) after config overrides so override-added constructs are covered too.
@@ -3547,7 +3552,87 @@ func pathParamIRs(spec *parser.Spec, path string, op *parser.Operation) []ir.Par
 func resourceOperationMapping(spec *parser.Spec, method, path string, op *parser.Operation, responseEnvelope string) ir.OperationMappingIR {
 	m := operationMapping(method, path, op, responseEnvelope)
 	m.PathParams = pathParamIRs(spec, path, op)
+	applyConditionalHeaders(spec, path, op, &m)
 	return m
+}
+
+// applyConditionalHeaders records the operation's If-Match / If-None-Match
+// request headers on a managed-resource mapping and removes them from
+// HeaderParams. The generated provider manages these ETag headers itself
+// (private state), so they must not be resolved against schema attributes.
+// The headers are looked up across operation-level and path-level parameters
+// with $ref resolved: a shared components/parameters IfMatch reference is the
+// common way specs declare them. ResponseETag records whether a success
+// response declares an ETag header.
+func applyConditionalHeaders(spec *parser.Spec, path string, op *parser.Operation, m *ir.OperationMappingIR) {
+	if op == nil {
+		return
+	}
+	var pathLevel []parser.Parameter
+	if spec != nil && spec.Paths != nil && spec.Paths[path] != nil {
+		pathLevel = spec.Paths[path].Parameters
+	}
+	seen := map[string]bool{}
+	for _, params := range [][]parser.Parameter{op.Parameters, pathLevel} {
+		for _, p := range params {
+			r := resolveParamRef(spec, p)
+			if r == nil || !strings.EqualFold(r.In, "header") {
+				continue
+			}
+			key := strings.ToLower(strings.TrimSpace(r.Name))
+			// An operation-level parameter overrides a path-level one of the
+			// same name.
+			if seen[key] {
+				continue
+			}
+			seen[key] = true
+			presence := ir.ConditionalHeaderOptional
+			if r.Required {
+				presence = ir.ConditionalHeaderRequired
+			}
+			switch {
+			case strings.EqualFold(key, transformer.HeaderIfMatch):
+				m.IfMatch = presence
+			case strings.EqualFold(key, transformer.HeaderIfNoneMatch):
+				m.IfNoneMatch = presence
+			}
+		}
+	}
+	if len(m.HeaderParams) > 0 {
+		kept := m.HeaderParams[:0:0]
+		for _, p := range m.HeaderParams {
+			if !transformer.IsConditionalHeader(p.Name) {
+				kept = append(kept, p)
+			}
+		}
+		if len(kept) == 0 {
+			kept = nil
+		}
+		m.HeaderParams = kept
+	}
+	m.ResponseETag = successResponseDeclaresETag(spec, op)
+}
+
+// successResponseDeclaresETag reports whether any 2xx response of the
+// operation declares an ETag response header (case-insensitive).
+func successResponseDeclaresETag(spec *parser.Spec, op *parser.Operation) bool {
+	for code, resp := range op.Responses {
+		n, ok := parseStatusCode(code)
+		if !ok || n < 200 || n >= 300 || resp == nil {
+			continue
+		}
+		if resp.Ref != "" && spec != nil {
+			if resolved, _ := spec.ResolveResponseReference(resp); resolved != nil {
+				resp = resolved
+			}
+		}
+		for name := range resp.Headers {
+			if strings.EqualFold(strings.TrimSpace(name), "ETag") {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // isCollectionRead reports whether a CRUD group's Read fetches the whole

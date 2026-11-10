@@ -390,6 +390,14 @@ func generateResourceCoverageTestFile(r ir.ResourceIR, _ string) (*ast.File, err
 	info := resourceIDFieldInfo(r)
 
 	cases := buildResourceCoverageCases(r, plan, info)
+	cases = adaptETagCoverageCases(cases, plan)
+	cases = append(cases, etagCoverageCases(r, plan, info)...)
+	for _, c := range cases {
+		if c.needsHTTP {
+			f.AddImport("net/http", "")
+			break
+		}
+	}
 	for _, c := range cases {
 		f.AddCommentf("%s exercises %s.%s against an httptest mock: %s.", c.funcName(structName), structName, c.method, c.intent)
 		f.AddDecl(coverageTestDecl(structName, modelName, "resource", c))
@@ -408,6 +416,14 @@ type coverageCase struct {
 	intent        string // human description for the doc comment
 	client        ast.Expr
 	asserts       []ast.Stmt
+	// args are extra helper arguments passed between the model and resp (the
+	// ifMatch ETag of updateRemote/deleteRemote). lhs, when set, names the
+	// variables the call's results are assigned to ("_" discards one); it
+	// overrides returns/captureReturn. needsHTTP marks a case whose client is
+	// built from an inline http handler, requiring the net/http import.
+	args      []ast.Expr
+	lhs       []string
+	needsHTTP bool
 }
 
 func (c coverageCase) funcName(structName string) string {
@@ -671,15 +687,24 @@ func coverageTestDecl(structName, modelName, respPkg string, c coverageCase) *as
 		astgen.AssignSingle(astgen.Ident("resp"), astgen.UnaryPtr(astgen.CompositeLit(astgen.QualExpr(respPkg, c.resp)))),
 	)
 
-	call := astgen.Call(
-		astgen.Selector(astgen.Ident("r"), c.method),
+	callArgs := make([]ast.Expr, 0, len(c.args)+3)
+	callArgs = append(callArgs,
 		astgen.Call(astgen.QualExpr("context", "Background")),
 		astgen.UnaryPtr(astgen.Ident("m")),
-		astgen.Ident("resp"),
 	)
-	if c.returns && c.captureReturn {
+	callArgs = append(callArgs, c.args...)
+	callArgs = append(callArgs, astgen.Ident("resp"))
+	call := astgen.Call(astgen.Selector(astgen.Ident("r"), c.method), callArgs...)
+	switch {
+	case len(c.lhs) > 0:
+		lhs := make([]ast.Expr, len(c.lhs))
+		for i, name := range c.lhs {
+			lhs[i] = astgen.Ident(name)
+		}
+		body = append(body, astgen.Assign(lhs, []ast.Expr{call}))
+	case c.returns && c.captureReturn:
 		body = append(body, astgen.AssignSingle(astgen.Ident("removed"), call))
-	} else {
+	default:
 		body = append(body, astgen.ExprStmt(call))
 	}
 	body = append(body, c.asserts...)
