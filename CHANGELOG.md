@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.11.0](https://github.com/signalbreak-labs/eidos/compare/v0.10.1...v0.11.0) (2026-11-10)
+
+
+### Features
+
+* **generator:** ETag optimistic concurrency for wired managed resources ([ce372a1](https://github.com/signalbreak-labs/eidos/commit/ce372a12d216524af01fd2f9826f117d783decdf))
+* **transformer:** detect ETag conditional request headers on managed resources ([9b841c5](https://github.com/signalbreak-labs/eidos/commit/9b841c5dac29e803cbd1971052df67259580a0c4))
+
+
+### Documentation
+
+* document ETag conditional requests and their overrides ([c4e42e5](https://github.com/signalbreak-labs/eidos/commit/c4e42e5fac5cf7856c4101c123090eb697b8d1e7))
+
 ## [0.10.1](https://github.com/signalbreak-labs/eidos/compare/v0.10.0...v0.10.1) (2026-09-19)
 
 
