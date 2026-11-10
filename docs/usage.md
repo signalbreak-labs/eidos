@@ -457,6 +457,9 @@ resource_overrides:
     # document "/" as "_", e.g. GigaVUE-FM port "1/1/c4" → path "1_1_c4".
     path_param_transforms:
       portId: slash_to_underscore
+    # ETag conditional requests (see "ETag conditional requests" below).
+    conditional_delete: always   # also send an optional DELETE If-Match
+    etag_tracking: true          # false: never store ETags; required If-Match sends "*"
     read_collection_path: "rules.*"
     write_only_attributes:
       - name: password
@@ -504,6 +507,8 @@ resource_overrides:
 | `include_create_response_attributes` | []string | Create-response-only properties to include as `Computed` attributes (e.g. an activation id returned by POST but absent from the read). Each name must be a create response property; a missing property is surfaced fail-loud. |
 | `path_params` | map | Per-CRUD-operation mapping of path placeholders to the schema attributes that supply their values (`read: { entlItemId: eli_id }`), overriding name-match and id-attribute fallbacks. |
 | `path_param_transforms` | map | Placeholder → named rewrite applied to an attribute value before it is substituted into a request path, across every CRUD operation whose path contains the placeholder. Supported transform: `slash_to_underscore` (`"1/1/c4"` → `"1_1_c4"`) — for APIs, such as GigaVUE-FM, whose documented path segments replace `/` with `_` while bodies keep the slash form. Unknown transform names or placeholders that appear in no CRUD path are surfaced fail-loud. |
+| `conditional_delete` | string | When the generated Delete sends the stored ETag as `If-Match`: `when_required` (default) only when the spec marks the DELETE `If-Match` header required; `always` also when it is optional. A stale ETag fails the delete with `412`, so optional conditional deletes are opt-in. Setting it on a resource whose delete declares no `If-Match` is a no-op surfaced with a `Warning`. See [ETag conditional requests](#etag-conditional-requests). |
+| `etag_tracking` | bool | `false` turns off ETag tracking: no ETag is stored, a required `If-Match` is sent as `*`, and an optional one is omitted. The escape hatch for APIs whose ETags never satisfy their own `If-Match` comparison (e.g. weak ETags under strong comparison). Defaults to on wherever the spec declares `If-Match`. |
 | `read_collection_path` | string | Dot-separated path into the read response (after envelope unwrap) locating the nested collection for a child resource whose read is a parent GET. A trailing `*` segment searches every array value at that level. Pairs with `generate_resource: true`; on an inferred resource it changes only the read selection (the state keeps the read-response shape) and emits a `Warning`. A malformed path (empty segment, wildcard mid-path) is dropped fail-loud. Child resources get no generated import step. |
 | `schema_version` | int | Schema version for state upgrades. |
 | `state_upgrades` | []StateUpgradeConfig | State migrations. |
@@ -964,6 +969,52 @@ config by default (so the default is self-documenting and round-trips through
 `eidos generate --config`); pass `--no-use-put-as-create` to record the
 kill-switch (`use_put_as_create: false`) instead.
 
+### ETag conditional requests
+
+When a managed resource's update or delete operation declares an `If-Match`
+request header (inline, via `$ref`, or as a path-item parameter; matched
+case-insensitively), the generated provider uses optimistic concurrency:
+
+- The ETag returned by Create, Read, and Update (the `ETag` response header,
+  whether or not the spec documents it) is stored in the resource's **private
+  state** — never in the schema, so it causes no plan diffs. With no `ETag`
+  header, a top-level string body property named `etag`, `_etag`, or
+  `@odata.etag` is used instead. A response with neither clears the stored
+  value, so a stale ETag is never sent. A collection read (or a child
+  resource's parent GET) ignores the `ETag` header, which describes the
+  collection, and uses only a body ETag on the selected element.
+- Update sends the stored ETag as `If-Match`. With no stored ETag (state
+  written by an older provider version, or an API that returned none) a
+  required header is sent as `If-Match: *` and an optional one is omitted.
+- Delete sends `If-Match` only when the spec marks it **required** (with the
+  same `*` fallback), unless `conditional_delete: always` is set. Terraform
+  refreshes before destroying, so the stored ETag is normally current; making
+  optional conditional deletes opt-in keeps a stale ETag from blocking
+  `terraform destroy`.
+- A create operation declaring `If-None-Match` sends `If-None-Match: *`, so
+  creating an object that already exists fails instead of overwriting it.
+- `412 Precondition Failed` produces an actionable diagnostic: refresh with
+  `terraform apply -refresh-only` and apply again (update/delete), or import
+  the existing object (create). `428 Precondition Required` tells the
+  practitioner to refresh so the ETag is recorded. Both include the API's
+  error body and the spec's own description of the status, if any.
+- ETags are sent back verbatim, including weak `W/"..."` validators; the API
+  decides how to compare them. If an API's ETags never match its own
+  `If-Match` check, set `etag_tracking: false`.
+
+These headers are managed by the provider, so they no longer appear as an
+`if_match` / `if_none_match` schema attribute on managed resources (data
+sources, actions, ephemeral resources, and list resources still expose them
+as ordinary header inputs: they have no stored state to take an ETag from).
+
+Generation emits an `Info` diagnostic per resource describing what it sends,
+and an `Info` (optional header) or `Warning` (required header) for each
+declared conditional header the provider does not send: `If-Match` on Read or
+Create, `If-None-Match` on Read, Update, or Delete, and an optional DELETE
+`If-Match` without `conditional_delete: always`. The `etag-concurrency`
+reference spec exercises every case, and the generated acceptance-test mock
+server enforces `If-Match` so the lifecycle test proves the round trip.
+
 ## Generated provider layout
 
 The generated provider is a normal Go module with a standard Terraform provider
@@ -1262,6 +1313,7 @@ argument.
 - Secret-named attributes in action and list-resource schemas cannot be marked `Sensitive` (the framework's `action/schema` rejects it and the experimental `list/schema` has no Sensitive support), so their values surface in plain text. Eidos emits a fail-loud Warning per attribute at generation time and renders a practitioner-facing warning on the affected doc page naming the attributes. Managed resources, data sources, ephemeral resources, and the provider config do mark such attributes `Sensitive`.
 - A resource whose read takes no path parameters and no required query/header parameters (a singleton, e.g. `GET /copilot/config`) is importable with any identifier: the import stores the raw ID in the identity attribute and the refresh that follows repopulates state from the response. The generation output notes this via an Info diagnostic.
 - `generator.yaml` must not claim one operation in both `resource_overrides` and a non-resource override (`action_overrides`, `ephemeral_resource_overrides`, `list_resource_overrides`, or `function_overrides`): a resource already owns the operation, so the duplicate override is skipped with a fail-loud `Warning` naming the operation and its method+path (`Action override references an operation already claimed by a resource`, `Ephemeral resource override references …`, `List resource override references …`, `Function override references …`).
+- ETag conditional requests cover managed resources only, and only the `If-Match` / `If-None-Match` headers: `If-Unmodified-Since` / `If-Modified-Since` (date-based preconditions) stay ordinary header attributes. Delete does not re-read the object after a `412`, so a delete of an object already removed outside Terraform with `-refresh=false` fails with the `412` diagnostic (a refresh drops it from state). See [ETag conditional requests](#etag-conditional-requests).
 - Terraform State Stores (experimental in Terraform 1.15+) are not generated; eidos tracks the feature and waits for GA.
 - The generated mock server is intentionally a deterministic, single-resource lifecycle prover (hardcoded `example-id`, first-segment routes, no nested routes); the live acceptance tests (`testfixtures/live`, `TF_ACC=1`) run against a local deterministic mock server and never run in CI by design.
 - Entities whose create path differs from their read/delete path (e.g. MyCloud dashboards: create on `POST /dashboards/db`, read/delete on `/dashboards/uid/{uid}`) are not inferred as managed resources. They are reachable via an explicit `resource_overrides` entry with `generate_resource: true` plus `create_operation`/`read_operation`/`update_operation`/`delete_operation` (see [§`resource_overrides`](#resource_overrides)). A unique primitive identity nested one response-object level deep (e.g. `dashboard.uid` or `metadata.name`) is promoted automatically for path substitution while unrelated wrapper fields remain nested.
